@@ -164,6 +164,7 @@ def _parse_page(text: str, page_num: int) -> tuple[list[dict], list[str]]:
             # Loan-out: corporate > 0 → collect following non-data lines as company name
             if row.get("corporate") and row["corporate"] > 0:
                 row["loanOut"] = True
+                row["type"]    = "Loan Out"
                 j = i + 1
                 company_frags = []
                 while j < len(lines):

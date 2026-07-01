@@ -319,11 +319,7 @@ async def extract_invoices(
     return {"invoices": invoices, "issues": issues}
 
 
-@app.post("/extract-payroll")
-async def extract_payroll(
-    files: list[UploadFile] = File(...),
-    x_app_secret: str = Header(default=""),
-):
+async def _run_extract(files, x_app_secret):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
@@ -344,4 +340,20 @@ async def extract_payroll(
         for e in errs:
             issues.append(f"{uf.filename}: {e}")
 
-    return {"rows": rows, "issues": issues, "fields": FRINGE_FIELDS}
+    return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS}
+
+
+@app.post("/extract-fringe")
+async def extract_fringe(
+    files: list[UploadFile] = File(...),
+    x_app_secret: str = Header(default=""),
+):
+    return await _run_extract(files, x_app_secret)
+
+
+@app.post("/extract-payroll")
+async def extract_payroll(
+    files: list[UploadFile] = File(...),
+    x_app_secret: str = Header(default=""),
+):
+    return await _run_extract(files, x_app_secret)
