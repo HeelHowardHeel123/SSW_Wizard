@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-multipart
+openai>=1.0
+PyMuPDF
+pdfplumber
