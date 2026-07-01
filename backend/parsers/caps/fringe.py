@@ -207,7 +207,10 @@ def extract(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
                 rows.extend(page_rows)
                 issues.extend(page_issues)
         if not found_any:
-            issues.append("No CAPS Fringe Recap Report page found")
+            issues.append(
+                "No Fringe Recap Report page found — verify this is a CAPS payroll invoice PDF. "
+                "If it contains only wage summaries or check registers, it may not include fringe data."
+            )
     except Exception as e:
         issues.append(str(e))
     return rows, issues

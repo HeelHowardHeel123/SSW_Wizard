@@ -290,7 +290,10 @@ def _extract_text(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
                 span   = int(m_span.group(1)) if m_span else 1
                 cols   = _detect_columns(_cluster_lines(page_words[i]))
                 if cols is None:
-                    issues.append(f"Page {i + 1}: fringe header columns not detected")
+                    issues.append(
+                        f"Page {i + 1}: could not read the fringe table header — "
+                        "column positions not detected. Rows on this page were skipped."
+                    )
                     i += span
                     continue
                 for fp in range(i, min(i + span, n)):
@@ -305,7 +308,10 @@ def _extract_text(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
                 i += 1
 
         if not found_any:
-            issues.append("No Wrapbook Fringe Report page found")
+            issues.append(
+                "No Fringe Report page found — verify this is a Wrapbook payroll PDF. "
+                "If it contains only invoices or payroll register pages, it may not include fringe data."
+            )
     return rows, issues
 
 
@@ -418,11 +424,11 @@ def extract(pdf_bytes: bytes, openai_key: str = "") -> tuple[list[dict], list[st
     if not has_text_layer(pdf_bytes):
         if not openai_key:
             return [], [
-                "Image-based Wrapbook fringe PDF detected. "
-                "An OpenAI API key is required for vision extraction."
+                "Scanned/image-based PDF — no extractable text found. "
+                "This fringe report cannot be read automatically and must be entered manually."
             ]
         return _extract_vision(pdf_bytes, openai_key)
     try:
         return _extract_text(pdf_bytes)
     except Exception as e:
-        return [], [str(e)]
+        return [], [f"Unexpected error reading PDF: {e}"]
