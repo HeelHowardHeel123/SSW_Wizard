@@ -323,7 +323,7 @@ async def _run_extract(files, x_app_secret):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
-    rows, issues = [], []
+    rows, issues, file_summaries = [], [], []
     for uf in files:
         data    = await uf.read()
         company = _detect_company(data)
@@ -340,7 +340,14 @@ async def _run_extract(files, x_app_secret):
         for e in errs:
             issues.append(f"{uf.filename}: {e}")
 
-    return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS}
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  company,
+            "rows":     len(extracted),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries}
 
 
 @app.post("/extract-fringe")
