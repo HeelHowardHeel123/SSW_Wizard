@@ -44,6 +44,7 @@ from notify import send_parser_alert, ALERT_EMAIL
 # ── Config ──────────────────────────────────────────────────────────────────
 
 OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 APP_SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 ALLOWED_ORIGINS   = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
@@ -411,7 +412,7 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
             if known_company in retried:
                 # Already re-generated once this batch — AI-extract only, no new code/email
                 ai_rows, ai_errs, _, _, _ = extract_unknown(
-                    data, OPENAI_API_KEY, hints=hints
+                    data, OPENAI_API_KEY, hints=hints, anthropic_key=ANTHROPIC_API_KEY
                 )
                 extracted, errs, company = ai_rows, ai_errs, known_company or "unknown"
             else:
@@ -420,7 +421,7 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
                     registry.invalidate_parser(known_company)
 
                 ai_rows, ai_errs, ai_company, markers, code = extract_unknown(
-                    data, OPENAI_API_KEY, hints=hints
+                    data, OPENAI_API_KEY, hints=hints, anthropic_key=ANTHROPIC_API_KEY
                 )
                 extracted, errs = ai_rows, ai_errs
                 if ai_company:

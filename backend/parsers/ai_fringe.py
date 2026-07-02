@@ -114,6 +114,7 @@ def _pdf_text(pdf_bytes: bytes, max_pages: int = _MAX_TEXT_PAGES) -> str:
 
 
 def _gpt(client, system: str, user: str, max_tokens: int = 4096) -> str:
+    """GPT-4o call — used for document reading / data extraction (Step 1)."""
     resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -124,6 +125,19 @@ def _gpt(client, system: str, user: str, max_tokens: int = 4096) -> str:
         max_tokens=max_tokens,
     )
     return resp.choices[0].message.content.strip()
+
+
+def _claude(anthropic_key: str, system: str, user: str, max_tokens: int = 4096) -> str:
+    """Claude call — used for code generation (Step 2)."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=anthropic_key)
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return msg.content[0].text.strip()
 
 
 def _parse_json(raw: str) -> dict | None:
@@ -164,6 +178,7 @@ def extract_unknown(
     pdf_bytes: bytes,
     openai_key: str,
     hints: str = "",
+    anthropic_key: str = "",
 ) -> tuple[list[dict], list[str], str, list[str], str]:
     """Use AI to extract fringe rows from an unknown payroll company PDF.
 
@@ -224,7 +239,7 @@ def extract_unknown(
                 row[field] = val
         rows.append(row)
 
-    # ── Step 2: generate Python parser code ────────────────────────────────────
+    # ── Step 2: generate Python parser code (Claude) ──────────────────────────
     codegen_user = (
         f"Company: {company_name}\n\n"
         f"Sample PDF text (first {_MAX_TEXT_PAGES} pages):\n"
@@ -233,7 +248,10 @@ def extract_unknown(
         f"{json.dumps(parsed.get('rows', [])[:3], indent=2)}"
     )
     try:
-        code  = _gpt(client, _CODEGEN_SYSTEM, codegen_user, max_tokens=3000)
+        if anthropic_key:
+            code = _claude(anthropic_key, _CODEGEN_SYSTEM, codegen_user, max_tokens=3000)
+        else:
+            code = _gpt(client, _CODEGEN_SYSTEM, codegen_user, max_tokens=3000)
         m_fen = re.search(r"```(?:python)?\s*([\s\S]+?)```", code)
         if m_fen:
             code = m_fen.group(1).strip()
