@@ -21,12 +21,13 @@ _MAX_TEXT_PAGES = 8
 # ─── Prompts ──────────────────────────────────────────────────────────────────
 
 _EXTRACT_SYSTEM = """
-You are a payroll data extraction specialist. Extract every employee row from this fringe/payroll report PDF text.
+You are a payroll data extraction specialist. Analyze this fringe/payroll report PDF text, then extract every employee row.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
-  "company_name": "Exact company or software name (e.g. 'EP Financial', 'Cast & Crew')",
+  "company_name": "Exact payroll company or software name (e.g. 'Revolution Entertainment Services', 'Cast & Crew')",
   "text_markers": ["2-3 short strings that uniquely identify this PDF layout — e.g. header titles or software names. Avoid generic terms like 'Payroll Report'."],
+  "layout_description": "Concise technical description of this document for a developer writing a parser. Include: which page/section contains the fringe data, the exact column order left-to-right, how employee rows are identified, SSN and name format, and any summary/total rows to skip.",
   "rows": [
     {
       "worker": "LAST, FIRST",
@@ -64,6 +65,7 @@ Rules:
 - ssn: last 4 digits only (strip XXX-XX- or similar prefix)
 - All monetary fields: numbers not strings; use null if the field is absent
 - text_markers: must be UNIQUE to this company — not "Total", "Page 1", or "Payroll"
+- layout_description: be specific and technical — column names, page markers, row patterns
 """
 
 _CODEGEN_SYSTEM = """
@@ -221,8 +223,9 @@ def extract_unknown(
     if not parsed or not isinstance(parsed.get("rows"), list):
         return [], ["AI returned unexpected structure — could not parse rows"], "", [], ""
 
-    company_name = str(parsed.get("company_name", "Unknown Payroll Company")).strip()
-    text_markers = parsed.get("text_markers") or [company_name]
+    company_name     = str(parsed.get("company_name", "Unknown Payroll Company")).strip()
+    text_markers     = parsed.get("text_markers") or [company_name]
+    layout_description = str(parsed.get("layout_description", "")).strip()
 
     rows = []
     for r in parsed.get("rows", []):
@@ -240,13 +243,17 @@ def extract_unknown(
         rows.append(row)
 
     # ── Step 2: generate Python parser code (Claude) ──────────────────────────
-    codegen_user = (
-        f"Company: {company_name}\n\n"
-        f"Sample PDF text (first {_MAX_TEXT_PAGES} pages):\n"
-        f"{sample_text[:6000]}\n\n"
+    codegen_user_parts = [f"Company: {company_name}\n"]
+    if layout_description:
+        codegen_user_parts.append(f"Layout description (auto-detected):\n{layout_description}\n")
+    if hints and hints.strip():
+        codegen_user_parts.append(f"Additional user hints:\n{hints.strip()}\n")
+    codegen_user_parts.append(
+        f"Sample PDF text (first {_MAX_TEXT_PAGES} pages):\n{sample_text[:6000]}\n\n"
         f"Extracted rows for reference (first 3):\n"
         f"{json.dumps(parsed.get('rows', [])[:3], indent=2)}"
     )
+    codegen_user = "\n".join(codegen_user_parts)
     try:
         if anthropic_key:
             code = _claude(anthropic_key, _CODEGEN_SYSTEM, codegen_user, max_tokens=3000)
