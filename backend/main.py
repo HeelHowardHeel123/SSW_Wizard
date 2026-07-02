@@ -364,6 +364,11 @@ async def _run_extract(files, x_app_secret):
     rows, issues, file_summaries = [], [], []
     wb_rows: list[dict] = []   # Wrapbook fringe rows that may need register enrichment
 
+    # Track project-level Wrapbook fringe sources (invoiceNo always blank — one fringe
+    # report consolidates many invoices). Stored as (filename, row_list) so we can
+    # assign "Fringe Report 001 / 002 / …" labels after enrichment is complete.
+    wb_project_sources: list[tuple[str, list[dict]]] = []
+
     for filename, data in fringe_files:
         company = _detect_company(data)
 
@@ -372,6 +377,8 @@ async def _run_extract(files, x_app_secret):
         else:
             extracted, errs = wb_extract(data, openai_key=OPENAI_API_KEY)
             wb_rows.extend(extracted)
+            if extracted and all(r.get("invoiceNo", "") == "" for r in extracted):
+                wb_project_sources.append((filename, extracted))
 
         for r in extracted:
             r["sourceFile"] = filename
@@ -387,7 +394,8 @@ async def _run_extract(files, x_app_secret):
             "issues":   errs,
         })
 
-    # Enrich Wrapbook fringe rows with any standalone register PDFs (NIS 007 style)
+    # Enrich Wrapbook fringe rows with any standalone register PDFs (NIS 007 style).
+    # Must happen BEFORE "Fringe Report" label assignment — enrichment joins on invoiceNo == "".
     for register_bytes in register_files:
         enrich_from_register(wb_rows, register_bytes)
 
@@ -396,6 +404,17 @@ async def _run_extract(files, x_app_secret):
             f"{len(register_files)} Wrapbook register file(s) uploaded but no Wrapbook fringe "
             "rows found to enrich. Upload the fringe PDF alongside the register."
         )
+
+    # Assign "Fringe Report" invoice labels for project-level fringe rows.
+    # Single source → "Fringe Report"; multiple sources → "Fringe Report 001", "002", …
+    if len(wb_project_sources) == 1:
+        for r in wb_project_sources[0][1]:
+            r["invoiceNo"] = "Fringe Report"
+    elif len(wb_project_sources) > 1:
+        for idx, (_, src_rows) in enumerate(wb_project_sources, 1):
+            label = f"Fringe Report {idx:03d}"
+            for r in src_rows:
+                r["invoiceNo"] = label
 
     return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries}
 
