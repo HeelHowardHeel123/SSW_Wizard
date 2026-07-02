@@ -36,8 +36,10 @@ from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from parsers.base import FRINGE_FIELDS
-from parsers.caps.fringe import extract as caps_extract
-from parsers.wrapbook.fringe import extract as wb_extract, enrich_from_register
+from parsers.wrapbook.fringe import enrich_from_register
+from parsers.ai_fringe import extract_unknown, make_exec_parser
+from parsers import registry
+from notify import send_parser_alert, ALERT_EMAIL
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -262,22 +264,6 @@ def normalize_invoice(inv):
 
 # ── Payroll company detection ─────────────────────────────────────────────────
 
-def _detect_company(pdf_bytes: bytes) -> str:
-    """Return 'caps' or 'wrapbook' based on text markers in the PDF.
-    If no text is found (image-only PDF), defaults to 'wrapbook'."""
-    try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for pg in pdf.pages[:15]:
-                text = (pg.extract_text() or "").lower()
-                if "fringe recap report" in text:
-                    return "caps"
-                if "fringe report" in text:
-                    return "wrapbook"
-    except Exception:
-        pass
-    return "wrapbook"
-
-
 def _is_wrapbook_register_only(pdf_bytes: bytes) -> bool:
     """Return True if this PDF is a standalone Wrapbook Payroll Register (NIS 007 style).
 
@@ -341,7 +327,7 @@ async def extract_invoices(
     return {"invoices": invoices, "issues": issues}
 
 
-async def _run_extract(files, x_app_secret):
+async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
@@ -369,16 +355,89 @@ async def _run_extract(files, x_app_secret):
     # assign "Fringe Report 001 / 002 / …" labels after enrichment is complete.
     wb_project_sources: list[tuple[str, list[dict]]] = []
 
-    for filename, data in fringe_files:
-        company = _detect_company(data)
+    # Ordered list of email alerts — one entry per generation event (initial or retry).
+    # [{company_name, code, file_count, row_count, is_update}]
+    alert_queue: list[dict] = []
+    # Companies already re-generated this request — cap at one retry per company per batch.
+    retried: set[str] = set()
 
-        if company == "caps":
-            extracted, errs = caps_extract(data)
-        else:
-            extracted, errs = wb_extract(data, openai_key=OPENAI_API_KEY)
+    def _latest_alert(company: str) -> dict | None:
+        for entry in reversed(alert_queue):
+            if entry["company_name"] == company:
+                return entry
+        return None
+
+    for filename, data in fringe_files:
+        # ── Find all matching parsers (static + runtime) sorted by priority ────
+        candidates = registry.find_parsers(data)
+
+        extracted: list[dict] = []
+        errs:      list[str]  = []
+        company:   str | None = None
+
+        # Try each candidate in order; stop on first that returns rows
+        for candidate in candidates:
+            try:
+                extracted, errs = candidate.extract(data, openai_key=OPENAI_API_KEY)
+            except Exception as e:
+                extracted, errs = [], [f"{candidate.COMPANY} parser error: {e}"]
+            if extracted:
+                company = candidate.COMPANY
+                break
+
+        # ── Wrapbook-specific post-processing ─────────────────────────────────
+        if company == "wrapbook":
             wb_rows.extend(extracted)
             if extracted and all(r.get("invoiceNo", "") == "" for r in extracted):
                 wb_project_sources.append((filename, extracted))
+
+        # ── Update alert counts for successful runtime-parser hits ─────────────
+        if extracted and company:
+            entry = _latest_alert(company)
+            if entry:
+                entry["file_count"] += 1
+                entry["row_count"]  += len(extracted)
+
+        # ── Phase 3: all known parsers failed or no parsers found ─────────────
+        if not extracted:
+            known_company = candidates[0].COMPANY if candidates else None
+            hints = payroll_hints
+            if known_company:
+                hints = (
+                    f"Company: {known_company} (existing parser failed — possible layout change)\n"
+                    + hints
+                )
+
+            if known_company in retried:
+                # Already re-generated once this batch — AI-extract only, no new code/email
+                ai_rows, ai_errs, _, _, _ = extract_unknown(
+                    data, OPENAI_API_KEY, hints=hints
+                )
+                extracted, errs, company = ai_rows, ai_errs, known_company or "unknown"
+            else:
+                if known_company:
+                    retried.add(known_company)
+                    registry.invalidate_parser(known_company)
+
+                ai_rows, ai_errs, ai_company, markers, code = extract_unknown(
+                    data, OPENAI_API_KEY, hints=hints
+                )
+                extracted, errs = ai_rows, ai_errs
+                if ai_company:
+                    exec_fn = make_exec_parser(code)
+                    if exec_fn:
+                        registry.register_parser(ai_company, markers, exec_fn)
+                    alert_queue.append({
+                        "company_name": ai_company,
+                        "code":         code,
+                        "file_count":   1,
+                        "row_count":    len(extracted),
+                        "is_update":    bool(known_company),
+                    })
+                    company = ai_company
+                else:
+                    errs.append(f"Could not identify payroll company in {filename}")
+                    company = known_company or "unknown"
 
         for r in extracted:
             r["sourceFile"] = filename
@@ -389,7 +448,7 @@ async def _run_extract(files, x_app_secret):
 
         file_summaries.append({
             "filename": filename,
-            "company":  company,
+            "company":  company or "unknown",
             "rows":     len(extracted),
             "issues":   errs,
         })
@@ -416,20 +475,43 @@ async def _run_extract(files, x_app_secret):
             for r in src_rows:
                 r["invoiceNo"] = label
 
+    # Send one email per generation event (initial discovery or retry)
+    for info in alert_queue:
+        company_name = info["company_name"]
+        sent = send_parser_alert(
+            company_name,
+            info["file_count"],
+            info["row_count"],
+            info["code"],
+            is_update=info.get("is_update", False),
+        )
+        verb      = "Updated parser" if info.get("is_update") else "New parser"
+        alert_msg = (
+            f"{verb} for '{company_name}' — "
+            f"{info['file_count']} file(s) processed with AI extraction"
+        )
+        alert_msg += (
+            f". Parser code emailed to {ALERT_EMAIL} for review." if sent
+            else ". (Email alert failed — check SENDGRID_API_KEY)"
+        )
+        issues.append(alert_msg)
+
     return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries}
 
 
 @app.post("/extract-fringe")
 async def extract_fringe(
     files: list[UploadFile] = File(...),
+    payroll_hints: str = Form(default=""),
     x_app_secret: str = Header(default=""),
 ):
-    return await _run_extract(files, x_app_secret)
+    return await _run_extract(files, x_app_secret, payroll_hints=payroll_hints)
 
 
 @app.post("/extract-payroll")
 async def extract_payroll(
     files: list[UploadFile] = File(...),
+    payroll_hints: str = Form(default=""),
     x_app_secret: str = Header(default=""),
 ):
-    return await _run_extract(files, x_app_secret)
+    return await _run_extract(files, x_app_secret, payroll_hints=payroll_hints)

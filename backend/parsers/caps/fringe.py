@@ -18,6 +18,11 @@ import pdfplumber
 from parsers.base import empty_row, parse_amount, clean_fringe_name
 from parsers.caps.register import extract_register
 
+# ─── Registry metadata ────────────────────────────────────────────────────────
+COMPANY  = "caps"
+MARKERS  = ["Fringe Recap Report"]
+PRIORITY = 10
+
 # ─── Regexes ──────────────────────────────────────────────────────────────────
 
 _INVOICE_RE = re.compile(
@@ -195,7 +200,7 @@ def _ssn_last4(ssn: str) -> str:
     return digits[-4:] if len(digits) >= 4 else digits
 
 
-def extract(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
+def extract(pdf_bytes: bytes, **_) -> tuple[list[dict], list[str]]:
     """Extract all CAPS Fringe Recap Report rows from a PDF, enriched with
     Payroll Register data (job title, days worked, address, IL withholding).
 

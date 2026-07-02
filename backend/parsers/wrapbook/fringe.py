@@ -20,6 +20,11 @@ from openai import OpenAI
 from parsers.base import empty_row, parse_amount, pdf_to_images_b64, has_text_layer
 from parsers.wrapbook.register import extract_register
 
+# ─── Registry metadata ────────────────────────────────────────────────────────
+COMPANY  = "wrapbook"
+MARKERS  = ["Fringe Report"]
+PRIORITY = 10
+
 # ─── Column label definitions ─────────────────────────────────────────────────
 # Each entry: (header_text, canonical_field_name)
 # Multi-token labels are matched as consecutive words in the header line.
@@ -486,7 +491,7 @@ def enrich_from_register(rows: list[dict], register_bytes: bytes) -> None:
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
-def extract(pdf_bytes: bytes, openai_key: str = "") -> tuple[list[dict], list[str]]:
+def extract(pdf_bytes: bytes, openai_key: str = "", **_) -> tuple[list[dict], list[str]]:
     """Extract Wrapbook fringe rows from a PDF.
 
     Automatically detects whether the PDF is text-based or image-only.
