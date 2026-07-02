@@ -34,8 +34,9 @@ import pdfplumber
 # ─── Regexes ──────────────────────────────────────────────────────────────────
 
 # Employee start: "Last, First [Middle] $1,234.56" at end of line
+# First char is [A-Za-z] to handle lowercase-prefixed surnames like "van Sauter"
 _EMP_NAME_RE = re.compile(
-    r"^([A-Z][A-Za-z\-\'\s]+,\s+[A-Za-z][A-Za-z\-\'\s\.]+?)\s+\$([\d,]+\.\d{2})$"
+    r"^([A-Za-z][A-Za-z\-\'\s]+,\s+[A-Za-z][A-Za-z\-\'\s\.]+?)\s+\$([\d,]+\.\d{2})$"
 )
 
 # SSN line: "XXX-XX-7510"
