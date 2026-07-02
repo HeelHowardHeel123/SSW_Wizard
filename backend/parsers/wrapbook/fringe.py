@@ -18,6 +18,7 @@ import pdfplumber
 from openai import OpenAI
 
 from parsers.base import empty_row, parse_amount, pdf_to_images_b64, has_text_layer
+from parsers.wrapbook.register import extract_register
 
 # ─── Column label definitions ─────────────────────────────────────────────────
 # Each entry: (header_text, canonical_field_name)
@@ -312,6 +313,26 @@ def _extract_text(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
                 "No Fringe Report page found — verify this is a Wrapbook payroll PDF. "
                 "If it contains only invoices or payroll register pages, it may not include fringe data."
             )
+
+        # For project-level fringe (no invoice date in header), fall back to the first
+        # "Check Date:" found anywhere in the PDF (typically on the invoice cover page).
+        if rows and not rows[0].get("invoiceDate"):
+            for pt in page_text:
+                m = re.search(r"Check Date:\s*([A-Za-z]+ \d{1,2},\s*\d{4})", pt)
+                if m:
+                    check_date = m.group(1)
+                    for row in rows:
+                        if not row.get("invoiceDate"):
+                            row["invoiceDate"] = check_date
+                    break
+
+        # Auto-enrich when the same PDF also contains a Payroll Register (GM 004 style)
+        has_register = any("Payroll Register" in t for t in page_text)
+        if has_register and rows:
+            register_data = extract_register(pdf_bytes)
+            if register_data:
+                _enrich_rows(rows, register_data)
+
     return rows, issues
 
 
@@ -410,6 +431,57 @@ def _extract_vision(pdf_bytes: bytes, openai_key: str) -> tuple[list[dict], list
         source_page += len(batch)
 
     return rows, issues
+
+
+# ─── Register enrichment ──────────────────────────────────────────────────────
+
+def _ssn_last4_wb(ssn: str) -> str:
+    """Extract last 4 digits from any Wrapbook SSN format: 'xxx-xx-7510' → '7510'."""
+    digits = re.sub(r"[^0-9]", "", ssn)
+    return digits[-4:] if len(digits) >= 4 else digits
+
+
+def _enrich_rows(rows: list[dict], register_data: dict) -> None:
+    """Enrich fringe rows in-place with Payroll Register data.
+
+    Join logic:
+      - row.invoiceNo != "" → per-invoice join via by_ssn_invoice (GM 004 style)
+      - row.invoiceNo == "" → project-level join via by_ssn (NIS 007 style)
+    """
+    by_ssn         = register_data.get("by_ssn", {})
+    by_ssn_invoice = register_data.get("by_ssn_invoice", {})
+
+    for row in rows:
+        ssn    = _ssn_last4_wb(row.get("ssn", ""))
+        inv_no = row.get("invoiceNo", "")
+
+        if inv_no:
+            norm_inv   = inv_no.lstrip("0") or "0"
+            enrichment = by_ssn_invoice.get((ssn, norm_inv))
+        else:
+            enrichment = by_ssn.get(ssn)
+
+        if not enrichment:
+            continue
+
+        row["jobTitle"]       = enrichment.get("jobTitle", "")
+        row["daysWorked"]     = enrichment.get("daysWorked")
+        row["withholdingsIL"] = enrichment.get("withholdingsIL")
+        row["street"]         = enrichment.get("street", "")
+        row["city"]           = enrichment.get("city", "")
+        row["zip"]            = enrichment.get("zip", "")
+        if enrichment.get("resState"):
+            row["resState"] = enrichment["resState"]
+
+
+def enrich_from_register(rows: list[dict], register_bytes: bytes) -> None:
+    """Parse a standalone Wrapbook register PDF and enrich fringe rows in-place.
+
+    Called by main.py when the user uploads a separate register file (NIS 007 style).
+    """
+    register_data = extract_register(register_bytes)
+    if register_data:
+        _enrich_rows(rows, register_data)
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────

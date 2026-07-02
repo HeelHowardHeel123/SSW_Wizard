@@ -37,7 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from parsers.base import FRINGE_FIELDS
 from parsers.caps.fringe import extract as caps_extract
-from parsers.wrapbook.fringe import extract as wb_extract
+from parsers.wrapbook.fringe import extract as wb_extract, enrich_from_register
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -278,6 +278,28 @@ def _detect_company(pdf_bytes: bytes) -> str:
     return "wrapbook"
 
 
+def _is_wrapbook_register_only(pdf_bytes: bytes) -> bool:
+    """Return True if this PDF is a standalone Wrapbook Payroll Register (NIS 007 style).
+
+    A standalone register has 'Payroll Register' pages but no 'Fringe Report' pages.
+    These are uploaded alongside fringe PDFs so their IL withholding data can enrich
+    the project-level fringe rows (which have no invoice number).
+    """
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            has_register = has_fringe = False
+            for pg in pdf.pages[:10]:
+                text = (pg.extract_text() or "").lower()
+                if "payroll register" in text:
+                    has_register = True
+                if "fringe report" in text:
+                    has_fringe = True
+                    break
+            return has_register and not has_fringe
+    except Exception:
+        return False
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -323,29 +345,57 @@ async def _run_extract(files, x_app_secret):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
-    rows, issues, file_summaries = [], [], []
+    # Read all files up front so we can classify before extracting
+    loaded = []
     for uf in files:
-        data    = await uf.read()
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    # Classify each file: fringe PDF vs standalone Wrapbook register
+    fringe_files   = []   # (filename, bytes)
+    register_files = []   # bytes of standalone Wrapbook register PDFs
+
+    for filename, data in loaded:
+        if _is_wrapbook_register_only(data):
+            register_files.append(data)
+        else:
+            fringe_files.append((filename, data))
+
+    rows, issues, file_summaries = [], [], []
+    wb_rows: list[dict] = []   # Wrapbook fringe rows that may need register enrichment
+
+    for filename, data in fringe_files:
         company = _detect_company(data)
 
         if company == "caps":
             extracted, errs = caps_extract(data)
         else:
             extracted, errs = wb_extract(data, openai_key=OPENAI_API_KEY)
+            wb_rows.extend(extracted)
 
         for r in extracted:
-            r["sourceFile"] = uf.filename
+            r["sourceFile"] = filename
 
         rows.extend(extracted)
         for e in errs:
-            issues.append(f"{uf.filename}: {e}")
+            issues.append(f"{filename}: {e}")
 
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  company,
             "rows":     len(extracted),
             "issues":   errs,
         })
+
+    # Enrich Wrapbook fringe rows with any standalone register PDFs (NIS 007 style)
+    for register_bytes in register_files:
+        enrich_from_register(wb_rows, register_bytes)
+
+    if register_files and not wb_rows:
+        issues.append(
+            f"{len(register_files)} Wrapbook register file(s) uploaded but no Wrapbook fringe "
+            "rows found to enrich. Upload the fringe PDF alongside the register."
+        )
 
     return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries}
 
