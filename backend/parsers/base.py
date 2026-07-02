@@ -44,6 +44,13 @@ FRINGE_FIELDS = [
     # Loan-out metadata
     "loanOut",        # bool: True if this is a loan-out row
     "loanOutCompany", # company name (CAPS: from sub-line; Wrapbook: type="Loan Out")
+    # Payroll Register enrichment (populated by caps/register.py)
+    "jobTitle",       # job title / crew position
+    "daysWorked",     # number of days worked on this invoice
+    "withholdingsIL", # Illinois state income tax withheld
+    "street",         # home street address
+    "city",           # home city
+    "zip",            # home zip (5-digit)
     # Provenance
     "invoiceNo",
     "invoiceDate",
@@ -58,6 +65,7 @@ _NUMERIC_FIELDS = {
     "socSec", "med", "futa", "sui", "wc", "phw",
     "vacHol", "adv", "other", "benefits", "platFee", "effRate", "hand",
     "total",
+    "daysWorked", "withholdingsIL",
 }
 
 

@@ -16,6 +16,7 @@ import io
 import pdfplumber
 
 from parsers.base import empty_row, parse_amount, clean_fringe_name
+from parsers.caps.register import extract_register
 
 # ─── Regexes ──────────────────────────────────────────────────────────────────
 
@@ -188,8 +189,15 @@ def _parse_page(text: str, page_num: int) -> tuple[list[dict], list[str]]:
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
+def _ssn_last4(ssn: str) -> str:
+    """Extract last 4 digits from any CAPS SSN format: 'x-3223' → '3223'."""
+    digits = re.sub(r"[^0-9]", "", ssn)
+    return digits[-4:] if len(digits) >= 4 else digits
+
+
 def extract(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
-    """Extract all CAPS Fringe Recap Report rows from a PDF.
+    """Extract all CAPS Fringe Recap Report rows from a PDF, enriched with
+    Payroll Register data (job title, days worked, address, IL withholding).
 
     Returns (rows, issues) where rows is a list of canonical fringe dicts.
     """
@@ -213,4 +221,26 @@ def extract(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
             )
     except Exception as e:
         issues.append(str(e))
+        return rows, issues
+
+    # Enrich fringe rows with Payroll Register data
+    register = extract_register(pdf_bytes)
+    if register:
+        for row in rows:
+            key = (_ssn_last4(row.get("ssn", "")), row.get("invoiceNo", ""))
+            enrichment = register.get(key)
+            if enrichment:
+                row["jobTitle"]       = enrichment.get("jobTitle", "")
+                row["daysWorked"]     = enrichment.get("daysWorked")
+                row["withholdingsIL"] = enrichment.get("withholdingsIL")
+                row["street"]         = enrichment.get("street", "")
+                row["city"]           = enrichment.get("city", "")
+                row["zip"]            = enrichment.get("zip", "")
+                # Override workDates with register's per-employee dates if available
+                if enrichment.get("workDates"):
+                    row["workDates"] = enrichment["workDates"]
+                # resState is empty from fringe; fill from register
+                if enrichment.get("resState"):
+                    row["resState"] = enrichment["resState"]
+
     return rows, issues
