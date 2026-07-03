@@ -62,10 +62,9 @@ def send_parser_alert(
             f"Until then, {company_name} PDFs will use AI extraction each batch."
         )
 
-        recipients = list(dict.fromkeys([ALERT_EMAIL, FROM_EMAIL]))  # dedup, preserve order
         msg = Mail(
             from_email=FROM_EMAIL,
-            to_emails=recipients,
+            to_emails=FROM_EMAIL,
             subject=f"[TPC Wizard] {verb}: {company_name}",
             plain_text_content=body,
         )
