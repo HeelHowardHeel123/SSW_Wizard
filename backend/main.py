@@ -48,7 +48,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 APP_SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 ALLOWED_ORIGINS   = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
-_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoice_extraction_prompt.txt")
+_PROMPT_PATH                 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoice_extraction_prompt.txt")
+_CREW_FREELANCE_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crew_freelance_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -71,6 +72,13 @@ def _load_prompt(prodco_names):
     return template.replace("{prodco_names}", ", ".join(prodco_names))
 
 
+def _load_crew_freelance_prompt(prodco_names):
+    with open(_CREW_FREELANCE_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    label = ", ".join(prodco_names) if prodco_names else "the production company"
+    return template.replace("{prodco_names}", label)
+
+
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
 
 def _file_to_images_b64(filename, data, dpi_scale=2.0):
@@ -91,8 +99,8 @@ def _file_to_images_b64(filename, data, dpi_scale=2.0):
 
 # ── GPT-4o vision call ────────────────────────────────────────────────────────
 
-def _call_gpt(images_b64, system_prompt, client):
-    content = [{"type": "text", "text": "Extract all invoices from these document pages."}]
+def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices from these document pages."):
+    content = [{"type": "text", "text": user_text}]
     for img in images_b64:
         content.append({
             "type": "image_url",
@@ -120,7 +128,7 @@ def _call_gpt(images_b64, system_prompt, client):
     return []
 
 
-def _extract_from_file(filename, data, system_prompt, client):
+def _extract_from_file(filename, data, system_prompt, client, user_text="Extract all invoices from these document pages."):
     images = _file_to_images_b64(filename, data)
     MAX_BYTES = 45 * 1024 * 1024
     batches, cur, cur_size = [], [], 0
@@ -135,7 +143,7 @@ def _extract_from_file(filename, data, system_prompt, client):
 
     invoices = []
     for batch in batches:
-        invoices.extend(_call_gpt(batch, system_prompt, client))
+        invoices.extend(_call_gpt(batch, system_prompt, client, user_text=user_text))
     return invoices
 
 
@@ -516,3 +524,96 @@ async def extract_payroll(
     x_app_secret: str = Header(default=""),
 ):
     return await _run_extract(files, x_app_secret, payroll_hints=payroll_hints)
+
+
+# ── Crew freelance invoice extractor ─────────────────────────────────────────
+
+_CREW_REQUIRED = {"worker", "invoiceNo", "invoiceDate", "wages"}
+
+def normalize_crew_freelance_row(raw: dict, filename: str) -> dict:
+    worker       = clean_name(raw.get("worker", "")) or "[missing information]"
+    invoice_no   = str(raw.get("invoiceNo", "")).strip() or "[missing information]"
+    invoice_date = str(raw.get("invoiceDate", "")).strip() or "[missing information]"
+    wages        = normalize_amount(raw.get("wages", 0))
+    if wages == 0:
+        wages = "[missing information]"
+
+    method = normalize_pymt_method(raw.get("pymtMethod", ""))
+
+    days = raw.get("daysWorked")
+    if isinstance(days, float):
+        days = int(days)
+    elif not isinstance(days, int):
+        days = None
+
+    return {
+        "worker":        worker,
+        "jobTitle":      clean_name(raw.get("jobTitle", "")),
+        "invoiceNo":     invoice_no,
+        "invoiceDate":   invoice_date,
+        "workDates":     str(raw.get("workDates", "")).strip(),
+        "daysWorked":    days,
+        "wages":         wages,
+        "kitRental":     normalize_amount(raw.get("kitRental", 0)) or None,
+        "mileage":       normalize_amount(raw.get("mileage", 0)) or None,
+        "reimbursement": normalize_amount(raw.get("reimbursement", 0)) or None,
+        "other":         normalize_amount(raw.get("other", 0)) or None,
+        "poNo":          str(raw.get("poNo", "")).strip(),
+        "pymtMethod":    method,
+        "pymtNo":        normalize_pymt_number(method, raw.get("pymtNo", "")),
+        "street":        clean_address(raw.get("street", "")),
+        "city":          clean_name(raw.get("city", "")),
+        "zip":           clean_zip(raw.get("zip", "")),
+        "sourceFile":    filename,
+    }
+
+
+@app.post("/extract-crew-freelance")
+async def extract_crew_freelance(
+    files: list[UploadFile] = File(...),
+    prodco_names: str = Form(""),
+    x_app_secret: str = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    client = _client()
+    names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
+    system_prompt = _load_crew_freelance_prompt(names)
+    user_text     = "Extract crew freelance invoice data from these document pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no crew freelance data extracted — review manually")
+            issues.append(f"{uf.filename}: no crew freelance data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_crew_freelance_row(raw, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        worker_label = file_rows[0]["worker"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  worker_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
