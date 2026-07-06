@@ -293,7 +293,7 @@ def _is_wrapbook_register_only(pdf_bytes: bytes) -> bool:
                 text = (pg.extract_text() or "").lower()
                 if "payroll register" in text:
                     has_register = True
-                if "fringe report" in text:
+                if "fringe report" in text or "fringe recap" in text:
                     has_fringe = True
                     break
             return has_register and not has_fringe
