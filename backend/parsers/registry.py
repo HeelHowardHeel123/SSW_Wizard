@@ -127,7 +127,3 @@ def register_parser(
     return mod
 
 
-def invalidate_parser(company: str):
-    """Remove the runtime parser for this company (call before re-generating after failure)."""
-    global _RUNTIME
-    _RUNTIME = [m for m in _RUNTIME if getattr(m, "COMPANY", "") != company]

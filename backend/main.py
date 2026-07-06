@@ -37,7 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from parsers.base import FRINGE_FIELDS
-from parsers.wrapbook.fringe import enrich_from_register
+from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
 from notify import send_parser_alert, send_run_summary, ALERT_EMAIL
@@ -371,11 +371,9 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
     # assign "Fringe Report 001 / 002 / …" labels after enrichment is complete.
     wb_project_sources: list[tuple[str, list[dict]]] = []
 
-    # Ordered list of email alerts — one entry per generation event (initial or retry).
+    # Ordered list of email alerts — one entry per generation event.
     # [{company_name, code, file_count, row_count, is_update}]
     alert_queue: list[dict] = []
-    # Companies already re-generated this request — cap at one retry per company per batch.
-    retried: set[str] = set()
 
     def _latest_alert(company: str) -> dict | None:
         for entry in reversed(alert_queue):
@@ -414,35 +412,29 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
                 entry["file_count"] += 1
                 entry["row_count"]  += len(extracted)
 
-        # ── Phase 3: all known parsers failed or no parsers found ─────────────
+        # ── Phase 3: all known layout versions failed → generate new variant ──
         if not extracted:
             known_company = candidates[0].COMPANY if candidates else None
             hints = payroll_hints
             if known_company:
                 hints = (
-                    f"Company: {known_company} (existing parser failed — possible layout change)\n"
+                    f"Company: {known_company} — all {len(candidates)} known layout(s) failed, likely a new variant\n"
                     + hints
                 )
 
-            if known_company in retried:
-                # Already re-generated once this batch — AI-extract only, no new code/email
-                ai_rows, ai_errs, _, _, _ = extract_unknown(
-                    data, OPENAI_API_KEY, hints=hints, anthropic_key=ANTHROPIC_API_KEY
-                )
-                extracted, errs, company = ai_rows, ai_errs, known_company or "unknown"
-            else:
-                if known_company:
-                    retried.add(known_company)
-                    registry.invalidate_parser(known_company)
-
-                ai_rows, ai_errs, ai_company, markers, code = extract_unknown(
-                    data, OPENAI_API_KEY, hints=hints, anthropic_key=ANTHROPIC_API_KEY
-                )
-                extracted, errs = ai_rows, ai_errs
-                if ai_company:
-                    exec_fn = make_exec_parser(code)
-                    if exec_fn:
-                        registry.register_parser(ai_company, markers, exec_fn)
+            ai_rows, ai_errs, ai_company, markers, code = extract_unknown(
+                data, OPENAI_API_KEY, hints=hints, anthropic_key=ANTHROPIC_API_KEY
+            )
+            extracted, errs = ai_rows, ai_errs
+            if ai_company:
+                exec_fn = make_exec_parser(code)
+                if exec_fn:
+                    registry.register_parser(ai_company, markers, exec_fn)
+                existing = _latest_alert(ai_company)
+                if existing:
+                    existing["file_count"] += 1
+                    existing["row_count"]  += len(extracted)
+                else:
                     alert_queue.append({
                         "company_name": ai_company,
                         "code":         code,
@@ -450,10 +442,10 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
                         "row_count":    len(extracted),
                         "is_update":    bool(known_company),
                     })
-                    company = ai_company
-                else:
-                    errs.append(f"Could not identify payroll company in {filename}")
-                    company = known_company or "unknown"
+                company = ai_company
+            else:
+                errs.append(f"Could not identify payroll company in {filename}")
+                company = known_company or "unknown"
 
         for r in extracted:
             r["sourceFile"] = filename

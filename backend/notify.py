@@ -58,7 +58,8 @@ def send_parser_alert(
             f"Next steps:\n"
             f"  1. Review the attached code\n"
             f"  2. Test it on a sample PDF from {company_name}\n"
-            f"  3. Save to backend/parsers/{slug}/fringe.py\n"
+            f"  3. Save as the next fringe_NNN.py in backend/parsers/{slug}/\n"
+            f"     (e.g. fringe_001.py if the folder is empty, fringe_002.py alongside an existing fringe_001.py)\n"
             f"  4. Commit and push — Railway auto-deploys\n\n"
             f"Until then, {company_name} PDFs will use AI extraction each batch."
         )
