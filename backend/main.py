@@ -50,6 +50,7 @@ ALLOWED_ORIGINS   = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").s
 
 _PROMPT_PATH                 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoice_extraction_prompt.txt")
 _CREW_FREELANCE_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crew_freelance_prompt.txt")
+_HOURS_LETTER_PROMPT_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_letter_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -77,6 +78,11 @@ def _load_crew_freelance_prompt(prodco_names):
         template = f.read()
     label = ", ".join(prodco_names) if prodco_names else "the production company"
     return template.replace("{prodco_names}", label)
+
+
+def _load_hours_letter_prompt():
+    with open(_HOURS_LETTER_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -612,6 +618,80 @@ async def extract_crew_freelance(
         file_summaries.append({
             "filename": uf.filename,
             "company":  worker_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Hours letter extractor ────────────────────────────────────────────────────
+
+def normalize_hours_letter_row(raw: dict, filename: str) -> dict:
+    worker = clean_name(raw.get("worker", "")) or "[missing information]"
+    wages  = normalize_amount(raw.get("wages", 0))
+    if wages == 0:
+        wages = "[missing information]"
+
+    days = raw.get("daysWorked")
+    if isinstance(days, float):
+        days = int(days)
+    elif not isinstance(days, int):
+        days = None
+
+    return {
+        "worker":      worker,
+        "jobTitle":    clean_name(raw.get("jobTitle", "")),
+        "daysWorked":  days,
+        "wages":       wages,
+        "invoiceDate": str(raw.get("invoiceDate", "")).strip(),
+        "company":     str(raw.get("company", "")).strip(),
+        "sourceFile":  filename,
+    }
+
+
+@app.post("/extract-hours-letters")
+async def extract_hours_letters(
+    files: list[UploadFile] = File(...),
+    x_app_secret: str = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    client        = _client()
+    system_prompt = _load_hours_letter_prompt()
+    user_text     = "Extract crew hours and billable amounts from this hours confirmation letter."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no hours letter data extracted — review manually")
+            issues.append(f"{uf.filename}: no hours letter data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_hours_letter_row(raw, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        company_label = file_rows[0]["company"] if file_rows and file_rows[0]["company"] else "unknown"
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  company_label,
             "rows":     len(file_rows),
             "issues":   errs,
         })
