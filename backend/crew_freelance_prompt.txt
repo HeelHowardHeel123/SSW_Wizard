@@ -19,6 +19,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
     "mileage":       "mileage reimbursement amount as a number, or 0",
     "reimbursement": "other reimbursements (hotel, meals, parking, etc.) as a number, or 0",
     "other":         "any other line items not covered above as a number, or 0",
+    "invoiceTotal":  "the grand total / amount due on the invoice as a number (the bottom-line total, not a line item), or 0",
     "poNo":          "purchase order number if shown, or \"\"",
     "pymtMethod":    "payment method if shown: Check, P-Card, EFT/Wire, Cash, etc., or \"\"",
     "pymtNo":        "check number, last 4 of card, or wire reference if shown, or \"\"",

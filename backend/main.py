@@ -564,6 +564,7 @@ def normalize_crew_freelance_row(raw: dict, filename: str) -> dict:
         "mileage":       normalize_amount(raw.get("mileage", 0)) or None,
         "reimbursement": normalize_amount(raw.get("reimbursement", 0)) or None,
         "other":         normalize_amount(raw.get("other", 0)) or None,
+        "invoiceTotal":  normalize_amount(raw.get("invoiceTotal", 0)) or None,
         "poNo":          str(raw.get("poNo", "")).strip(),
         "pymtMethod":    method,
         "pymtNo":        normalize_pymt_number(method, raw.get("pymtNo", "")),
