@@ -642,13 +642,14 @@ def normalize_hours_letter_row(raw: dict, filename: str) -> dict:
         days = None
 
     return {
-        "worker":      worker,
-        "jobTitle":    clean_name(raw.get("jobTitle", "")),
-        "daysWorked":  days,
-        "wages":       wages,
-        "invoiceDate": str(raw.get("invoiceDate", "")).strip(),
-        "company":     str(raw.get("company", "")).strip(),
-        "sourceFile":  filename,
+        "worker":       worker,
+        "jobTitle":     clean_name(raw.get("jobTitle", "")),
+        "daysWorked":   days,
+        "wages":        wages,
+        "invoiceTotal": wages,
+        "invoiceDate":  str(raw.get("invoiceDate", "")).strip(),
+        "company":      str(raw.get("company", "")).strip(),
+        "sourceFile":   filename,
     }
 
 
