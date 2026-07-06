@@ -91,15 +91,13 @@ _ENDPOINT_LABELS = {
 
 
 def send_run_summary(
-    endpoint: str,
-    file_summaries: list[dict],
-    issues: list[str],
-    new_parsers: list[dict] | None = None,
+    project_title: str,
+    workbook_type: str,
+    runs: list[dict],
 ) -> bool:
-    """Email a run summary after any extraction endpoint completes.
+    """Email a consolidated run summary after workbook assembly.
 
-    file_summaries: [{filename, company, rows, issues}] — same shape every endpoint returns.
-    new_parsers:    alert_queue entries from fringe runs [{company_name, file_count, row_count, is_update}].
+    runs: [{endpoint, files: [{filename, company, rows, issues}], issues}]
     """
     if not SENDGRID_API_KEY:
         return False
@@ -108,53 +106,45 @@ def send_run_summary(
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
 
-        label       = _ENDPOINT_LABELS.get(endpoint, endpoint)
-        total_files = len(file_summaries)
-        total_rows  = sum(f.get("rows", 0) for f in file_summaries)
-        issue_count = len(issues)
         timestamp   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        total_rows  = sum(f.get("rows", 0) for r in runs for f in r.get("files", []))
+        all_issues  = [i for r in runs for i in r.get("issues", [])]
+        issue_count = len(all_issues)
 
-        subject = f"[TPC Wizard] {label} — {timestamp} — {total_files} file(s), {total_rows} row(s)"
+        title_part = project_title.strip() if project_title.strip() else "TPC Wizard Run"
+        subject = f"[TPC Wizard] {title_part} — {timestamp} — {total_rows} row(s)"
         if issue_count:
             subject += f" ({issue_count} issue(s))"
 
         lines = [
-            f"Run summary: {label}",
-            f"Timestamp:   {timestamp}",
-            f"Files:       {total_files}",
-            f"Rows:        {total_rows}",
+            f"Project:   {title_part}" + (f" ({workbook_type})" if workbook_type else ""),
+            f"Timestamp: {timestamp}",
+            f"Total rows: {total_rows}",
         ]
         if issue_count:
-            lines.append(f"Issues:      {issue_count}")
+            lines.append(f"Issues:    {issue_count}")
         lines.append("")
 
-        if file_summaries:
-            lines.append("FILE DETAILS")
+        for run in runs:
+            endpoint = run.get("endpoint", "")
+            label    = _ENDPOINT_LABELS.get(endpoint, endpoint)
+            files    = run.get("files", [])
+            run_rows = sum(f.get("rows", 0) for f in files)
+
+            lines.append(f"{label.upper()}  —  {len(files)} file(s), {run_rows} row(s)")
             lines.append("-" * 60)
-            for f in file_summaries:
+            for f in files:
                 lines.append(f"  {f.get('filename', '?')}")
-                lines.append(f"    Parser / source : {f.get('company', 'unknown')}")
-                lines.append(f"    Rows extracted  : {f.get('rows', 0)}")
+                lines.append(f"    Source  : {f.get('company', 'unknown')}")
+                lines.append(f"    Rows    : {f.get('rows', 0)}")
                 for err in f.get("issues", []):
-                    lines.append(f"    WARNING: {err}")
+                    lines.append(f"    WARNING : {err}")
             lines.append("")
 
-        if new_parsers:
-            lines.append("NEW / UPDATED PARSERS")
-            lines.append("-" * 60)
-            for p in new_parsers:
-                verb = "Updated" if p.get("is_update") else "New"
-                lines.append(
-                    f"  {verb}: {p['company_name']} — "
-                    f"{p['file_count']} file(s), {p['row_count']} row(s)"
-                )
-            lines.append("  (Parser code emailed separately with attachment)")
-            lines.append("")
-
-        if issues:
+        if all_issues:
             lines.append("ALL ISSUES")
             lines.append("-" * 60)
-            for issue in issues:
+            for issue in all_issues:
                 lines.append(f"  • {issue}")
         else:
             lines.append("No issues.")

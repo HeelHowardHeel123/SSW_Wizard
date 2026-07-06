@@ -34,6 +34,7 @@ import pdfplumber
 from openai import OpenAI
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from parsers.base import FRINGE_FIELDS
 from parsers.wrapbook.fringe import enrich_from_register
@@ -511,7 +512,6 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
         )
         issues.append(alert_msg)
 
-    send_run_summary("fringe", file_summaries, issues, new_parsers=alert_queue)
     return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries}
 
 
@@ -625,7 +625,6 @@ async def extract_crew_freelance(
             "issues":   errs,
         })
 
-    send_run_summary("freelance", file_summaries, issues)
     return {"rows": rows, "issues": issues, "files": file_summaries}
 
 
@@ -713,5 +712,47 @@ async def extract_hours_letters(
             for row in src_rows:
                 row["invoiceNo"] = f"Hours Letter {idx:03d}"
 
-    send_run_summary("hours_letters", file_summaries, issues)
     return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Consolidated run summary email ───────────────────────────────────────────
+
+class _FileSummaryIn(BaseModel):
+    filename: str = ""
+    company:  str = ""
+    rows:     int = 0
+    issues:   list[str] = []
+
+class _RunDataIn(BaseModel):
+    endpoint: str = ""
+    files:    list[_FileSummaryIn] = []
+    issues:   list[str] = []
+
+class _RunSummaryRequest(BaseModel):
+    project_title: str = ""
+    workbook_type: str = ""
+    runs:          list[_RunDataIn] = []
+
+
+@app.post("/send-run-summary")
+async def send_run_summary_endpoint(
+    payload: _RunSummaryRequest,
+    x_app_secret: str = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    runs_dicts = [
+        {
+            "endpoint": r.endpoint,
+            "files":    [f.dict() for f in r.files],
+            "issues":   r.issues,
+        }
+        for r in payload.runs
+    ]
+    send_run_summary(
+        project_title=payload.project_title,
+        workbook_type=payload.workbook_type,
+        runs=runs_dicts,
+    )
+    return {"ok": True}
