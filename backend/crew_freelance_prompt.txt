@@ -24,6 +24,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
     "pymtNo":        "check number, last 4 of card, or wire reference if shown, or \"\"",
     "street":        "crew member street address, or \"\"",
     "city":          "crew member city, or \"\"",
+    "state":         "crew member state as 2-letter abbreviation (e.g. 'IL', 'CA'), or \"\"",
     "zip":           "crew member ZIP code (5 digits), or \"\""
   }
 ]

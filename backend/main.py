@@ -569,6 +569,7 @@ def normalize_crew_freelance_row(raw: dict, filename: str) -> dict:
         "pymtNo":        normalize_pymt_number(method, raw.get("pymtNo", "")),
         "street":        clean_address(raw.get("street", "")),
         "city":          clean_name(raw.get("city", "")),
+        "state":         clean_state(raw.get("state", "")),
         "zip":           clean_zip(raw.get("zip", "")),
         "sourceFile":    filename,
     }
@@ -663,6 +664,7 @@ async def extract_hours_letters(
     user_text     = "Extract crew hours and billable amounts from this hours confirmation letter."
 
     rows, issues, file_summaries = [], [], []
+    sources: list[tuple[str, list[dict]]] = []   # (filename, file_rows) for labeling
 
     for uf in files:
         data = await uf.read()
@@ -688,6 +690,8 @@ async def extract_hours_letters(
                     issues.append(f"{uf.filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
+        if file_rows:
+            sources.append((uf.filename, file_rows))
         company_label = file_rows[0]["company"] if file_rows and file_rows[0]["company"] else "unknown"
         file_summaries.append({
             "filename": uf.filename,
@@ -695,5 +699,14 @@ async def extract_hours_letters(
             "rows":     len(file_rows),
             "issues":   errs,
         })
+
+    # Assign invoice labels — mirrors Wrapbook "Fringe Report" pattern
+    if len(sources) == 1:
+        for row in sources[0][1]:
+            row["invoiceNo"] = "Hours Letter"
+    elif len(sources) > 1:
+        for idx, (_, src_rows) in enumerate(sources, 1):
+            for row in src_rows:
+                row["invoiceNo"] = f"Hours Letter {idx:03d}"
 
     return {"rows": rows, "issues": issues, "files": file_summaries}
