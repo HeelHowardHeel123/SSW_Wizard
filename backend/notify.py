@@ -1,8 +1,9 @@
-"""SendGrid email alerts for auto-generated parsers."""
+"""SendGrid email alerts for auto-generated parsers and run summaries."""
 
 import re
 import os
 import base64
+from datetime import datetime, timezone
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
 ALERT_EMAIL      = os.environ.get("ALERT_EMAIL", "sward@tpc.us")
@@ -75,6 +76,95 @@ def send_parser_alert(
             Disposition("attachment"),
         )
 
+        SendGridAPIClient(SENDGRID_API_KEY).send(msg)
+        return True
+
+    except Exception:
+        return False
+
+
+_ENDPOINT_LABELS = {
+    "fringe":        "Fringe / Payroll",
+    "freelance":     "Freelance Invoices",
+    "hours_letters": "Hours Letters",
+}
+
+
+def send_run_summary(
+    endpoint: str,
+    file_summaries: list[dict],
+    issues: list[str],
+    new_parsers: list[dict] | None = None,
+) -> bool:
+    """Email a run summary after any extraction endpoint completes.
+
+    file_summaries: [{filename, company, rows, issues}] — same shape every endpoint returns.
+    new_parsers:    alert_queue entries from fringe runs [{company_name, file_count, row_count, is_update}].
+    """
+    if not SENDGRID_API_KEY:
+        return False
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        label       = _ENDPOINT_LABELS.get(endpoint, endpoint)
+        total_files = len(file_summaries)
+        total_rows  = sum(f.get("rows", 0) for f in file_summaries)
+        issue_count = len(issues)
+        timestamp   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        subject = f"[TPC Wizard] {label} — {timestamp} — {total_files} file(s), {total_rows} row(s)"
+        if issue_count:
+            subject += f" ({issue_count} issue(s))"
+
+        lines = [
+            f"Run summary: {label}",
+            f"Timestamp:   {timestamp}",
+            f"Files:       {total_files}",
+            f"Rows:        {total_rows}",
+        ]
+        if issue_count:
+            lines.append(f"Issues:      {issue_count}")
+        lines.append("")
+
+        if file_summaries:
+            lines.append("FILE DETAILS")
+            lines.append("-" * 60)
+            for f in file_summaries:
+                lines.append(f"  {f.get('filename', '?')}")
+                lines.append(f"    Parser / source : {f.get('company', 'unknown')}")
+                lines.append(f"    Rows extracted  : {f.get('rows', 0)}")
+                for err in f.get("issues", []):
+                    lines.append(f"    WARNING: {err}")
+            lines.append("")
+
+        if new_parsers:
+            lines.append("NEW / UPDATED PARSERS")
+            lines.append("-" * 60)
+            for p in new_parsers:
+                verb = "Updated" if p.get("is_update") else "New"
+                lines.append(
+                    f"  {verb}: {p['company_name']} — "
+                    f"{p['file_count']} file(s), {p['row_count']} row(s)"
+                )
+            lines.append("  (Parser code emailed separately with attachment)")
+            lines.append("")
+
+        if issues:
+            lines.append("ALL ISSUES")
+            lines.append("-" * 60)
+            for issue in issues:
+                lines.append(f"  • {issue}")
+        else:
+            lines.append("No issues.")
+
+        msg = Mail(
+            from_email=FROM_EMAIL,
+            to_emails=FROM_EMAIL,
+            subject=subject,
+            plain_text_content="\n".join(lines),
+        )
         SendGridAPIClient(SENDGRID_API_KEY).send(msg)
         return True
 

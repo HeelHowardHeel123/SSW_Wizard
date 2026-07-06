@@ -39,7 +39,7 @@ from parsers.base import FRINGE_FIELDS
 from parsers.wrapbook.fringe import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
-from notify import send_parser_alert, ALERT_EMAIL
+from notify import send_parser_alert, send_run_summary, ALERT_EMAIL
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -511,6 +511,7 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
         )
         issues.append(alert_msg)
 
+    send_run_summary("fringe", file_summaries, issues, new_parsers=alert_queue)
     return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries}
 
 
@@ -624,6 +625,7 @@ async def extract_crew_freelance(
             "issues":   errs,
         })
 
+    send_run_summary("freelance", file_summaries, issues)
     return {"rows": rows, "issues": issues, "files": file_summaries}
 
 
@@ -711,4 +713,5 @@ async def extract_hours_letters(
             for row in src_rows:
                 row["invoiceNo"] = f"Hours Letter {idx:03d}"
 
+    send_run_summary("hours_letters", file_summaries, issues)
     return {"rows": rows, "issues": issues, "files": file_summaries}
