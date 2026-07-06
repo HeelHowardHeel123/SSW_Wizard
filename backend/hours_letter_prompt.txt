@@ -10,7 +10,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
   {
     "worker":      "crew member name as LAST, FIRST — standardize all names to this format",
     "jobTitle":    "job title / position / role (e.g. 'Director', 'Flame Artist'), or \"\"",
-    "daysWorked":  "number of days worked as an integer, or null",
+    "daysWorked":  "total number of days worked as an integer. If the days column contains a description like '1 Prep, 1 Shoot' or '2 Prep, 3 Shoot, 1 Travel', add the individual counts together (e.g. 1+1=2, 2+3+1=6). Return null only if no day information is present at all.",
     "wages":       "billable amount for this crew member as a number (no $ or commas), or 0",
     "invoiceDate": "the date of the letter (at the top) as MM/DD/YYYY, or \"\"",
     "company":     "the company writing/signing this letter (e.g. 'MK Films', 'GB Studios') — NOT TPC"
