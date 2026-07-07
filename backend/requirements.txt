@@ -6,3 +6,4 @@ PyMuPDF
 pdfplumber
 sendgrid
 anthropic
+openpyxl>=3.1

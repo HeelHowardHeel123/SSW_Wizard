@@ -88,6 +88,7 @@ _ENDPOINT_LABELS = {
     "fringe":        "Fringe / Payroll",
     "freelance":     "Freelance Invoices",
     "hours_letters": "Hours Letters",
+    "talent":        "Talent & Extras",
 }
 
 

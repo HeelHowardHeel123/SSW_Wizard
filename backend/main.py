@@ -41,6 +41,7 @@ from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
 from notify import send_parser_alert, send_run_summary, ALERT_EMAIL
+from talent_extractor import extract_talent
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -705,6 +706,42 @@ async def extract_hours_letters(
                 row["invoiceNo"] = f"Hours Letter {idx:03d}"
 
     return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Talent & Extras extractor ────────────────────────────────────────────────
+
+@app.post("/extract-talent")
+async def extract_talent_endpoint(
+    pdf_files: list[UploadFile] = File(default=[]),
+    ptip_file: UploadFile       = File(default=None),
+    project_title: str          = Form(default=""),
+    workbook_type: str          = Form(default=""),
+    x_app_secret: str           = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    pdf_bytes_list: list[tuple[str, bytes]] = []
+    for uf in (pdf_files or []):
+        data = await uf.read()
+        if data:
+            pdf_bytes_list.append((uf.filename, data))
+
+    ptip_bytes: bytes | None = None
+    if ptip_file:
+        ptip_bytes = await ptip_file.read()
+        if not ptip_bytes:
+            ptip_bytes = None
+
+    if not pdf_bytes_list and not ptip_bytes:
+        raise HTTPException(400, "Provide at least one PDF or a PTIP file.")
+
+    return extract_talent(
+        pdf_files=pdf_bytes_list,
+        ptip_bytes=ptip_bytes,
+        project_title=project_title,
+        workbook_type=workbook_type,
+    )
 
 
 # ── Consolidated run summary email ───────────────────────────────────────────
