@@ -249,7 +249,8 @@ def _parse_talent_row(line: str) -> dict | None:
         return None
 
     on_off = tail[on_off_idx].lower()
-    is_agent = (on_off == 'off')
+    role_code = tail[on_off_idx + 1] if on_off_idx + 1 < len(tail) else ''
+    is_agent = (on_off == 'off') or (role_code.lower() == 'agent')
 
     # Name is everything before On/Off, minus a trailing cam-code number
     before = tail[:on_off_idx]
@@ -323,10 +324,20 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
                                 re.search(r'Handling\s+\$([\d,.]+)', text).group(1))
 
     talent_rows: list[dict] = []
-    for line in text.split('\n'):
-        row = _parse_talent_row(line.strip())
+    pdf_lines = text.split('\n')
+    i = 0
+    while i < len(pdf_lines):
+        row = _parse_talent_row(pdf_lines[i].strip())
         if row:
+            if not row['name'] and i + 1 < len(pdf_lines):
+                next_line = pdf_lines[i + 1].strip()
+                if next_line and not _parse_talent_row(next_line):
+                    row['name'] = next_line
+                    if _is_company_name(next_line):
+                        row['is_agent'] = True
+                    i += 1
             talent_rows.append(row)
+        i += 1
 
     return {
         'invoice_no':      inv_no,
