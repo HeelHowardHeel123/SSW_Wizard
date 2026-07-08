@@ -122,18 +122,18 @@ def _parse_ptip_address(addr_str) -> tuple[str, str, str, str]:
 # ── PTIP Excel parsing ────────────────────────────────────────────────────────
 
 def _find_ptip_sheet(wb):
-    """Find the worksheet that contains the PTIP talent data (has #, Invoice Number, Wages)."""
+    """Find the worksheet that contains the PTIP talent data.
+
+    Supports both the ER native format (Customer Name as first column, no '#')
+    and the manually-enhanced format ('#' prepended as first column).
+    """
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         for row_vals in ws.iter_rows(max_row=10, values_only=True):
-            if row_vals[0] != '#':
-                continue
             row_strs = [str(v).strip() if v is not None else '' for v in row_vals]
             if 'Invoice Number' in row_strs and 'Wages' in row_strs and 'Talent Name' in row_strs:
                 return ws, row_strs
-    # Fallback: active sheet
-    ws = wb.active
-    return ws, []
+    return wb.active, []
 
 
 def parse_ptip_xlsx(xlsx_bytes: bytes) -> tuple[list[dict], list[str], list[str]]:
@@ -159,11 +159,10 @@ def parse_ptip_xlsx(xlsx_bytes: bytes) -> tuple[list[dict], list[str], list[str]
         # Find the row number of the header so we can start data below it
         header_found_at = None
         for i, row_vals in enumerate(ws.iter_rows(values_only=True), start=1):
-            if row_vals[0] == '#':
-                row_strs = [str(v).strip() if v is not None else '' for v in row_vals]
-                if 'Invoice Number' in row_strs:
-                    header_found_at = i
-                    break
+            row_strs = [str(v).strip() if v is not None else '' for v in row_vals]
+            if 'Invoice Number' in row_strs and 'Wages' in row_strs and 'Talent Name' in row_strs:
+                header_found_at = i
+                break
 
         if header_found_at is None:
             issues.append("PTIP: header row not found")
@@ -175,12 +174,6 @@ def parse_ptip_xlsx(xlsx_bytes: bytes) -> tuple[list[dict], list[str], list[str]
         )
 
         for row_vals in ws.iter_rows(min_row=header_found_at + 1, values_only=True):
-            # Stop at empty or footer rows
-            seq = row_vals[0] if row_vals else None
-            if seq is None and (len(row_vals) < 2 or not row_vals[1]):
-                continue
-            if seq is None and row_vals[1] and 'Note' in str(row_vals[1]):
-                break
             if all(v is None for v in row_vals[:5]):
                 break
 
@@ -404,13 +397,17 @@ def _build_row(
     cast_cat = ''
     if ptip:
         cast_cat = str(ptip.get('Cast Category', '') or '').strip()
-        is_agent = cast_cat.lower() == 'agent'
+        # Strip multiline cell artifacts (e.g. "Dream Team Talent\n(Dream Team Talent Agency LLC)")
+        name_for_agent_check = str(ptip.get('Talent Name', '') or '').split('\n')[0].strip()
+        # Some PTIP files label agent rows as "Model" instead of "Agent"
+        # so use company-name heuristic as a fallback
+        is_agent = cast_cat.lower() == 'agent' or _is_company_name(name_for_agent_check)
     elif pdf_talent:
         is_agent = pdf_talent.get('is_agent', False)
 
     # ── Name ────────────────────────────────────────────────────────────────
     if ptip:
-        name_raw = str(ptip.get('Talent Name', '') or '').strip()
+        name_raw = str(ptip.get('Talent Name', '') or '').split('\n')[0].strip()
         talent_name = _ptip_name_to_last_first(name_raw, is_agent)
     elif pdf_talent:
         name_raw = pdf_talent.get('name', '')
@@ -449,7 +446,18 @@ def _build_row(
 
     # ── PTIP financial columns ───────────────────────────────────────────────
     if ptip:
-        ptip_amount    = _to_float(ptip.get('Total') or ptip.get('TOTAL'))
+        # Try explicit Total column (manually-enhanced PTIP); otherwise compute it.
+        # ER native PTIP excludes State Tax Withheld from the total (it is employee-side).
+        _RAW_TOTAL = _to_float(ptip.get('Total') or ptip.get('TOTAL'))
+        if _RAW_TOTAL:
+            ptip_amount = _RAW_TOTAL
+        else:
+            _TOTAL_KEYS = [
+                'Wages', 'P&H', 'Non Resident Corp Tax Amount',
+                'Local Tax Withheld', 'State Disability Withheld',
+                'Employer Taxes', 'Workers Compensation', 'Handling Fee', 'Signatory Fee',
+            ]
+            ptip_amount = round(sum(_to_float(ptip.get(k)) for k in _TOTAL_KEYS), 2)
         er_tax_ptip    = _to_float(ptip.get('Employer Taxes'))
         wc_ptip        = _to_float(ptip.get('Workers Compensation'))
         handling_ptip  = _to_float(ptip.get('Handling Fee'))
@@ -499,8 +507,14 @@ def _build_row(
             wages    = pdf_talent.get('gross_wages', 0.0)
             misc_pmt = pdf_talent.get('misc_pmt', 0.0)
         else:
-            wages    = _to_float(ptip.get('Wages')) if ptip else 0.0
-            misc_pmt = 0.0
+            # No PDF for this row (PTIP-only invoice in a mixed batch)
+            ptip_wages = _to_float(ptip.get('Wages')) if ptip else 0.0
+            if is_agent:
+                wages    = 0.0
+                misc_pmt = ptip_wages
+            else:
+                wages    = ptip_wages
+                misc_pmt = 0.0
         er_tax   = er_tax_ptip or 0.0
         wc       = wc_ptip or 0.0
         handling = handling_ptip or 0.0
@@ -602,28 +616,31 @@ def build_organized_ptip_xlsx(
         # Find close match
         invoice_col = next((c for c in header_cols if 'Invoice' in c), header_cols[0])
 
-    sorted_rows = sorted(ptip_rows, key=lambda r: str(r.get(invoice_col, '') or ''))
+    # Sort while preserving original indices for duplicate lookup
+    sorted_with_orig = sorted(enumerate(ptip_rows),
+                              key=lambda t: str(t[1].get(invoice_col, '') or ''))
+
+    has_hash_col = bool(header_cols) and header_cols[0] == '#'
+    out_header = list(header_cols) if has_hash_col else ['#'] + list(header_cols)
 
     wb_out = openpyxl.Workbook()
     ws = wb_out.active
     ws.title = 'Organized PTIP'
-
-    # Write original header
-    ws.append(header_cols)
+    ws.append(out_header)
 
     last_invoice = None
     seq = 0
-    for orig_idx, row in enumerate(sorted_rows):
-        # Find original index before sorting for duplicate lookup
-        # We need to track originals — rebuild lookup
-        row_vals = [row.get(col) for col in header_cols]
+    for orig_idx, row in sorted_with_orig:
+        if has_hash_col:
+            row_vals = [row.get(col) for col in header_cols]
+        else:
+            row_vals = [None] + [row.get(col) for col in header_cols]
 
         inv_no = str(row.get(invoice_col, '') or '').strip()
         if inv_no != last_invoice:
             last_invoice = inv_no
             seq = 0
 
-        # Determine # value
         if orig_idx in duplicate_indices:
             hash_val = 'duplicate'
         elif inv_no not in received_invoice_nos:
@@ -632,7 +649,6 @@ def build_organized_ptip_xlsx(
             seq += 1
             hash_val = seq
 
-        # Replace the '#' column (index 0)
         row_vals[0] = hash_val
         ws.append(row_vals)
 
