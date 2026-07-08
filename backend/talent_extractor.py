@@ -621,33 +621,109 @@ def build_organized_ptip_xlsx(
     xlsx_bytes: bytes,
 ) -> bytes:
     """
-    Return a new .xlsx that is the PTIP sorted by invoice number with an
-    updated '#' column:
-      - sequential int (resets per invoice group)
-      - blank   : no matching PDF received for this invoice
-      - 'duplicate' : row is a duplicate, excluded from workbook
+    Return a new .xlsx that mirrors the original ER PTIP layout:
+      Row 1  — empty merged row (matches original height)
+      Row 2  — title text copied verbatim from the original (same font/fill)
+      Row 3  — column headers (same teal header style)
+      Row 4+ — data rows (same body style, sorted by invoice number)
+
+    '#' column values:
+      sequential int  — invoice received (resets per invoice group)
+      blank           — no matching PDF received for this invoice
+      'duplicate'     — row is a duplicate, excluded from workbook
     """
-    # Sort rows by invoice number (stable), keeping duplicates in place
+    from copy import copy as _copy
+    from openpyxl.utils import get_column_letter
+
     invoice_col = 'Invoice Number'
     if invoice_col not in header_cols:
-        # Find close match
         invoice_col = next((c for c in header_cols if 'Invoice' in c), header_cols[0])
 
-    # Sort while preserving original indices for duplicate lookup
     sorted_with_orig = sorted(enumerate(ptip_rows),
-                              key=lambda t: str(t[1].get(invoice_col, '') or ''))
+                              key=lambda t: str(t[1].get(invoice_col, '') or '').zfill(20))
 
     has_hash_col = bool(header_cols) and header_cols[0] == '#'
     out_header = list(header_cols) if has_hash_col else ['#'] + list(header_cols)
+    n_cols = len(out_header)
 
+    # ── Read layout + formatting from original source file ───────────────────
+    wb_src = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+    ws_src = None
+    for sn in wb_src.sheetnames:
+        ws_cand = wb_src[sn]
+        for rv in ws_cand.iter_rows(max_row=10, values_only=True):
+            rstr = [str(v).strip() if v is not None else '' for v in rv]
+            if 'Invoice Number' in rstr and 'Wages' in rstr and 'Talent Name' in rstr:
+                ws_src = ws_cand
+                break
+        if ws_src:
+            break
+    if ws_src is None:
+        ws_src = wb_src.active
+
+    # Locate header row in source to derive title row and data row
+    src_hdr_row = 3
+    for i, rv in enumerate(ws_src.iter_rows(max_row=10, values_only=True), start=1):
+        rstr = [str(v).strip() if v is not None else '' for v in rv]
+        if 'Invoice Number' in rstr and 'Wages' in rstr and 'Talent Name' in rstr:
+            src_hdr_row = i
+            break
+    src_title_row = max(1, src_hdr_row - 1)
+    src_data_row  = src_hdr_row + 1
+
+    title_src  = ws_src.cell(row=src_title_row, column=1)
+    hdr_src    = ws_src.cell(row=src_hdr_row,   column=1)
+    data_src   = ws_src.cell(row=src_data_row,  column=1)
+
+    r1_height   = ws_src.row_dimensions[1].height          or 28.9
+    r2_height   = ws_src.row_dimensions[src_title_row].height or 129.6
+    r3_height   = ws_src.row_dimensions[src_hdr_row].height   or 42.75
+    data_height = ws_src.row_dimensions[src_data_row].height  or 38.25
+
+    # ── Build output workbook ────────────────────────────────────────────────
     wb_out = openpyxl.Workbook()
     ws = wb_out.active
     ws.title = 'Organized PTIP'
-    ws.append(out_header)
 
+    # Row 1: empty merged row
+    ws.row_dimensions[1].height = r1_height
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+
+    # Row 2: title copied verbatim from original
+    ws.row_dimensions[2].height = r2_height
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_cols)
+    t = ws.cell(row=2, column=1, value=title_src.value or '')
+    t.font      = _copy(title_src.font)
+    t.fill      = _copy(title_src.fill)
+    t.alignment = _copy(title_src.alignment)
+    t.border    = _copy(title_src.border)
+
+    # Row 3: column headers
+    ws.row_dimensions[3].height = r3_height
+    for col_i, col_name in enumerate(out_header, start=1):
+        cell = ws.cell(row=3, column=col_i, value=col_name)
+        cell.font      = _copy(hdr_src.font)
+        cell.fill      = _copy(hdr_src.fill)
+        cell.alignment = _copy(hdr_src.alignment)
+        cell.border    = _copy(hdr_src.border)
+
+    # Column widths: # gets 6, remaining mirror original source columns
+    if not has_hash_col:
+        ws.column_dimensions['A'].width = 6
+        for i in range(1, len(header_cols) + 1):
+            w = ws_src.column_dimensions[get_column_letter(i)].width
+            ws.column_dimensions[get_column_letter(i + 1)].width = w or 10
+    else:
+        for i in range(1, n_cols + 1):
+            w = ws_src.column_dimensions[get_column_letter(i)].width
+            ws.column_dimensions[get_column_letter(i)].width = w or 10
+
+    # Data rows (row 4+)
     last_invoice = None
     seq = 0
-    for orig_idx, row in sorted_with_orig:
+    for out_row_i, (orig_idx, row) in enumerate(sorted_with_orig, start=4):
+        ws.row_dimensions[out_row_i].height = data_height
+
         if has_hash_col:
             row_vals = [row.get(col) for col in header_cols]
         else:
@@ -667,7 +743,13 @@ def build_organized_ptip_xlsx(
             hash_val = seq
 
         row_vals[0] = hash_val
-        ws.append(row_vals)
+
+        for col_i, val in enumerate(row_vals, start=1):
+            cell = ws.cell(row=out_row_i, column=col_i, value=val)
+            cell.font      = _copy(data_src.font)
+            cell.fill      = _copy(data_src.fill)
+            cell.alignment = _copy(data_src.alignment)
+            cell.border    = _copy(data_src.border)
 
     buf = io.BytesIO()
     wb_out.save(buf)
