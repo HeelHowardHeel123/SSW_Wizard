@@ -689,14 +689,30 @@ def build_organized_ptip_xlsx(
     ws.row_dimensions[1].height = r1_height
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
 
-    # Row 2: title — first line 18pt, remaining lines 12pt (rich text)
+    # Row 2: A2 holds the logo; B2:end holds the title text
     from openpyxl.cell.rich_text import CellRichText, TextBlock
     from openpyxl.cell.text import InlineFont
     from openpyxl.styles import Color as _OXLColor
+    from openpyxl.drawing.image import Image as _OXLImage
+    import zipfile as _zipfile
 
     ws.row_dimensions[2].height = r2_height
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_cols)
-    t = ws.cell(row=2, column=1)
+
+    # A2: logo copied from original (not merged into the text block)
+    try:
+        with _zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as _zf:
+            _media = [n for n in _zf.namelist() if n.startswith('xl/media/')]
+            if _media:
+                _logo_bytes = _zf.read(_media[0])
+                _logo = _OXLImage(io.BytesIO(_logo_bytes))
+                _logo.anchor = 'A2'
+                ws.add_image(_logo)
+    except Exception:
+        pass  # no image in source — skip silently
+
+    # B2:end: title text, first line 18pt, remaining lines 12pt
+    ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=n_cols)
+    t = ws.cell(row=2, column=2)
 
     title_text = title_src.value or ''
     src_fname = (title_src.font.name or 'Tahoma') if title_src.font else 'Tahoma'
