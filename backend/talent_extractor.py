@@ -35,12 +35,20 @@ def _to_float(v) -> float:
 
 def _fmt_date(v) -> str:
     """Normalize any date value to MM/DD/YYYY string."""
+    if v is None:
+        return ''
     if isinstance(v, datetime):
         return v.strftime('%m/%d/%Y')
     s = str(v).strip()
+    if not s or s.lower() == 'none':
+        return ''
     m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', s)
     if m:
         return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}/{m.group(3)}"
+    # ISO format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
+    if m:
+        return f"{m.group(2)}/{m.group(3)}/{m.group(1)}"
     return s
 
 
@@ -407,6 +415,9 @@ def _build_row(
     first_tax_row: bool,
     scenario: str,  # 'A', 'B', or 'C'
     ptip_row_no: int | None,
+    payment_entity: str = 'Extreme Reach Talent, Inc',
+    pah_from_pdf: bool = False,    # Teams: P&H from PDF talent table, not PTIP
+    calc_signatory_fee: bool = False,  # Teams: (wages+misc)*2%
 ) -> dict:
     """Assemble one workbook row from PTIP and/or PDF data."""
 
@@ -437,9 +448,8 @@ def _build_row(
         title = 'Agency fee'
     elif cast_cat:
         title = cast_cat
-    elif pdf_talent and pdf_invoice:
-        # For PDF-only: try to extract role from invoice (non-union uses role codes)
-        title = ''
+    elif pdf_talent and pdf_talent.get('title'):
+        title = pdf_talent['title']
     else:
         title = ''
 
@@ -500,10 +510,14 @@ def _build_row(
             er_tax   = pdf_invoice.get('total_er_tax', 0.0)
             sag      = pdf_invoice.get('total_pah', 0.0)
             handling = pdf_invoice.get('total_handling', 0.0)
+            wc       = pdf_invoice.get('total_wc', 0.0)
         else:
-            er_tax = sag = handling = 0.0
-        wc = 0.0
+            er_tax = sag = handling = wc = 0.0
         signatory_fee = 0.0
+        if calc_signatory_fee:
+            wages_tmp    = pdf_talent.get('gross_wages', 0.0)
+            misc_pmt_tmp = pdf_talent.get('misc_pmt', 0.0)
+            signatory_fee = round((wages_tmp + misc_pmt_tmp) * 0.02, 2)
     elif scenario == 'B' and ptip:
         # PTIP-only: talent rows go to wages; agent rows go to misc (we know the cast)
         ptip_wages = _to_float(ptip.get('Wages'))
@@ -517,7 +531,10 @@ def _build_row(
         wc       = wc_ptip or 0.0
         handling = handling_ptip or 0.0
         sag      = sag_ptip or 0.0
-        signatory_fee = signatory_ptip or 0.0
+        if calc_signatory_fee:
+            signatory_fee = round(wages * 0.02, 2)
+        else:
+            signatory_fee = signatory_ptip or 0.0
     elif scenario == 'C':
         # Both: PDF wins on wages/misc placement; PTIP for taxes
         if pdf_talent and received_invoice:
@@ -535,8 +552,14 @@ def _build_row(
         er_tax   = er_tax_ptip or 0.0
         wc       = wc_ptip or 0.0
         handling = handling_ptip or 0.0
-        sag      = sag_ptip or 0.0
-        signatory_fee = signatory_ptip or 0.0
+        if pah_from_pdf and pdf_talent and pdf_talent.get('pah', 0.0) > 0:
+            sag = pdf_talent['pah']
+        else:
+            sag = sag_ptip or 0.0
+        if calc_signatory_fee:
+            signatory_fee = round((wages + misc_pmt) * 0.02, 2)
+        else:
+            signatory_fee = signatory_ptip or 0.0
     else:
         wages = misc_pmt = er_tax = wc = handling = sag = signatory_fee = 0.0
 
@@ -597,7 +620,7 @@ def _build_row(
         'total':          total,
         'check_number':   check_number,
         'received_invoice': received_invoice,
-        'payment_entity': 'Extreme Reach Talent, Inc',
+        'payment_entity': payment_entity,
         'type':           pay_type,
         'home_address':   street,
         'city':           city,
@@ -1026,6 +1049,789 @@ def extract_talent(
             'invoices_with_pdf':  invoices_with_pdf,
             'invoices_ptip_only': invoices_ptip_only,
             'duplicates_found':   duplicates_found,
+            'issues':             issues,
+        },
+    }
+
+
+# ── Teams Invoice PDF parsing ─────────────────────────────────────────────────
+
+_TEAMS_AMOUNT_RE  = re.compile(r'^\d[\d,]*\.\d{2}$')
+_TEAMS_DATE_RE    = re.compile(r'^\d{2}/\d{2}/\d{2}$')
+_TEAMS_CAT_CODES  = {'P', 'EXB', 'PVO'}
+_TEAMS_CAT_TITLES = {'P': 'Principal', 'EXB': 'Extra', 'PVO': 'PVO'}
+
+
+def _parse_teams_crp_row(line: str) -> str | None:
+    """If line is a Teams CRP (loan-out corp) row return corp name, else None."""
+    m = re.match(r'^\*+\d+\s+(.+?)\s+CRP\s*$', line.strip())
+    return m.group(1).strip() if m else None
+
+
+def _parse_teams_sag_talent_row(line: str) -> dict | None:
+    """
+    Parse one talent data row from a Teams SAG invoice table.
+
+    Row format (after SSN): Name [OS1] [OS2] [Cat] Cam St [Agnt]
+                            Date [Spot] [Yr] [Apply] [Applied] Amount... Amount [P&H]
+    Returns dict or None if line is not a talent row.
+    """
+    line = line.strip()
+    if not re.match(r'^\*+\d', line):
+        return None
+
+    tokens = line.split()
+    if len(tokens) < 6:
+        return None
+
+    ssn  = tokens[0]
+    rest = tokens[1:]
+
+    # Find date (MM/DD/YY)
+    date_idx = next((i for i, t in enumerate(rest) if _TEAMS_DATE_RE.match(t)), None)
+    if date_idx is None:
+        return None
+
+    before_date = rest[:date_idx]
+    after_date  = list(rest[date_idx + 1:])
+
+    # Pop amounts from end of after_date
+    amounts: list[float] = []
+    while after_date and _TEAMS_AMOUNT_RE.match(after_date[-1]):
+        amounts.insert(0, _to_float(after_date.pop()))
+
+    if len(amounts) < 2:
+        return None
+
+    work_date = _expand_date_yy(rest[date_idx])
+
+    # Find cam code (ON/OFF) in before_date — serves as the anchor
+    cam_idx = next(
+        (i for i, t in enumerate(before_date) if t.upper() in ('ON', 'OFF')), None
+    )
+    if cam_idx is None:
+        return None
+    cam = before_date[cam_idx].upper()
+
+    # State: first 2-letter token after cam
+    work_state = ''
+    if cam_idx + 1 < len(before_date):
+        cand = before_date[cam_idx + 1]
+        if re.match(r'^[A-Z]{2}$', cand):
+            work_state = cand
+
+    # Cat: one of P/EXB/PVO immediately before cam (if present)
+    cat = ''
+    cat_idx = None
+    if cam_idx > 0 and before_date[cam_idx - 1] in _TEAMS_CAT_CODES:
+        cat     = before_date[cam_idx - 1]
+        cat_idx = cam_idx - 1
+
+    # Work backwards from cat (or cam) to find OS2 / OS1 boundary of name
+    pre_pos = cat_idx if cat_idx is not None else cam_idx
+
+    os2_idx = None
+    if pre_pos > 0:
+        t = before_date[pre_pos - 1]
+        if re.match(r'^[A-Z]{2,4}$', t) and ',' not in t:
+            os2_idx = pre_pos - 1
+
+    os1_idx = None
+    probe = (os2_idx if os2_idx is not None else pre_pos) - 1
+    if probe >= 0 and before_date[probe].isdigit():
+        os1_idx = probe
+
+    name_end = min(x for x in [os1_idx, os2_idx, pre_pos] if x is not None)
+    name = ' '.join(before_date[:name_end]).strip()
+
+    if len(amounts) == 2:
+        gross, misc, pah = (0.0, amounts[0], amounts[1]) if cam == 'OFF' else (amounts[0], 0.0, amounts[1])
+    else:
+        gross, misc, pah = amounts[0], amounts[1], amounts[2]
+
+    return {
+        'ssn':         ssn,
+        'name':        name,
+        'cat':         cat,
+        'cam':         cam,
+        'work_state':  work_state,
+        'work_date':   work_date,
+        'gross_wages': round(gross, 2),
+        'misc_pmt':    round(misc, 2),
+        'pah':         round(pah, 2),
+        'title':       _TEAMS_CAT_TITLES.get(cat, ''),
+        'corp_name':   '',
+    }
+
+
+def parse_teams_sag_invoice_pdf(pdf_bytes: bytes) -> dict | None:
+    """Parse a Teams SAG union invoice PDF."""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            text = '\n'.join(pg.extract_text() or '' for pg in pdf.pages)
+    except Exception:
+        return None
+
+    if 'Soc. Sec # Performer Name' not in text:
+        return None
+
+    inv_no = ''
+    m = re.search(r'Invoice\s*#[:\s]*(\d+)', text)
+    if m:
+        inv_no = m.group(1).strip()
+
+    invoice_date = ''
+    # Invoice date always precedes "Page:" on the same line; use that to avoid
+    # matching "First Air Date" or "Expiration Date"
+    m = re.search(r'\bDate\s+(\d{2}/\d{2}/\d{2})\s+Page:', text)
+    if m:
+        invoice_date = _expand_date_yy(m.group(1))
+
+    pay_type = ''
+    m = re.search(r'Payment Type\s+(\S+)', text)
+    if m:
+        pay_type = m.group(1).strip()
+
+    commercial_id = ''
+    m = re.search(r'Comml ID#\s+(\S+)', text)
+    if m:
+        commercial_id = m.group(1).strip()
+
+    # Footer invoice-level totals
+    m_wages    = re.search(r'Wages\s*&\s*Misc\.\s*Payments\s+([\d,]+\.\d{2})', text)
+    m_taxes    = re.search(r'Payroll Taxes\s+([\d,]+\.\d{2})', text)
+    m_pah      = re.search(r'Pension\s*&\s*Health\s*Cont\s+([\d,]+\.\d{2})', text)
+    m_handling = re.search(r'Handling\s+([\d,]+\.\d{2})', text)
+
+    total_er_tax   = _to_float(m_taxes.group(1)    if m_taxes    else 0)
+    total_pah      = _to_float(m_pah.group(1)      if m_pah      else 0)
+    total_handling = _to_float(m_handling.group(1) if m_handling else 0)
+
+    # Parse talent rows; attach CRP corp name to previous row
+    talent_rows: list[dict] = []
+    for line in text.split('\n'):
+        stripped = line.strip()
+        crp = _parse_teams_crp_row(stripped)
+        if crp is not None:
+            if talent_rows:
+                talent_rows[-1]['corp_name'] = crp
+                talent_rows[-1]['name'] = f"{talent_rows[-1]['name']} ({crp})"
+        else:
+            row = _parse_teams_sag_talent_row(stripped)
+            if row:
+                talent_rows.append(row)
+
+    return {
+        'invoice_no':     inv_no,
+        'invoice_date':   invoice_date,
+        'pay_type':       pay_type,
+        'commercial_id':  commercial_id,
+        'total_wages_misc': _to_float(m_wages.group(1) if m_wages else 0),
+        'total_er_tax':   total_er_tax,
+        'total_pah':      total_pah,
+        'total_handling': total_handling,
+        'total_wc':       0.0,
+        'talent_rows':    talent_rows,
+        'union_type':     'SAG',
+        'format':         'teams_sag',
+    }
+
+
+def parse_teams_nonunion_invoice_pdf(pdf_bytes: bytes) -> dict | None:
+    """Parse a Teams non-union employer-cost invoice PDF (2-page format)."""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            text = '\n'.join(pg.extract_text() or '' for pg in pdf.pages)
+    except Exception:
+        return None
+
+    if 'Taxable Wages' not in text or 'Employer of Record' not in text:
+        return None
+    if 'Soc. Sec # Performer Name' in text:
+        return None  # SAG invoice, not non-union
+
+    inv_no = ''
+    m = re.search(r'Invoice\s*#[:\s]*(\d+)', text)
+    if m:
+        inv_no = m.group(1).strip()
+
+    invoice_date = ''
+    m = re.search(r'Inv\.\s*Date[:\s]+(\d{1,2}/\d{1,2}/\d{2})', text)
+    if m:
+        invoice_date = _expand_date_yy(m.group(1))
+
+    # Page 2 talent table: lines between "Payee Name … SSN/FED WS" header and "TOTALS:"
+    talent_rows: list[dict] = []
+    lines = text.split('\n')
+    in_table = False
+    for line in lines:
+        stripped = line.strip()
+        if 'Payee Name' in stripped and 'SSN/FED WS' in stripped:
+            in_table = True
+            continue
+        if in_table and stripped.upper().startswith('TOTALS'):
+            break
+        if not in_table or not stripped:
+            continue
+        # Talent row pattern: LAST, FIRST *****NNNNSS amounts...
+        m = re.match(r'^([A-Z][A-Z ,\.]+?)\s+(\*+\d+[A-Z]{2})\s+(.+)$', stripped)
+        if not m:
+            continue
+        name     = m.group(1).strip().rstrip(',').strip()
+        ssn_ws   = m.group(2)
+        work_st  = ssn_ws[-2:]
+        ssn      = ssn_ws[:-2]
+        vals     = m.group(3).split()
+        # cols: taxable corp_wages reimb FICA Medicare FUTA SUI SDI Other WC RS P&H Handling Deductions Total
+        if len(vals) < 13:
+            continue
+        taxable  = _to_float(vals[0])
+        fica     = _to_float(vals[3])
+        medicare = _to_float(vals[4])
+        futa     = _to_float(vals[5])
+        sui      = _to_float(vals[6])
+        sdi      = _to_float(vals[7])
+        other    = _to_float(vals[8])
+        wc       = _to_float(vals[9])
+        pah      = _to_float(vals[11])
+        handling = _to_float(vals[12])
+        er_tax   = round(fica + medicare + futa + sui + sdi + other, 2)
+        talent_rows.append({
+            'ssn':         ssn,
+            'name':        name,
+            'work_state':  work_st,
+            'gross_wages': taxable,
+            'misc_pmt':    0.0,
+            'pah':         pah,
+            'er_tax':      er_tax,
+            'wc':          wc,
+            'handling':    handling,
+            'title':       '',
+            'cat':         '',
+            'cam':         'ON',
+            'work_date':   '',
+            'corp_name':   '',
+        })
+
+    if not talent_rows:
+        return None
+
+    return {
+        'invoice_no':     inv_no,
+        'invoice_date':   invoice_date,
+        'pay_type':       'Non-union',
+        'commercial_id':  '',
+        'total_wages_misc': sum(tr['gross_wages'] for tr in talent_rows),
+        'total_er_tax':   round(sum(tr['er_tax']   for tr in talent_rows), 2),
+        'total_pah':      round(sum(tr['pah']       for tr in talent_rows), 2),
+        'total_handling': round(sum(tr['handling']  for tr in talent_rows), 2),
+        'total_wc':       round(sum(tr['wc']        for tr in talent_rows), 2),
+        'talent_rows':    talent_rows,
+        'union_type':     'Non-union',
+        'format':         'teams_nonunion',
+    }
+
+
+def parse_teams_invoice_pdf(pdf_bytes: bytes) -> dict | None:
+    """Try SAG then non-union Teams parser; return None if neither matches."""
+    result = parse_teams_sag_invoice_pdf(pdf_bytes)
+    if result:
+        return result
+    return parse_teams_nonunion_invoice_pdf(pdf_bytes)
+
+
+# ── Teams PTIP parsing ────────────────────────────────────────────────────────
+
+def _normalize_teams_col(v) -> str:
+    """Strip leading/embedded \\n from Teams PTIP column header cells."""
+    if v is None:
+        return ''
+    return re.sub(r'\s*\n\s*', ' ', str(v)).strip()
+
+
+def _normalize_teams_ptip_row(row: dict) -> dict:
+    """Convert a Teams PTIP row dict (normalized headers) to ER-compatible keys for _build_row()."""
+    fica     = _to_float(row.get('FICA', 0))
+    medicare = _to_float(row.get('Medicare', 0))
+    futa     = _to_float(row.get('FUTA', 0))
+    sui      = _to_float(row.get('SUI', 0))
+    sdi      = _to_float(row.get('SDI', 0))
+    other    = _to_float(row.get('Other Taxes', 0))
+    er_tax   = round(fica + medicare + futa + sui + sdi + other, 2)
+
+    street    = str(row.get('Address Line 1', '') or '').strip()
+    city      = str(row.get('City', '') or '').strip()
+    res_state = str(row.get('Resident State', '') or '').strip()
+    postal    = str(row.get('Postal Code', '') or '').strip()
+    addr_parts = [street]
+    if city and res_state and postal:
+        addr_parts.append(f'{city}, {res_state} {postal}')
+    full_address = '\n'.join(p for p in addr_parts if p)
+
+    # Prefer Invoice Number column; fall back to Invoice
+    inv_no = str(row.get('Invoice Number', '') or row.get('Invoice', '') or '').strip()
+
+    occupation = str(row.get('Occupation', '') or '').strip().title()
+
+    pah_raw = row.get('Pension / H&W') if row.get('Pension / H&W') is not None else row.get('Pension/H&W')
+    wc_raw  = row.get('Workers Comp.') if row.get('Workers Comp.') is not None else row.get('Workers Comp')
+
+    return {
+        'Invoice Number':      inv_no,
+        'Talent Name':         str(row.get('Name', '') or '').strip(),
+        'Wages':               _to_float(row.get('Gross Wages', 0)),
+        'Employer Taxes':      er_tax,
+        'Workers Compensation': _to_float(wc_raw or 0),
+        'Handling Fee':        _to_float(row.get('Handling', 0)),
+        'P&H':                 _to_float(pah_raw or 0),
+        'Signatory Fee':       0.0,
+        'Cast Category':       occupation,
+        'Work State':          str(row.get('Work State', '') or '').strip(),
+        'Talent Address':      full_address,
+        'Check Date':          row.get('Invoice Date'),
+        'Commercial Id':       str(row.get('Project ID', '') or '').strip(),
+        'SSN':                 str(row.get('SSN', '') or '').strip(),
+        'FEIN':                '',
+        'Check Number':        '',
+    }
+
+
+def parse_teams_ptip_xlsx(
+    xlsx_bytes_list: list[bytes],
+) -> tuple[list[dict], list[dict], list[str], list[str]]:
+    """
+    Read one or more Teams PTIP Excel files and combine.
+
+    Teams sends one file per commercial ID; rows with empty Name are
+    continuation rows for the same talent on an additional invoice — the
+    Name/address is back-filled from the immediately preceding full row.
+
+    Returns (normalized_rows, raw_rows, raw_headers, issues).
+    """
+    normalized_rows: list[dict] = []
+    raw_rows:        list[dict] = []
+    raw_headers:     list[str]  = []
+    issues:          list[str]  = []
+
+    for file_i, xlsx_bytes in enumerate(xlsx_bytes_list):
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+            ws = wb.active
+
+            # Find header row: contains 'Name' and a 'Gross' column within first 12 rows
+            hdr_row_idx: int | None = None
+            for r_idx, row_vals in enumerate(ws.iter_rows(max_row=12, values_only=True)):
+                norms = [_normalize_teams_col(v) for v in row_vals]
+                if 'Name' in norms and any('Gross' in n for n in norms):
+                    hdr_row_idx = r_idx
+                    break
+
+            if hdr_row_idx is None:
+                issues.append(f"PTIP file {file_i + 1}: could not find header row")
+                continue
+
+            file_headers_raw = list(ws.iter_rows(
+                min_row=hdr_row_idx + 1,
+                max_row=hdr_row_idx + 1,
+                values_only=True,
+            ))[0]
+            file_headers = [_normalize_teams_col(v) for v in file_headers_raw]
+            # Drop trailing empty header columns
+            while file_headers and not file_headers[-1]:
+                file_headers.pop()
+
+            if file_i == 0:
+                raw_headers = file_headers
+
+            invoice_col = next(
+                (h for h in file_headers if h == 'Invoice Number'),
+                next((h for h in file_headers if h == 'Invoice'), None),
+            )
+
+            last_full: dict = {}
+
+            for row_vals in ws.iter_rows(min_row=hdr_row_idx + 2, values_only=True):
+                # Skip fully blank rows
+                if all(v is None or str(v).strip() == '' for v in row_vals[:5]):
+                    continue
+
+                row = dict(zip(file_headers, row_vals))
+
+                # Skip disclaimer row
+                name_val = str(row.get('Name', '') or '').strip()
+                if name_val.startswith('This document'):
+                    continue
+
+                # Skip rows with no invoice number
+                if invoice_col:
+                    inv_val = str(row.get(invoice_col, '') or '').strip()
+                    if not inv_val:
+                        continue
+
+                # Back-fill name/address from previous full row when Name is empty
+                if not name_val and last_full:
+                    for k in ('Name', 'SSN', 'Work State', 'Address Line 1',
+                              'Address Line 2', 'City', 'Resident State',
+                              'Postal Code', 'Occupation', 'EOR', 'Job Number'):
+                        if k in last_full and not str(row.get(k, '') or '').strip():
+                            row[k] = last_full[k]
+                else:
+                    last_full = dict(row)
+
+                raw_rows.append(dict(row))
+                normalized_rows.append(_normalize_teams_ptip_row(row))
+
+        except Exception as e:
+            issues.append(f"PTIP file {file_i + 1}: parse error — {e}")
+
+    return normalized_rows, raw_rows, raw_headers, issues
+
+
+# ── Teams Sorted PTIP builder ─────────────────────────────────────────────────
+
+def build_teams_sorted_ptip_xlsx(
+    ptip_rows_raw:             list[dict],
+    raw_headers:               list[str],
+    received_invoice_nos:      set[str],
+    pdf_order_within_invoice:  dict[str, list[str]],  # inv_no → [norm_name, ...]
+) -> bytes:
+    """
+    Build the Sorted/Combined PTIP Excel deliverable for Teams.
+
+    Layout: '#' column prepended + original PTIP columns + 'Payroll Tax' appended.
+    Sorted by Invoice Number; '#' resets per invoice and follows PDF talent order
+    when PDF was received for that invoice.
+    """
+    from copy import copy as _copy
+    from openpyxl.utils import get_column_letter
+
+    invoice_key = 'Invoice Number' if 'Invoice Number' in raw_headers else (
+        'Invoice' if 'Invoice' in raw_headers else (raw_headers[0] if raw_headers else '')
+    )
+
+    # Columns that sum into Payroll Tax
+    _TAX_COLS = ('FICA', 'Medicare', 'FUTA', 'SUI', 'SDI', 'Other Taxes')
+
+    out_headers = ['#'] + raw_headers + ['Payroll Tax']
+    n_cols = len(out_headers)
+
+    # Group raw rows by invoice
+    inv_rows: dict[str, list[dict]] = defaultdict(list)
+    for row in ptip_rows_raw:
+        inv_no = str(row.get(invoice_key, '') or '').strip()
+        inv_rows[inv_no].append(row)
+
+    # Sort invoice numbers
+    sorted_inv_nos = sorted(inv_rows.keys(), key=lambda x: x.zfill(20))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Sorted PTIP'
+
+    # Header row
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    hdr_font  = Font(bold=True, size=10)
+    hdr_fill  = PatternFill('solid', fgColor='1F4E79')
+    hdr_font_white = Font(bold=True, size=10, color='FFFFFF')
+    thin_side = Side(style='thin', color='CCCCCC')
+    thin_border = Border(left=thin_side, right=thin_side,
+                         top=thin_side, bottom=thin_side)
+    data_font = Font(size=10)
+    data_align = Alignment(wrap_text=False, vertical='top')
+
+    ws.row_dimensions[1].height = 30
+    for col_i, col_name in enumerate(out_headers, start=1):
+        cell = ws.cell(row=1, column=col_i, value=col_name)
+        cell.font   = hdr_font_white
+        cell.fill   = hdr_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    # Column widths
+    ws.column_dimensions['A'].width = 5  # #
+    col_widths = {
+        'Name': 22, 'SSN': 14, 'Work State': 8, 'Address Line 1': 22,
+        'Address Line 2': 14, 'City': 14, 'Resident State': 8, 'Postal Code': 8,
+        'Occupation': 16, 'EOR': 20, 'Job Number': 16, 'Invoice': 12,
+        'Invoice Number': 12, 'Project ID': 14, 'Invoice Date': 12,
+        'Gross Wages': 11, 'SIT': 9, 'FICA': 9, 'Medicare': 9,
+        'FUTA': 9, 'SUI': 9, 'SDI': 9, 'Other Taxes': 9,
+        'Handling': 9, 'Pension / H&W': 11, 'Workers Comp.': 11,
+        'Total Hours': 9, 'Work Start': 12, 'Work End': 12, 'Payroll Tax': 11,
+    }
+    for col_i, col_name in enumerate(out_headers[1:], start=2):
+        w = col_widths.get(col_name, 12)
+        ws.column_dimensions[get_column_letter(col_i)].width = w
+
+    # Data rows
+    out_row = 2
+    for inv_no in sorted_inv_nos:
+        rows = inv_rows[inv_no]
+
+        # Reorder within invoice to match PDF talent order when available
+        if inv_no in pdf_order_within_invoice and pdf_order_within_invoice[inv_no]:
+            pdf_order = pdf_order_within_invoice[inv_no]
+            ordered, remaining = [], list(rows)
+            for pdf_norm in pdf_order:
+                for i, row in enumerate(remaining):
+                    rn, _ = _normalize_for_match(str(row.get('Name', '') or ''))
+                    if rn == pdf_norm:
+                        ordered.append(remaining.pop(i))
+                        break
+            ordered.extend(remaining)
+            rows = ordered
+
+        seq = 0
+        for row in rows:
+            received = inv_no in received_invoice_nos
+            seq += 1 if received else 0
+            hash_val = seq if received else ''
+
+            payroll_tax = round(sum(_to_float(row.get(c, 0)) for c in _TAX_COLS), 2)
+
+            row_vals = [hash_val] + [row.get(h) for h in raw_headers] + [payroll_tax or '']
+
+            # Format date columns to MM/DD/YYYY
+            date_cols = {'Invoice Date', 'Work Start', 'Work End'}
+            date_col_indices = {
+                col_i for col_i, h in enumerate(out_headers) if h in date_cols
+            }
+
+            ws.row_dimensions[out_row].height = 18
+            for col_i, val in enumerate(row_vals, start=1):
+                if col_i - 1 in date_col_indices:
+                    val = _fmt_date(val) or val
+                cell = ws.cell(row=out_row, column=col_i, value=val)
+                cell.font      = data_font
+                cell.border    = thin_border
+                cell.alignment = data_align
+            out_row += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ── Teams main extraction entry point ────────────────────────────────────────
+
+def extract_teams_talent(
+    pdf_files:       list[tuple[str, bytes]],  # [(filename, bytes), ...]
+    ptip_bytes_list: list[bytes],
+    project_title:   str,
+    workbook_type:   str,
+) -> dict:
+    """
+    Run the full Teams talent extraction.
+
+    Returns the same shape as extract_talent():
+    {rows, ptip_excel_b64, summary: {total_rows, invoices_with_pdf,
+     invoices_ptip_only, duplicates_found, issues}}
+    """
+    issues: list[str] = []
+
+    # ── Step 1: Parse PDFs ────────────────────────────────────────────────────
+    pdf_invoices: dict[str, dict] = {}
+
+    for filename, data in pdf_files:
+        result = parse_teams_invoice_pdf(data)
+        if result is None:
+            issues.append(
+                f"{filename}: not recognized as a Teams invoice "
+                "(check for 'Soc. Sec # Performer Name' or 'Taxable Wages' in the PDF)"
+            )
+            continue
+        inv_no = result['invoice_no']
+        if not inv_no:
+            issues.append(f"{filename}: could not extract invoice number")
+            continue
+        if inv_no in pdf_invoices:
+            issues.append(f"{filename}: duplicate invoice number {inv_no} — skipped")
+            continue
+        pdf_invoices[inv_no] = result
+
+    received_invoice_nos: set[str] = set(pdf_invoices.keys())
+
+    # ── Step 2: Parse PTIP files ──────────────────────────────────────────────
+    ptip_rows_normalized: list[dict] = []
+    ptip_rows_raw:        list[dict] = []
+    raw_headers:          list[str]  = []
+
+    if ptip_bytes_list:
+        ptip_rows_normalized, ptip_rows_raw, raw_headers, ptip_issues = \
+            parse_teams_ptip_xlsx(ptip_bytes_list)
+        issues.extend(ptip_issues)
+
+    # ── Step 3: Determine scenario ────────────────────────────────────────────
+    has_pdf  = bool(pdf_invoices)
+    has_ptip = bool(ptip_rows_normalized)
+
+    if has_pdf and has_ptip:
+        scenario = 'C'
+    elif has_pdf:
+        scenario = 'A'
+    elif has_ptip:
+        scenario = 'B'
+    else:
+        return {
+            'rows': [],
+            'ptip_excel_b64': None,
+            'summary': {
+                'total_rows': 0,
+                'invoices_with_pdf': [],
+                'invoices_ptip_only': [],
+                'duplicates_found': 0,
+                'issues': issues + ['No PDFs or PTIP files provided.'],
+            },
+        }
+
+    # ── Step 4: Group PTIP rows by invoice ───────────────────────────────────
+    ptip_by_invoice: dict[str, list[tuple[dict, int]]] = defaultdict(list)
+    for idx, pr in enumerate(ptip_rows_normalized):
+        inv_no = str(pr.get('Invoice Number', '') or '').strip()
+        ptip_by_invoice[inv_no].append((pr, idx))
+
+    # ── Step 5: PDF talent order map (for Sorted PTIP + name matching) ───────
+    pdf_order_within_invoice: dict[str, list[str]] = {}
+    for inv_no, inv_data in pdf_invoices.items():
+        pdf_order_within_invoice[inv_no] = [
+            _normalize_for_match(tr['name'])[0]
+            for tr in inv_data['talent_rows']
+        ]
+
+    # ── Step 6: Assemble workbook rows ────────────────────────────────────────
+    workbook_rows: list[dict] = []
+    item_no = 1
+
+    all_invoice_nos = sorted(
+        set(received_invoice_nos) | set(ptip_by_invoice.keys()),
+        key=lambda x: x.zfill(20),
+    )
+
+    for inv_no in all_invoice_nos:
+        inv_data      = pdf_invoices.get(inv_no)
+        inv_ptip_pairs = ptip_by_invoice.get(inv_no, [])
+        inv_has_ptip  = bool(inv_ptip_pairs)
+
+        if inv_data:
+            ptip_consumed:   set[int] = set()
+            first_talent_seen = False
+
+            for tr in inv_data['talent_rows']:
+                tr_full_norm, _ = _normalize_for_match(tr['name'])
+
+                # Match to PTIP row by name (name is already Last, First in both)
+                ptip_match:       dict | None = None
+                ptip_match_orig:  int | None  = None
+                for local_i, (pr, orig_i) in enumerate(inv_ptip_pairs):
+                    if local_i in ptip_consumed:
+                        continue
+                    pr_name = str(pr.get('Talent Name', '') or '').strip()
+                    pr_norm, _ = _normalize_for_match(pr_name)
+                    if pr_norm == tr_full_norm:
+                        ptip_match      = pr
+                        ptip_match_orig = orig_i
+                        ptip_consumed.add(local_i)
+                        break
+
+                is_first_tax = (not inv_has_ptip) and (not first_talent_seen)
+                first_talent_seen = True
+                eff_scenario = 'A' if not inv_has_ptip else scenario
+
+                row = _build_row(
+                    item_no=item_no,
+                    ptip=ptip_match,
+                    pdf_talent=tr,
+                    pdf_invoice=inv_data,
+                    received_invoice=True,
+                    is_duplicate=False,
+                    first_tax_row=is_first_tax,
+                    scenario=eff_scenario,
+                    ptip_row_no=(ptip_match_orig + 1) if ptip_match_orig is not None else None,
+                    payment_entity='The Team Companies',
+                    pah_from_pdf=True,
+                    calc_signatory_fee=True,
+                )
+                workbook_rows.append(row)
+                item_no += 1
+
+            # PTIP rows for this invoice not matched to any PDF talent row
+            for local_i, (pr, orig_i) in enumerate(inv_ptip_pairs):
+                if local_i in ptip_consumed:
+                    continue
+                row = _build_row(
+                    item_no=item_no,
+                    ptip=pr,
+                    pdf_talent=None,
+                    pdf_invoice=inv_data,
+                    received_invoice=True,
+                    is_duplicate=False,
+                    first_tax_row=False,
+                    scenario=scenario,
+                    ptip_row_no=orig_i + 1,
+                    payment_entity='The Team Companies',
+                    pah_from_pdf=True,
+                    calc_signatory_fee=True,
+                )
+                workbook_rows.append(row)
+                item_no += 1
+
+        else:
+            # PTIP-only invoice (no PDF received)
+            for pr, orig_i in inv_ptip_pairs:
+                row = _build_row(
+                    item_no=item_no,
+                    ptip=pr,
+                    pdf_talent=None,
+                    pdf_invoice=None,
+                    received_invoice=False,
+                    is_duplicate=False,
+                    first_tax_row=False,
+                    scenario=scenario,
+                    ptip_row_no=orig_i + 1,
+                    payment_entity='The Team Companies',
+                    pah_from_pdf=True,
+                    calc_signatory_fee=True,
+                )
+                workbook_rows.append(row)
+                item_no += 1
+
+    # ── Step 7: Note PDF invoices absent from PTIP ────────────────────────────
+    if has_ptip and has_pdf:
+        ptip_inv_set = set(ptip_by_invoice.keys())
+        for inv_no in sorted(received_invoice_nos):
+            if inv_no not in ptip_inv_set:
+                issues.append(
+                    f"Invoice {inv_no}: PDF received, not in PTIP "
+                    "— rows included with 'Included in PTIP report' = NO"
+                )
+
+    # ── Step 8: Build Sorted PTIP ─────────────────────────────────────────────
+    ptip_excel_b64 = None
+    if has_ptip and raw_headers:
+        try:
+            ptip_excel_bytes = build_teams_sorted_ptip_xlsx(
+                ptip_rows_raw,
+                raw_headers,
+                received_invoice_nos,
+                pdf_order_within_invoice,
+            )
+            ptip_excel_b64 = base64.b64encode(ptip_excel_bytes).decode()
+        except Exception as e:
+            issues.append(f"Sorted PTIP build error: {e}")
+
+    # ── Step 9: Summary ───────────────────────────────────────────────────────
+    ptip_inv_nos        = set(ptip_by_invoice.keys())
+    invoices_with_pdf   = sorted(received_invoice_nos & ptip_inv_nos) if has_ptip else sorted(received_invoice_nos)
+    invoices_ptip_only  = sorted(ptip_inv_nos - received_invoice_nos) if has_ptip else []
+
+    return {
+        'rows': workbook_rows,
+        'ptip_excel_b64': ptip_excel_b64,
+        'summary': {
+            'total_rows':         len(workbook_rows),
+            'invoices_with_pdf':  invoices_with_pdf,
+            'invoices_ptip_only': invoices_ptip_only,
+            'duplicates_found':   0,
             'issues':             issues,
         },
     }

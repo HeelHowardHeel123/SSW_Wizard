@@ -41,7 +41,7 @@ from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
 from notify import send_parser_alert, send_run_summary, ALERT_EMAIL
-from talent_extractor import extract_talent
+from talent_extractor import extract_talent, extract_teams_talent
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -712,11 +712,13 @@ async def extract_hours_letters(
 
 @app.post("/extract-talent")
 async def extract_talent_endpoint(
-    pdf_files: list[UploadFile] = File(default=[]),
-    ptip_file: UploadFile       = File(default=None),
-    project_title: str          = Form(default=""),
-    workbook_type: str          = Form(default=""),
-    x_app_secret: str           = Header(default=""),
+    pdf_files:      list[UploadFile] = File(default=[]),
+    ptip_file:      UploadFile       = File(default=None),   # ER: single PTIP file
+    ptip_files:     list[UploadFile] = File(default=[]),     # Teams: multiple PTIP files
+    project_title:  str              = Form(default=""),
+    workbook_type:  str              = Form(default=""),
+    payroll_company: str             = Form(default="er"),   # "er" or "teams"
+    x_app_secret:   str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -727,6 +729,29 @@ async def extract_talent_endpoint(
         if data:
             pdf_bytes_list.append((uf.filename, data))
 
+    if payroll_company.lower() == 'teams':
+        ptip_bytes_list: list[bytes] = []
+        for uf in (ptip_files or []):
+            data = await uf.read()
+            if data:
+                ptip_bytes_list.append(data)
+        # Also accept single ptip_file upload for Teams if ptip_files is empty
+        if not ptip_bytes_list and ptip_file:
+            data = await ptip_file.read()
+            if data:
+                ptip_bytes_list.append(data)
+
+        if not pdf_bytes_list and not ptip_bytes_list:
+            raise HTTPException(400, "Provide at least one PDF or PTIP file.")
+
+        return extract_teams_talent(
+            pdf_files=pdf_bytes_list,
+            ptip_bytes_list=ptip_bytes_list,
+            project_title=project_title,
+            workbook_type=workbook_type,
+        )
+
+    # Default: Extreme Reach
     ptip_bytes: bytes | None = None
     if ptip_file:
         ptip_bytes = await ptip_file.read()
