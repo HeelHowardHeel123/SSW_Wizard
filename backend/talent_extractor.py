@@ -741,100 +741,120 @@ def extract_talent(
     if has_ptip:
         duplicate_indices = _detect_duplicates(ptip_rows, pdf_name_counts)
 
-    # ── Step 6: Build PDF talent row index for name-based matching ────────────
-    # {(invoice_no, full_norm_name): [pdf_talent_row, ...]}  consumed FIFO
-    pdf_by_inv_name: dict[tuple, list[dict]] = defaultdict(list)
-    if scenario == 'C':
-        for inv_no, inv_data in pdf_invoices.items():
-            for tr in inv_data['talent_rows']:
-                full_norm, _ = _normalize_for_match(tr['name'])
-                pdf_by_inv_name[(inv_no, full_norm)].append(tr)
-    # Track how many we've consumed per key
-    pdf_consumed: dict[tuple, int] = defaultdict(int)
+    # ── Step 6: Group PTIP rows by invoice for ordered assembly ─────────────
+    ptip_by_invoice: dict[str, list[dict]] = defaultdict(list)
+    ptip_orig_by_invoice: dict[str, list[int]] = defaultdict(list)
+    for idx, pr in enumerate(ptip_rows):
+        inv_no = str(pr.get('Invoice Number', '') or '').strip()
+        ptip_by_invoice[inv_no].append(pr)
+        ptip_orig_by_invoice[inv_no].append(idx)
 
-    def _pop_pdf_row(inv_no: str, name_raw: str) -> dict | None:
-        full_norm, _ = _normalize_for_match(name_raw)
-        key = (inv_no, full_norm)
-        pool = pdf_by_inv_name.get(key, [])
-        idx = pdf_consumed[key]
-        if idx < len(pool):
-            pdf_consumed[key] = idx + 1
-            return pool[idx]
-        return None
-
-    # ── Step 7: Assemble workbook rows ────────────────────────────────────────
+    # ── Step 7: Assemble workbook rows (invoice-sorted, PDF order within each) ─
     workbook_rows: list[dict] = []
     item_no = 1
 
-    if scenario in ('B', 'C'):
-        # PTIP defines scope; iterate PTIP rows in order
-        # Track "first tax row per invoice" for tax stacking in Scenario A sub-cases
-        invoice_first_tax: dict[str, bool] = {}
+    all_invoice_nos = sorted(
+        set(received_invoice_nos) | set(ptip_by_invoice.keys()),
+        key=lambda x: x.zfill(20),
+    )
 
-        for idx, ptip_row in enumerate(ptip_rows):
-            is_dup = idx in duplicate_indices
-            inv_no = str(ptip_row.get('Invoice Number', '') or '').strip()
-            name_raw = str(ptip_row.get('Talent Name', '') or '').strip()
+    for inv_no in all_invoice_nos:
+        inv_data = pdf_invoices.get(inv_no)
+        inv_ptip_rows = ptip_by_invoice.get(inv_no, [])
+        inv_ptip_orig = ptip_orig_by_invoice.get(inv_no, [])
+        received = (inv_no in received_invoice_nos)
+        inv_has_ptip = bool(inv_ptip_rows)
 
-            pdf_talent: dict | None = None
-            pdf_invoice: dict | None = None
-
-            if scenario == 'C':
-                pdf_invoice = pdf_invoices.get(inv_no)
-                if pdf_invoice:
-                    pdf_talent = _pop_pdf_row(inv_no, name_raw)
-
-            received = inv_no in received_invoice_nos
-
-            row = _build_row(
-                item_no=item_no if not is_dup else 0,
-                ptip=ptip_row,
-                pdf_talent=pdf_talent,
-                pdf_invoice=pdf_invoice,
-                received_invoice=received,
-                is_duplicate=is_dup,
-                first_tax_row=False,  # not used in B/C
-                scenario=scenario,
-                ptip_row_no=idx + 1,
-            )
-            workbook_rows.append(row)
-            if not is_dup:
-                item_no += 1
-
-    else:
-        # Scenario A: PDFs only — iterate invoices sorted by number
-        for inv_no in sorted(pdf_invoices.keys()):
-            inv_data = pdf_invoices[inv_no]
-            talent_only_rows = [tr for tr in inv_data['talent_rows'] if not tr['is_agent']]
+        if inv_data:
+            # PDF exists — iterate talent rows in PDF order; match each to a PTIP row
+            ptip_consumed: set[int] = set()
             first_talent_seen = False
 
             for tr in inv_data['talent_rows']:
-                is_first_tax = (not tr['is_agent']) and (not first_talent_seen)
-                if is_first_tax:
+                ptip_match: dict | None = None
+                ptip_match_local_i: int | None = None
+                tr_full_norm, _ = _normalize_for_match(tr['name'])
+
+                for local_i, pr in enumerate(inv_ptip_rows):
+                    if local_i in ptip_consumed:
+                        continue
+                    if inv_ptip_orig[local_i] in duplicate_indices:
+                        continue
+                    pr_name = str(pr.get('Talent Name', '') or '').split('\n')[0].strip()
+                    pr_full_norm, _ = _normalize_for_match(pr_name)
+                    if pr_full_norm == tr_full_norm:
+                        ptip_match = pr
+                        ptip_match_local_i = local_i
+                        ptip_consumed.add(local_i)
+                        break
+
+                # Invoice-level tax stacking only when no PTIP exists for this invoice
+                is_first_tax = (not inv_has_ptip) and (not tr['is_agent']) and (not first_talent_seen)
+                if not tr['is_agent']:
                     first_talent_seen = True
+                eff_scenario = 'A' if not inv_has_ptip else scenario
 
                 row = _build_row(
                     item_no=item_no,
-                    ptip=None,
+                    ptip=ptip_match,
                     pdf_talent=tr,
                     pdf_invoice=inv_data,
                     received_invoice=True,
                     is_duplicate=False,
                     first_tax_row=is_first_tax,
-                    scenario='A',
-                    ptip_row_no=None,
+                    scenario=eff_scenario,
+                    ptip_row_no=(inv_ptip_orig[ptip_match_local_i] + 1) if ptip_match_local_i is not None else None,
                 )
                 workbook_rows.append(row)
                 item_no += 1
 
-    # ── Step 8: Build credit/rebill warnings ─────────────────────────────────
+            # Append any PTIP rows for this invoice not matched to a PDF row
+            for local_i, (pr, orig_idx) in enumerate(zip(inv_ptip_rows, inv_ptip_orig)):
+                if local_i in ptip_consumed:
+                    continue
+                is_dup = orig_idx in duplicate_indices
+                row = _build_row(
+                    item_no=item_no if not is_dup else 0,
+                    ptip=pr,
+                    pdf_talent=None,
+                    pdf_invoice=inv_data,
+                    received_invoice=True,
+                    is_duplicate=is_dup,
+                    first_tax_row=False,
+                    scenario=scenario,
+                    ptip_row_no=orig_idx + 1,
+                )
+                workbook_rows.append(row)
+                if not is_dup:
+                    item_no += 1
+
+        else:
+            # PTIP-only invoice (no PDF received)
+            for pr, orig_idx in zip(inv_ptip_rows, inv_ptip_orig):
+                is_dup = orig_idx in duplicate_indices
+                row = _build_row(
+                    item_no=item_no if not is_dup else 0,
+                    ptip=pr,
+                    pdf_talent=None,
+                    pdf_invoice=None,
+                    received_invoice=False,
+                    is_duplicate=is_dup,
+                    first_tax_row=False,
+                    scenario=scenario,
+                    ptip_row_no=orig_idx + 1,
+                )
+                workbook_rows.append(row)
+                if not is_dup:
+                    item_no += 1
+
+    # ── Step 8: Note invoices with PDF but no PTIP match ─────────────────────
     if has_ptip and has_pdf:
         ptip_inv_nos = {str(r.get('Invoice Number', '') or '').strip() for r in ptip_rows}
-        for inv_no in received_invoice_nos:
+        for inv_no in sorted(received_invoice_nos):
             if inv_no not in ptip_inv_nos:
                 issues.append(
-                    f"Invoice {inv_no} in PDF has no matching row in PTIP "
-                    "— possible credit/rebill (invoice number mismatch)"
+                    f"Invoice {inv_no}: PDF received, not in PTIP "
+                    "— rows included with 'Included in PTIP report' = NO"
                 )
 
     # ── Step 9: Build organized PTIP ─────────────────────────────────────────
