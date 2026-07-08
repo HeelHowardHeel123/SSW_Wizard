@@ -689,11 +689,33 @@ def build_organized_ptip_xlsx(
     ws.row_dimensions[1].height = r1_height
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
 
-    # Row 2: title copied verbatim from original
+    # Row 2: title — first line 18pt, remaining lines 12pt (rich text)
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+    from openpyxl.styles import Color as _OXLColor
+
     ws.row_dimensions[2].height = r2_height
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_cols)
-    t = ws.cell(row=2, column=1, value=title_src.value or '')
-    t.font      = _copy(title_src.font)
+    t = ws.cell(row=2, column=1)
+
+    title_text = title_src.value or ''
+    src_fname = (title_src.font.name or 'Tahoma') if title_src.font else 'Tahoma'
+    try:
+        src_fcolor = title_src.font.color.rgb if title_src.font.color.type == 'rgb' else 'FF000000'
+    except Exception:
+        src_fcolor = 'FF000000'
+
+    f_large = InlineFont(rFont=src_fname, sz=18, color=_OXLColor(rgb=src_fcolor))
+    f_small = InlineFont(rFont=src_fname, sz=12, color=_OXLColor(rgb=src_fcolor))
+    title_parts = title_text.split('\n', 1)
+    if len(title_parts) > 1:
+        t.value = CellRichText(
+            TextBlock(f_large, title_parts[0]),
+            TextBlock(f_small, '\n' + title_parts[1]),
+        )
+    else:
+        t.value = CellRichText(TextBlock(f_large, title_text))
+
     t.fill      = _copy(title_src.fill)
     t.alignment = _copy(title_src.alignment)
     t.border    = _copy(title_src.border)
