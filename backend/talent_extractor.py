@@ -312,6 +312,11 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         raw = m.group(1)
         union_type = 'Non-union' if 'non' in raw.lower() else raw.upper()
 
+    pay_type = ''
+    m = re.search(r'Pay Type\s+(\S+)\s+Handling', text)
+    if m:
+        pay_type = m.group(1).strip()
+
     total_wages    = _to_float(re.search(r'Wages\s+\$([\d,.]+)', text) and
                                 re.search(r'Wages\s+\$([\d,.]+)', text).group(1))
     total_misc     = _to_float(re.search(r'Misc Payments\s+\$([\d,.]+)', text) and
@@ -344,6 +349,7 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         'invoice_date':    invoice_date,
         'cycle_dates':     cycle_dates,
         'union_type':      union_type,
+        'pay_type':        pay_type,
         'total_wages':     total_wages,
         'total_misc':      total_misc,
         'total_pah':       total_pah,
@@ -557,11 +563,11 @@ def _build_row(
     else:
         invoice_no = ''
 
-    # ── Union type ───────────────────────────────────────────────────────────
+    # ── Pay type (Session / Reuse / Non-Union / etc.) ────────────────────────
     if pdf_invoice:
-        union_type = pdf_invoice.get('union_type', '')
+        pay_type = pdf_invoice.get('pay_type', '')
     else:
-        union_type = ''
+        pay_type = ''
 
     # ── Total (static) ───────────────────────────────────────────────────────
     if ptip_amount is not None:
@@ -592,7 +598,7 @@ def _build_row(
         'check_number':   check_number,
         'received_invoice': received_invoice,
         'payment_entity': 'Extreme Reach Talent, Inc',
-        'type':           union_type,
+        'type':           pay_type,
         'home_address':   street,
         'city':           city,
         'state':          state,
