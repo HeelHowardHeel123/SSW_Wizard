@@ -1095,10 +1095,15 @@ def extract_talent(
     # Build PDF name-order map so rows sort to match PDF order within each invoice.
     er_pdf_order: dict[str, list[str]] = {}
     for inv_no, inv_data in pdf_invoices.items():
-        ordered_rows = sorted(inv_data['talent_rows'], key=lambda r: r.get('row_no', 0))
+        # Sort by row_no if present; fall back to list index (also PDF order)
+        # so future formats without explicit numbers still sort correctly.
+        ordered_rows = sorted(
+            enumerate(inv_data['talent_rows']),
+            key=lambda t: t[1].get('row_no') or t[0],
+        )
         er_pdf_order[inv_no] = [
             _normalize_for_match(tr['name'])[0]
-            for tr in ordered_rows
+            for _, tr in ordered_rows
             if not tr.get('is_agent', False)
         ]
 
