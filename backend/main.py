@@ -656,6 +656,7 @@ def normalize_talent_freelance_invoice(raw: dict, filename: str) -> list[dict]:
 
     talent_row = {
         "talentName":      talent_name,
+        "title":           "Talent",
         "rowType":         "talent",
         "invoiceNo":       invoice_no,
         "invoiceDate":     invoice_date,
@@ -682,6 +683,7 @@ def normalize_talent_freelance_invoice(raw: dict, filename: str) -> list[dict]:
     if agency_name:
         agency_row = {
             "talentName":      clean_name(agency_name),
+            "title":           "Agency Fee",
             "rowType":         "agency",
             "invoiceNo":       invoice_no,
             "invoiceDate":     invoice_date,
