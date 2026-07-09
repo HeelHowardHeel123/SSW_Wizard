@@ -33,9 +33,10 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
 Rules:
 - talentName is the PERFORMER being paid. Return it as LAST, FIRST (e.g. 'Smith, John'). If only one name is visible, use what is shown.
 - agencyName is the agency or management company — a business name, not a person. Return it as it appears on the invoice (e.g. 'Gray Talent Group', 'Shirley Hamilton Inc'). Leave blank if the talent is billing directly.
-- talentWages is the talent's earned compensation only. It excludes the agency commission/fee. If the invoice shows a breakdown like Session Fee + Wardrobe Fee, add those together. If there is a "Talent Paid Directly" deduction, subtract it from the talent total.
+- talentWages is the talent's earned compensation only — session fees, wardrobe fees, fitting fees, usage fees. If there is a "Talent Paid Directly" deduction, subtract it from the talent total. Do NOT include the agency commission or any agency-billed expense items in talentWages.
 - agencyFee is the agency's commission line item only — typically labeled 'Agency Fee', 'Commission', '20% Agency', etc.
-- agencyExpenses covers any other charges billed through the agency that are not the talent wage and not the agency commission (e.g. a beauty/manicure/preparation fee invoiced by the agency). If unsure whether a line is talent wages or an agency expense, place it in agencyExpenses.
+- agencyExpenses covers any other charges billed through the agency that are not the talent wage and not the agency commission (e.g. beauty fees, manicure, theater fees, prep fees). If a fee could belong to either talentWages or agencyExpenses, always place it in agencyExpenses — never both.
+- IMPORTANT — every dollar on the invoice belongs to exactly one of the three buckets (talentWages, agencyFee, agencyExpenses). No fee should appear in more than one bucket. Before finalizing your answer, verify: talentWages + agencyFee + agencyExpenses should equal the invoice total. If they don't match, you have double-counted something — find it and remove it from the wrong bucket.
 - paymentEntity is the bill-to / production company. If the bill-to on the invoice doesn't exactly match a known prodco name, still use the closest match.
 - workState: only populate this if the invoice explicitly names the state where filming or work took place (e.g. "State of Illinois", "Work Location: IL", "Chicago, IL shoot"). Do not infer or assume the work state — leave it blank if not stated.
 - Monetary fields must be numbers only — no $ signs or commas.
