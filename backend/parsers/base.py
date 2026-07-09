@@ -97,6 +97,40 @@ def parse_amount(val) -> float | None:
         return None
 
 
+# ─── Address formatting ───────────────────────────────────────────────────────
+
+_ADDR_STREET_TYPES = {
+    'AVENUE': 'Ave', 'STREET': 'St', 'DRIVE': 'Dr', 'ROAD': 'Rd',
+    'BOULEVARD': 'Blvd', 'PLACE': 'Pl', 'COURT': 'Ct', 'LANE': 'Ln',
+    'CIRCLE': 'Cir', 'HIGHWAY': 'Hwy', 'PARKWAY': 'Pkwy',
+    'TERRACE': 'Ter', 'TRAIL': 'Trl',
+}
+_ADDR_COMPOUND_DIRS = frozenset({'NE', 'NW', 'SE', 'SW'})
+_ADDR_SINGLE_DIRS   = {'NORTH': 'N', 'SOUTH': 'S', 'EAST': 'E', 'WEST': 'W'}
+
+
+def fmt_street_address(addr: str) -> str:
+    """Title-case a street address: strip unit numbers, abbreviate street types
+    and directionals, remove trailing periods from directionals."""
+    if not addr:
+        return ''
+    addr = re.sub(r',?\s*#\s*\S+', '', addr.strip())
+    addr = re.sub(r',?\s*(APT|APARTMENT|UNIT|SUITE|STE|FL|FLOOR|ROOM)\s+\S+',
+                  '', addr.strip(), flags=re.IGNORECASE)
+    result = []
+    for word in addr.split():
+        up = word.upper().rstrip('.')
+        if up in _ADDR_COMPOUND_DIRS:
+            result.append(up)
+        elif up in _ADDR_SINGLE_DIRS:
+            result.append(_ADDR_SINGLE_DIRS[up])
+        elif up in _ADDR_STREET_TYPES:
+            result.append(_ADDR_STREET_TYPES[up])
+        else:
+            result.append(word.capitalize().rstrip('.'))
+    return ' '.join(result).strip()
+
+
 # ─── Name cleaning ─────────────────────────────────────────────────────────────
 
 def clean_fringe_name(val: str, from_caps: bool = False) -> str:

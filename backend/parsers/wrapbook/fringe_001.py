@@ -17,7 +17,7 @@ import os
 import pdfplumber
 from openai import OpenAI
 
-from parsers.base import empty_row, parse_amount, pdf_to_images_b64, has_text_layer
+from parsers.base import empty_row, parse_amount, pdf_to_images_b64, has_text_layer, fmt_street_address
 from parsers.wrapbook.register import extract_register
 
 # ─── Registry metadata ────────────────────────────────────────────────────────
@@ -472,8 +472,8 @@ def _enrich_rows(rows: list[dict], register_data: dict) -> None:
         row["jobTitle"]       = enrichment.get("jobTitle", "")
         row["daysWorked"]     = enrichment.get("daysWorked")
         row["withholdingsIL"] = enrichment.get("withholdingsIL")
-        row["street"]         = enrichment.get("street", "")
-        row["city"]           = enrichment.get("city", "")
+        row["street"]         = fmt_street_address(enrichment.get("street", ""))
+        row["city"]           = enrichment.get("city", "").title()
         row["zip"]            = enrichment.get("zip", "")
         if enrichment.get("resState"):
             row["resState"] = enrichment["resState"]

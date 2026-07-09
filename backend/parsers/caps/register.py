@@ -21,6 +21,8 @@ import io
 
 import pdfplumber
 
+from parsers.base import fmt_street_address
+
 
 # ─── Regexes ──────────────────────────────────────────────────────────────────
 
@@ -171,7 +173,7 @@ def _parse_invoice_block(lines: list[str], invoice_no: str, result: dict) -> Non
         after_ssn = line[sm.end():]
         addr_m = _ADDR_RE.match(after_ssn)
         if addr_m:
-            street   = _to_title(addr_m.group(1).strip())
+            street   = fmt_street_address(addr_m.group(1).strip())
             city     = _to_title(addr_m.group(2).strip())
             zip5     = addr_m.group(4)
             st       = addr_m.group(3).upper()
