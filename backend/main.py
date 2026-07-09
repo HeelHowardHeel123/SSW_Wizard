@@ -649,53 +649,58 @@ def normalize_talent_freelance_invoice(raw: dict, filename: str) -> list[dict]:
     agency_fee      = normalize_amount(raw.get("agencyFee", 0))
     agency_expenses = normalize_amount(raw.get("agencyExpenses", 0))
     misc_pymt       = round(agency_fee + agency_expenses, 2)
+    work_state      = clean_state(raw.get("workState", ""))
 
     method = normalize_pymt_method(raw.get("pymtMethod", ""))
     pymt_no = normalize_pymt_number(method, raw.get("pymtNo", ""))
 
     talent_row = {
-        "talentName":    talent_name,
-        "rowType":       "talent",
-        "invoiceNo":     invoice_no,
-        "invoiceDate":   invoice_date,
-        "workDates":     work_dates,
-        "daysWorked":    days,
-        "wages":         talent_wages if talent_wages else "[missing information]",
-        "miscPymt":      0,
-        "qualify":       "PENDING",
+        "talentName":      talent_name,
+        "rowType":         "talent",
+        "invoiceNo":       invoice_no,
+        "invoiceDate":     invoice_date,
+        "workDates":       work_dates,
+        "daysWorked":      days,
+        "wages":           talent_wages if talent_wages else "[missing information]",
+        "miscPymt":        0,
+        "qualify":         "",
+        "includedOnPtip":  "NO",
+        "workState":       work_state,
         "receivedInvoice": "YES",
-        "paymentEntity": payment_entity,
-        "pymtMethod":    method,
-        "pymtNo":        pymt_no,
-        "street":        clean_address(raw.get("talentStreet", "")),
-        "city":          clean_name(raw.get("talentCity", "")),
-        "state":         clean_state(raw.get("talentState", "")),
-        "zip":           clean_zip(raw.get("talentZip", "")),
-        "sourceFile":    filename,
+        "paymentEntity":   payment_entity,
+        "pymtMethod":      method,
+        "pymtNo":          pymt_no,
+        "street":          clean_address(raw.get("talentStreet", "")),
+        "city":            clean_name(raw.get("talentCity", "")),
+        "state":           clean_state(raw.get("talentState", "")),
+        "zip":             clean_zip(raw.get("talentZip", "")),
+        "sourceFile":      filename,
     }
 
     rows = [talent_row]
 
     if agency_name:
         agency_row = {
-            "talentName":    clean_name(agency_name),
-            "rowType":       "agency",
-            "invoiceNo":     invoice_no,
-            "invoiceDate":   invoice_date,
-            "workDates":     work_dates,
-            "daysWorked":    days,
-            "wages":         0,
-            "miscPymt":      misc_pymt if misc_pymt else "[missing information]",
-            "qualify":       "NO-IL",
+            "talentName":      clean_name(agency_name),
+            "rowType":         "agency",
+            "invoiceNo":       invoice_no,
+            "invoiceDate":     invoice_date,
+            "workDates":       work_dates,
+            "daysWorked":      days,
+            "wages":           0,
+            "miscPymt":        misc_pymt if misc_pymt else "[missing information]",
+            "qualify":         "",
+            "includedOnPtip":  "NO",
+            "workState":       "",
             "receivedInvoice": "YES",
-            "paymentEntity": payment_entity,
-            "pymtMethod":    method,
-            "pymtNo":        pymt_no,
-            "street":        "",
-            "city":          "",
-            "state":         "",
-            "zip":           "",
-            "sourceFile":    filename,
+            "paymentEntity":   payment_entity,
+            "pymtMethod":      method,
+            "pymtNo":          pymt_no,
+            "street":          "",
+            "city":            "",
+            "state":           "",
+            "zip":             "",
+            "sourceFile":      filename,
         }
         rows.append(agency_row)
 

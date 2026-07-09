@@ -20,6 +20,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
     "agencyFee":       "the agency's commission or management fee (the percentage-based agency charge, often labeled 'Agency Fee', 'Commission', or 'Mgmt Fee'). Number only, or 0 if no agency.",
     "agencyExpenses":  "any additional expense line items billed through the agency that are separate from both the talent wages and the agency commission (e.g. beauty fees, manicure, prep fees billed by the agency). Number only, or 0.",
     "paymentEntity":   "name of the production company being invoiced / billed-to (use the closest match from the known prodco names list if possible)",
+    "workState":       "2-letter state abbreviation for the state where the work was performed, ONLY if the invoice explicitly states it (e.g. 'IL', 'CA'). Leave \"\" if the invoice does not mention a work state.",
     "pymtMethod":      "payment method if shown: Check, P-Card, EFT/Wire, Cash, etc., or \"\"",
     "pymtNo":          "check number, wire reference, or last 4 of card if shown, or \"\"",
     "talentStreet":    "talent's street address, or \"\"",
@@ -36,6 +37,7 @@ Rules:
 - agencyFee is the agency's commission line item only — typically labeled 'Agency Fee', 'Commission', '20% Agency', etc.
 - agencyExpenses covers any other charges billed through the agency that are not the talent wage and not the agency commission (e.g. a beauty/manicure/preparation fee invoiced by the agency). If unsure whether a line is talent wages or an agency expense, place it in agencyExpenses.
 - paymentEntity is the bill-to / production company. If the bill-to on the invoice doesn't exactly match a known prodco name, still use the closest match.
+- workState: only populate this if the invoice explicitly names the state where filming or work took place (e.g. "State of Illinois", "Work Location: IL", "Chicago, IL shoot"). Do not infer or assume the work state — leave it blank if not stated.
 - Monetary fields must be numbers only — no $ signs or commas.
 - invoiceDate and workDates format: MM/DD/YYYY.
 - If a page is not an invoice (cover sheet, blank page, etc.), ignore it.
