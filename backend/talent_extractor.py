@@ -1543,8 +1543,12 @@ def parse_teams_ptip_xlsx(
             last_full: dict = {}
 
             for row_vals in ws.iter_rows(min_row=hdr_row_idx + 2, values_only=True):
-                # Skip fully blank rows
-                if all(v is None or str(v).strip() == '' for v in row_vals[:5]):
+                # Skip truly blank rows (all columns empty).
+                # Do NOT use [:5] — some PTIP formats have continuation rows that
+                # are blank in the first 5 (name/SSN/address) but have invoice
+                # number and amounts in later columns.
+                if not any(v is not None and str(v).strip() not in ('', 'None')
+                           for v in row_vals):
                     continue
 
                 row = dict(zip(file_headers, row_vals))
