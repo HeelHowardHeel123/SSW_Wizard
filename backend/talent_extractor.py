@@ -689,6 +689,7 @@ def build_organized_ptip_xlsx(
     received_invoice_nos: set[str],
     duplicate_indices: set[int],
     xlsx_bytes: bytes,
+    pdf_order_within_invoice: dict | None = None,
 ) -> bytes:
     """
     Return a new .xlsx that mirrors the original ER PTIP layout:
@@ -711,6 +712,32 @@ def build_organized_ptip_xlsx(
 
     sorted_with_orig = sorted(enumerate(ptip_rows),
                               key=lambda t: str(t[1].get(invoice_col, '') or '').zfill(20))
+
+    # Reorder within each invoice group to match PDF talent order (by name)
+    if pdf_order_within_invoice:
+        from itertools import groupby as _groupby
+        reordered: list[tuple[int, dict]] = []
+        for inv_key, group_iter in _groupby(
+            sorted_with_orig,
+            key=lambda t: str(t[1].get(invoice_col, '') or '').strip(),
+        ):
+            group = list(group_iter)
+            pdf_names = pdf_order_within_invoice.get(inv_key)
+            if pdf_names:
+                ordered, remaining = [], list(group)
+                for pdf_norm in pdf_names:
+                    for i, (orig_idx, row) in enumerate(remaining):
+                        row_norm, _ = _normalize_for_match(
+                            str(row.get('Talent Name', '') or '')
+                        )
+                        if row_norm == pdf_norm:
+                            ordered.append(remaining.pop(i))
+                            break
+                ordered.extend(remaining)
+                reordered.extend(ordered)
+            else:
+                reordered.extend(group)
+        sorted_with_orig = reordered
 
     has_hash_col = bool(header_cols) and header_cols[0] == '#'
     out_header = list(header_cols) if has_hash_col else ['#'] + list(header_cols)
@@ -1065,10 +1092,18 @@ def extract_talent(
                 )
 
     # ── Step 9: Build organized PTIP ─────────────────────────────────────────
+    # Build PDF name-order map so rows sort to match PDF order within each invoice.
+    er_pdf_order: dict[str, list[str]] = {}
+    for inv_no, inv_data in pdf_invoices.items():
+        ordered_rows = sorted(inv_data['talent_rows'], key=lambda r: r.get('row_no', 0))
+        er_pdf_order[inv_no] = [
+            _normalize_for_match(tr['name'])[0]
+            for tr in ordered_rows
+            if not tr.get('is_agent', False)
+        ]
+
     ptip_excel_b64 = None
     if has_ptip and original_ptip_bytes and header_cols:
-        # Re-map duplicate indices: original PTIP row order vs sorted order
-        # build_organized_ptip_xlsx expects original indices
         try:
             ptip_excel_bytes = build_organized_ptip_xlsx(
                 ptip_rows,
@@ -1076,6 +1111,7 @@ def extract_talent(
                 received_invoice_nos,
                 duplicate_indices,
                 original_ptip_bytes,
+                pdf_order_within_invoice=er_pdf_order,
             )
             ptip_excel_b64 = base64.b64encode(ptip_excel_bytes).decode()
         except Exception as e:
