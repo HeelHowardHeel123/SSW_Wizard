@@ -164,7 +164,7 @@ def _fmt_street_address(addr: str) -> str:
         elif up in _STREET_TYPE_ABBREVS:
             result.append(_STREET_TYPE_ABBREVS[up])
         else:
-            result.append(word.capitalize())
+            result.append(word.capitalize().rstrip('.'))
     return ' '.join(result)
 
 
