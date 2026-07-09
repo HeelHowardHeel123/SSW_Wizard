@@ -105,6 +105,12 @@ def _normalize_for_match(name: str) -> tuple[str, str]:
     return full, first_last
 
 
+def _ssn_last4(ssn: str) -> str:
+    """Extract last 4 digits from a masked or full SSN string."""
+    digits = re.sub(r'\D', '', str(ssn or ''))
+    return digits[-4:] if len(digits) >= 4 else ''
+
+
 # ── Address parsing ───────────────────────────────────────────────────────────
 
 def _parse_ptip_address(addr_str) -> tuple[str, str, str, str]:
@@ -1062,14 +1068,19 @@ _TEAMS_CAT_CODES  = {'P', 'EXB', 'PVO'}
 _TEAMS_CAT_TITLES = {'P': 'Principal', 'EXB': 'Extra', 'PVO': 'PVO'}
 
 
-def _fmt_teams_talent_name(name: str) -> str:
-    """Format 'LAST, FIRST M.' (all-caps PDF/PTIP) → 'First M. Last' (title case).
+_NAME_SUFFIXES = frozenset({'jr', 'sr', 'ii', 'iii', 'iv', 'v', '2nd', '3rd'})
 
+
+def _fmt_teams_talent_name(name: str) -> str:
+    """Format Teams talent name → 'Last, First' (title case).
+
+    Handles both 'LAST [SUFFIX], FIRST [MIDDLE]' (PDF/PTIP comma format) and
+    'FIRST [MIDDLE] LAST [SUFFIX]' (no-comma PTIP format).
+    Strips middle initials (single letter ± period) and name suffixes (Jr/Sr/II/III...).
     Corp names in parentheses are title-cased and re-appended.
     """
     if not name:
         return ''
-    # Split off corp name in parens: "SMITH, JOHN (SMITH CORP LLC)"
     corp = ''
     m = re.match(r'^(.*?)\s*\((.+)\)\s*$', name.strip())
     if m:
@@ -1078,12 +1089,31 @@ def _fmt_teams_talent_name(name: str) -> str:
         base = name.strip()
 
     if ',' in base:
-        last, _, rest = base.partition(',')
-        last = last.strip().title()
-        first_mid = rest.strip().title()
-        result = f"{first_mid} {last}".strip() if first_mid else last
+        last_raw, _, first_mid_raw = base.partition(',')
+        # Strip suffix tokens from last name (e.g. "ROGERS JR" → "ROGERS")
+        last_tokens = [t for t in last_raw.strip().split()
+                       if t.lower().rstrip('.') not in _NAME_SUFFIXES]
+        last = ' '.join(last_tokens).title()
+        # Strip single-letter middle initials; keep all remaining tokens as first name
+        first_tokens = first_mid_raw.strip().split()
+        non_init = [t for t in first_tokens if not re.match(r'^[A-Za-z]\.?$', t)]
+        first = ' '.join(t.title() for t in non_init) if non_init else (
+            first_tokens[0].title() if first_tokens else ''
+        )
+        result = f"{last}, {first}".strip(', ') if first else last
     else:
-        result = base.title()
+        # No-comma format: FIRST [MIDDLE] LAST [SUFFIX]
+        tokens = base.strip().split()
+        while tokens and tokens[-1].lower().rstrip('.') in _NAME_SUFFIXES:
+            tokens.pop()
+        if not tokens:
+            result = ''
+        elif len(tokens) == 1:
+            result = tokens[0].title()
+        else:
+            inner = [t for t in tokens[1:-1] if not re.match(r'^[A-Za-z]\.?$', t)]
+            cleaned = [tokens[0]] + inner + [tokens[-1]]
+            result = f"{cleaned[-1].title()}, {cleaned[0].title()}"
 
     if corp:
         result = f"{result} ({corp.title()})"
@@ -1781,7 +1811,7 @@ def extract_teams_talent(
             for tr in inv_data['talent_rows']:
                 tr_full_norm, _ = _normalize_for_match(tr['name'])
 
-                # Match to PTIP row by name (name is already Last, First in both)
+                # Match to PTIP row by name; fall back to SSN last-4
                 ptip_match:       dict | None = None
                 ptip_match_orig:  int | None  = None
                 for local_i, (pr, orig_i) in enumerate(inv_ptip_pairs):
@@ -1794,6 +1824,18 @@ def extract_teams_talent(
                         ptip_match_orig = orig_i
                         ptip_consumed.add(local_i)
                         break
+
+                if ptip_match is None:
+                    pdf_s4 = _ssn_last4(tr.get('ssn', ''))
+                    if pdf_s4:
+                        for local_i, (pr, orig_i) in enumerate(inv_ptip_pairs):
+                            if local_i in ptip_consumed:
+                                continue
+                            if _ssn_last4(str(pr.get('SSN', '') or '')) == pdf_s4:
+                                ptip_match      = pr
+                                ptip_match_orig = orig_i
+                                ptip_consumed.add(local_i)
+                                break
 
                 is_first_tax = (not inv_has_ptip) and (not first_talent_seen)
                 first_talent_seen = True
@@ -1825,7 +1867,7 @@ def extract_teams_talent(
                     ptip=pr,
                     pdf_talent=None,
                     pdf_invoice=inv_data,
-                    received_invoice=True,
+                    received_invoice=False,
                     is_duplicate=False,
                     first_tax_row=False,
                     scenario=scenario,
