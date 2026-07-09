@@ -1660,14 +1660,16 @@ def build_teams_sorted_ptip_xlsx(
     for inv_no in sorted_inv_nos:
         rows = inv_rows[inv_no]
 
-        # Reorder within invoice to match PDF talent order when available
+        # Reorder within invoice to match PDF talent order (by SSN last-4)
         if inv_no in pdf_order_within_invoice and pdf_order_within_invoice[inv_no]:
             pdf_order = pdf_order_within_invoice[inv_no]
             ordered, remaining = [], list(rows)
-            for pdf_norm in pdf_order:
+            for pdf_s4 in pdf_order:
+                if not pdf_s4:
+                    continue
                 for i, row in enumerate(remaining):
-                    rn, _ = _normalize_for_match(str(row.get('Name', '') or ''))
-                    if rn == pdf_norm:
+                    row_s4 = _ssn_last4(str(row.get('SSN', '') or ''))
+                    if row_s4 and row_s4 == pdf_s4:
                         ordered.append(remaining.pop(i))
                         break
             ordered.extend(remaining)
@@ -1782,11 +1784,12 @@ def extract_teams_talent(
         inv_no = str(pr.get('Invoice Number', '') or '').strip()
         ptip_by_invoice[inv_no].append((pr, idx))
 
-    # ── Step 5: PDF talent order map (for Sorted PTIP + name matching) ───────
+    # ── Step 5: PDF talent order map (for Sorted PTIP ordering) ─────────────
+    # Stored as SSN-last-4 lists so truncated PDF names don't break ordering.
     pdf_order_within_invoice: dict[str, list[str]] = {}
     for inv_no, inv_data in pdf_invoices.items():
         pdf_order_within_invoice[inv_no] = [
-            _normalize_for_match(tr['name'])[0]
+            _ssn_last4(tr.get('ssn', ''))
             for tr in inv_data['talent_rows']
         ]
 
