@@ -133,6 +133,46 @@ def _parse_ptip_address(addr_str) -> tuple[str, str, str, str]:
     return street, city, state, zip_code
 
 
+# Full street-type words → standard abbreviations (all-caps key → mixed-case value)
+_STREET_TYPE_ABBREVS = {
+    'AVENUE': 'Ave', 'STREET': 'St', 'DRIVE': 'Dr', 'ROAD': 'Rd',
+    'BOULEVARD': 'Blvd', 'PLACE': 'Pl', 'COURT': 'Ct', 'LANE': 'Ln',
+    'CIRCLE': 'Cir', 'HIGHWAY': 'Hwy', 'PARKWAY': 'Pkwy',
+    'TERRACE': 'Ter', 'TRAIL': 'Trl',
+}
+# Two-letter compass directions that should stay fully uppercase
+_COMPOUND_DIRS = frozenset({'NE', 'NW', 'SE', 'SW'})
+
+
+def _fmt_street_address(addr: str) -> str:
+    """Title-case a street address, strip unit numbers, abbreviate full street-type words.
+
+    Unit patterns stripped: '#NNN', 'APT NNN', 'UNIT NNN', 'SUITE/STE NNN'.
+    Single-letter directionals (N, S, E, W) stay uppercase via .capitalize().
+    Ordinal house numbers (55TH → 55th) handled by .capitalize() naturally.
+    """
+    if not addr:
+        return ''
+    addr = re.sub(r'\s+#\S+$', '', addr.strip())
+    addr = re.sub(r'\s+(APT|UNIT|SUITE|STE|FL|FLOOR)\s+\S+$', '', addr.strip(),
+                  flags=re.IGNORECASE)
+    result = []
+    for word in addr.split():
+        up = word.upper().rstrip('.')
+        if up in _COMPOUND_DIRS:
+            result.append(up)
+        elif up in _STREET_TYPE_ABBREVS:
+            result.append(_STREET_TYPE_ABBREVS[up])
+        else:
+            result.append(word.capitalize())
+    return ' '.join(result)
+
+
+def _fmt_city(city: str) -> str:
+    """Title-case a city name."""
+    return city.title() if city else ''
+
+
 # ── PTIP Excel parsing ────────────────────────────────────────────────────────
 
 def _find_ptip_sheet(wb):
@@ -463,6 +503,8 @@ def _build_row(
     street = city = state = zip_code = ''
     if ptip:
         street, city, state, zip_code = _parse_ptip_address(ptip.get('Talent Address'))
+        street = _fmt_street_address(street)
+        city   = _fmt_city(city)
 
     # ── Work state & qualify ─────────────────────────────────────────────────
     if ptip:
