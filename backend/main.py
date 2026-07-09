@@ -50,9 +50,10 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 APP_SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 ALLOWED_ORIGINS   = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
-_PROMPT_PATH                 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoice_extraction_prompt.txt")
-_CREW_FREELANCE_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crew_freelance_prompt.txt")
-_HOURS_LETTER_PROMPT_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_letter_prompt.txt")
+_PROMPT_PATH                    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoice_extraction_prompt.txt")
+_CREW_FREELANCE_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crew_freelance_prompt.txt")
+_TALENT_FREELANCE_PROMPT_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "talent_freelance_prompt.txt")
+_HOURS_LETTER_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_letter_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -77,6 +78,13 @@ def _load_prompt(prodco_names):
 
 def _load_crew_freelance_prompt(prodco_names):
     with open(_CREW_FREELANCE_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    label = ", ".join(prodco_names) if prodco_names else "the production company"
+    return template.replace("{prodco_names}", label)
+
+
+def _load_talent_freelance_prompt(prodco_names):
+    with open(_TALENT_FREELANCE_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
     label = ", ".join(prodco_names) if prodco_names else "the production company"
     return template.replace("{prodco_names}", label)
@@ -614,6 +622,130 @@ async def extract_crew_freelance(
         file_summaries.append({
             "filename": uf.filename,
             "company":  worker_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Talent freelance invoice extractor ───────────────────────────────────────
+
+def normalize_talent_freelance_invoice(raw: dict, filename: str) -> list[dict]:
+    talent_name    = clean_name(raw.get("talentName", "")) or "[missing information]"
+    agency_name    = str(raw.get("agencyName", "")).strip()
+    invoice_no     = str(raw.get("invoiceNo", "")).strip() or "[missing information]"
+    invoice_date   = str(raw.get("invoiceDate", "")).strip() or "[missing information]"
+    work_dates     = str(raw.get("workDates", "")).strip()
+    payment_entity = str(raw.get("paymentEntity", "")).strip()
+
+    days = raw.get("daysWorked")
+    if isinstance(days, float):
+        days = int(days)
+    elif not isinstance(days, int):
+        days = None
+
+    talent_wages    = normalize_amount(raw.get("talentWages", 0))
+    agency_fee      = normalize_amount(raw.get("agencyFee", 0))
+    agency_expenses = normalize_amount(raw.get("agencyExpenses", 0))
+    misc_pymt       = round(agency_fee + agency_expenses, 2)
+
+    method = normalize_pymt_method(raw.get("pymtMethod", ""))
+    pymt_no = normalize_pymt_number(method, raw.get("pymtNo", ""))
+
+    talent_row = {
+        "talentName":    talent_name,
+        "rowType":       "talent",
+        "invoiceNo":     invoice_no,
+        "invoiceDate":   invoice_date,
+        "workDates":     work_dates,
+        "daysWorked":    days,
+        "wages":         talent_wages if talent_wages else "[missing information]",
+        "miscPymt":      0,
+        "qualify":       "PENDING",
+        "receivedInvoice": "YES",
+        "paymentEntity": payment_entity,
+        "pymtMethod":    method,
+        "pymtNo":        pymt_no,
+        "street":        clean_address(raw.get("talentStreet", "")),
+        "city":          clean_name(raw.get("talentCity", "")),
+        "state":         clean_state(raw.get("talentState", "")),
+        "zip":           clean_zip(raw.get("talentZip", "")),
+        "sourceFile":    filename,
+    }
+
+    rows = [talent_row]
+
+    if agency_name:
+        agency_row = {
+            "talentName":    clean_name(agency_name),
+            "rowType":       "agency",
+            "invoiceNo":     invoice_no,
+            "invoiceDate":   invoice_date,
+            "workDates":     work_dates,
+            "daysWorked":    days,
+            "wages":         0,
+            "miscPymt":      misc_pymt if misc_pymt else "[missing information]",
+            "qualify":       "NO-IL",
+            "receivedInvoice": "YES",
+            "paymentEntity": payment_entity,
+            "pymtMethod":    method,
+            "pymtNo":        pymt_no,
+            "street":        "",
+            "city":          "",
+            "state":         "",
+            "zip":           "",
+            "sourceFile":    filename,
+        }
+        rows.append(agency_row)
+
+    return rows
+
+
+@app.post("/extract-talent-freelance")
+async def extract_talent_freelance(
+    files:        list[UploadFile] = File(...),
+    prodco_names: str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    client        = _client()
+    names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
+    system_prompt = _load_talent_freelance_prompt(names)
+    user_text     = "Extract talent freelance invoice data from these document pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no talent freelance data extracted — review manually")
+            issues.append(f"{uf.filename}: no talent freelance data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.extend(normalize_talent_freelance_invoice(raw, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        talent_label = file_rows[0]["talentName"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": uf.filename,
+            "talent":   talent_label,
             "rows":     len(file_rows),
             "issues":   errs,
         })
