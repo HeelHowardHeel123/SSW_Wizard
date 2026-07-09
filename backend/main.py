@@ -246,26 +246,32 @@ def clean_name(val):
     return " ".join(s.split()).title().rstrip(",").strip()
 
 
+_ADDR_STREET_TYPES = {
+    "avenue":"Ave","boulevard":"Blvd","circle":"Cir","court":"Ct","drive":"Dr",
+    "highway":"Hwy","lane":"Ln","parkway":"Pkwy","place":"Pl","road":"Rd",
+    "street":"St","terrace":"Ter","trail":"Trl",
+}
+_ADDR_SINGLE_DIRS   = {"north":"N","south":"S","east":"E","west":"W"}
+_ADDR_COMPOUND_DIRS = frozenset({"ne","nw","se","sw"})
+
 def clean_address(val):
     if not val:
         return ""
     s = str(val).strip()
     s = re.sub(r",?\s*#\s*\S+", "", s)
     s = re.sub(r",?\s*(Apt|Apartment|Suite|Ste|Unit|Room|Fl|Floor)(\s+\S+)?", "", s, flags=re.IGNORECASE)
-    s = " ".join(s.replace(".", "").split()).title()
-    directions = {"North":"N","South":"S","East":"E","West":"W"}
-    words = s.split()
-    if len(words) >= 2 and words[0][0].isdigit() and words[1] in directions:
-        words[1] = directions[words[1]]
-        s = " ".join(words)
-    street_types = {
-        "Avenue":"Ave","Boulevard":"Blvd","Circle":"Cir","Court":"Ct","Drive":"Dr",
-        "Highway":"Hwy","Lane":"Ln","Place":"Pl","Road":"Rd","Street":"St",
-        "Terrace":"Ter","Trail":"Trl",
-    }
-    for full, abbr in street_types.items():
-        s = re.sub(r"\b" + full + r"\b", abbr, s)
-    return s.rstrip(",").strip()
+    result = []
+    for word in s.split():
+        lw = word.lower().rstrip(".")
+        if lw in _ADDR_COMPOUND_DIRS:
+            result.append(lw.upper())
+        elif lw in _ADDR_SINGLE_DIRS:
+            result.append(_ADDR_SINGLE_DIRS[lw])
+        elif lw in _ADDR_STREET_TYPES:
+            result.append(_ADDR_STREET_TYPES[lw])
+        else:
+            result.append(word.capitalize().rstrip("."))
+    return " ".join(result).rstrip(",").strip()
 
 
 def normalize_invoice(inv):
