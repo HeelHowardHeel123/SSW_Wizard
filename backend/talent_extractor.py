@@ -1062,18 +1062,49 @@ _TEAMS_CAT_CODES  = {'P', 'EXB', 'PVO'}
 _TEAMS_CAT_TITLES = {'P': 'Principal', 'EXB': 'Extra', 'PVO': 'PVO'}
 
 
+def _fmt_teams_talent_name(name: str) -> str:
+    """Format 'LAST, FIRST M.' (all-caps PDF/PTIP) → 'First M. Last' (title case).
+
+    Corp names in parentheses are title-cased and re-appended.
+    """
+    if not name:
+        return ''
+    # Split off corp name in parens: "SMITH, JOHN (SMITH CORP LLC)"
+    corp = ''
+    m = re.match(r'^(.*?)\s*\((.+)\)\s*$', name.strip())
+    if m:
+        base, corp = m.group(1).strip(), m.group(2).strip()
+    else:
+        base = name.strip()
+
+    if ',' in base:
+        last, _, rest = base.partition(',')
+        last = last.strip().title()
+        first_mid = rest.strip().title()
+        result = f"{first_mid} {last}".strip() if first_mid else last
+    else:
+        result = base.title()
+
+    if corp:
+        result = f"{result} ({corp.title()})"
+    return result
+
+
 def _parse_teams_crp_row(line: str) -> str | None:
     """If line is a Teams CRP (loan-out corp) row return corp name, else None."""
     m = re.match(r'^\*+\d+\s+(.+?)\s+CRP\s*$', line.strip())
     return m.group(1).strip() if m else None
 
 
-def _parse_teams_sag_talent_row(line: str) -> dict | None:
+def _parse_teams_sag_talent_row(line: str, has_apply_col: bool = False) -> dict | None:
     """
     Parse one talent data row from a Teams SAG invoice table.
 
     Row format (after SSN): Name [OS1] [OS2] [Cat] Cam St [Agnt]
                             Date [Spot] [Yr] [Apply] [Applied] Amount... Amount [P&H]
+
+    has_apply_col: True when the invoice header includes an Apply/Applied column.
+      In that case amounts[0] is the Apply credit (skip it); amounts[1] is Gross Wages.
     Returns dict or None if line is not a talent row.
     """
     line = line.strip()
@@ -1144,10 +1175,22 @@ def _parse_teams_sag_talent_row(line: str) -> dict | None:
     name_end = min(x for x in [os1_idx, os2_idx, pre_pos] if x is not None)
     name = ' '.join(before_date[:name_end]).strip()
 
-    if len(amounts) == 2:
-        gross, misc, pah = (0.0, amounts[0], amounts[1]) if cam == 'OFF' else (amounts[0], 0.0, amounts[1])
+    if has_apply_col:
+        # amounts = [Apply(skip), GrossWages, P&H]  — or [Apply, Gross, Misc, P&H] if 4
+        # 2-amount rows on an Apply invoice are treated as plain [Gross/Misc, P&H]
+        if len(amounts) == 2:
+            gross = 0.0 if cam == 'OFF' else amounts[0]
+            misc  = amounts[0] if cam == 'OFF' else 0.0
+            pah   = amounts[1]
+        elif len(amounts) == 3:
+            gross, misc, pah = amounts[1], 0.0, amounts[2]
+        else:
+            gross, misc, pah = amounts[1], amounts[2], amounts[3]
     else:
-        gross, misc, pah = amounts[0], amounts[1], amounts[2]
+        if len(amounts) == 2:
+            gross, misc, pah = (0.0, amounts[0], amounts[1]) if cam == 'OFF' else (amounts[0], 0.0, amounts[1])
+        else:
+            gross, misc, pah = amounts[0], amounts[1], amounts[2]
 
     return {
         'ssn':         ssn,
@@ -1207,19 +1250,38 @@ def parse_teams_sag_invoice_pdf(pdf_bytes: bytes) -> dict | None:
     total_pah      = _to_float(m_pah.group(1)      if m_pah      else 0)
     total_handling = _to_float(m_handling.group(1) if m_handling else 0)
 
-    # Parse talent rows; attach CRP corp name to previous row
-    talent_rows: list[dict] = []
-    for line in text.split('\n'):
-        stripped = line.strip()
-        crp = _parse_teams_crp_row(stripped)
-        if crp is not None:
-            if talent_rows:
-                talent_rows[-1]['corp_name'] = crp
-                talent_rows[-1]['name'] = f"{talent_rows[-1]['name']} ({crp})"
-        else:
-            row = _parse_teams_sag_talent_row(stripped)
-            if row:
-                talent_rows.append(row)
+    # Auto-detect whether the first amount in each row is an Apply credit (skip it)
+    # or Gross Wages.  Parse with both interpretations and keep the one whose
+    # sum(gross+misc) is closest to the footer Wages & Misc. Payments total.
+    _footer_wages = _to_float(m_wages.group(1) if m_wages else 0)
+
+    def _build_talent_rows(lines, has_apply_col):
+        rows: list[dict] = []
+        for line in lines:
+            s = line.strip()
+            crp = _parse_teams_crp_row(s)
+            if crp is not None:
+                if rows:
+                    rows[-1]['corp_name'] = crp
+                    rows[-1]['name'] = f"{rows[-1]['name']} ({crp})"
+            else:
+                r = _parse_teams_sag_talent_row(s, has_apply_col=has_apply_col)
+                if r:
+                    rows.append(r)
+        return rows
+
+    _all_lines = text.split('\n')
+    _rows_plain = _build_talent_rows(_all_lines, False)
+    _rows_apply = _build_talent_rows(_all_lines, True)
+
+    _sum_plain = sum(r['gross_wages'] + r['misc_pmt'] for r in _rows_plain)
+    _sum_apply = sum(r['gross_wages'] + r['misc_pmt'] for r in _rows_apply)
+
+    if (_footer_wages > 0 and
+            abs(_sum_apply - _footer_wages) < abs(_sum_plain - _footer_wages)):
+        talent_rows = _rows_apply
+    else:
+        talent_rows = _rows_plain
 
     return {
         'invoice_no':     inv_no,
@@ -1819,7 +1881,11 @@ def extract_teams_talent(
         except Exception as e:
             issues.append(f"Sorted PTIP build error: {e}")
 
-    # ── Step 9: Summary ───────────────────────────────────────────────────────
+    # ── Step 9: Format talent names (title case, First Last order) ───────────
+    for _r in workbook_rows:
+        _r['talent_name'] = _fmt_teams_talent_name(_r['talent_name'])
+
+    # ── Step 10: Summary ──────────────────────────────────────────────────────
     ptip_inv_nos        = set(ptip_by_invoice.keys())
     invoices_with_pdf   = sorted(received_invoice_nos & ptip_inv_nos) if has_ptip else sorted(received_invoice_nos)
     invoices_ptip_only  = sorted(ptip_inv_nos - received_invoice_nos) if has_ptip else []
