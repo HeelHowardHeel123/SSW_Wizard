@@ -919,7 +919,7 @@ async def extract_talent_endpoint(
 class _FileSummaryIn(BaseModel):
     filename: str = ""
     company:  str = ""
-    rows:     int = 0
+    rows:     int | None = 0
     issues:   list[str] = []
 
 class _RunDataIn(BaseModel):

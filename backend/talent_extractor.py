@@ -1052,7 +1052,7 @@ def extract_talent(
                     ptip=pr,
                     pdf_talent=None,
                     pdf_invoice=inv_data,
-                    received_invoice=True,
+                    received_invoice=False,  # talent not found on received PDF
                     is_duplicate=is_dup,
                     first_tax_row=False,
                     scenario=scenario,

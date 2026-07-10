@@ -109,7 +109,7 @@ def send_run_summary(
         from sendgrid.helpers.mail import Mail
 
         timestamp   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        total_rows  = sum(f.get("rows", 0) for r in runs for f in r.get("files", []))
+        total_rows  = sum(f.get("rows") or 0 for r in runs for f in r.get("files", []))
         all_issues  = [i for r in runs for i in r.get("issues", [])]
         issue_count = len(all_issues)
 
@@ -131,14 +131,15 @@ def send_run_summary(
             endpoint = run.get("endpoint", "")
             label    = _ENDPOINT_LABELS.get(endpoint, endpoint)
             files    = run.get("files", [])
-            run_rows = sum(f.get("rows", 0) for f in files)
+            run_rows = sum(f.get("rows") or 0 for f in files)
 
             lines.append(f"{label.upper()}  —  {len(files)} file(s), {run_rows} row(s)")
             lines.append("-" * 60)
             for f in files:
                 lines.append(f"  {f.get('filename', '?')}")
                 lines.append(f"    Source  : {f.get('company', 'unknown')}")
-                lines.append(f"    Rows    : {f.get('rows', 0)}")
+                row_display = f.get("rows")
+                lines.append(f"    Rows    : {row_display if row_display is not None else '—'}")
                 for err in f.get("issues", []):
                     lines.append(f"    WARNING : {err}")
             lines.append("")
