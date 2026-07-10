@@ -307,7 +307,7 @@ def _is_wrapbook_register_only(pdf_bytes: bytes) -> bool:
             has_register = has_fringe = False
             for pg in pdf.pages[:10]:
                 text = (pg.extract_text() or "").lower()
-                if "payroll register" in text:
+                if "payroll register" in text and "xxx-xx-" in text:
                     has_register = True
                 if "fringe report" in text or "fringe recap" in text:
                     has_fringe = True
