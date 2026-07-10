@@ -335,7 +335,8 @@ def _parse_payrollhist(text: str) -> tuple[str, list[dict]]:
         if not name_raw or re.match(r'^GRAND\s*TOTAL', name_raw, re.IGNORECASE):
             continue
 
-        occupation = ""
+        occupation    = ""
+        il_withholding = None
 
         for ln in lines:
             if "DM#:" in ln:
@@ -350,12 +351,19 @@ def _parse_payrollhist(text: str) -> tuple[str, list[dict]]:
                         break
                 if occ_start is not None and occ_start < len(tokens):
                     occupation = " ".join(tokens[occ_start:]).strip().title()
-                break
+
+            il_m = re.search(r'\bIL\s+SWT\s+([\d,]+\.\d{2})', ln)
+            if il_m:
+                try:
+                    il_withholding = float(il_m.group(1).replace(',', ''))
+                except ValueError:
+                    pass
 
         employees.append({
-            "name_raw":   name_raw,
-            "occupation": occupation,
-            "work_dates": "",  # W/E date alone is not a range; caller uses inv_work_dates
+            "name_raw":       name_raw,
+            "occupation":     occupation,
+            "work_dates":     "",  # W/E date alone is not a range; caller uses inv_work_dates
+            "withholdingsIL": il_withholding,
         })
 
     return inv_no, employees
@@ -516,6 +524,7 @@ def extract(pdf_bytes: bytes, source_file: str = "", **_) -> tuple[list[dict], l
                     )
                     row["jobTitle"]         = enrich.get("occupation", "")
                     row["workDates"]        = enrich.get("work_dates", "") or inv_work_dates
+                    row["withholdingsIL"]   = enrich.get("withholdingsIL")
                     row["street"]           = enrich.get("street", "")
                     row["city"]             = enrich.get("city", "")
                     row["zip"]              = enrich.get("zip", "")
