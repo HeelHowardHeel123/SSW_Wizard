@@ -223,6 +223,17 @@ _CARD_ABBR = {
 }
 
 
+def normalize_date(val: str) -> str:
+    """Convert YYYY-MM-DD to MM/DD/YYYY; pass through anything else."""
+    if not val:
+        return ""
+    s = str(val).strip()
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', s)
+    if m:
+        return f"{m.group(2)}/{m.group(3)}/{m.group(1)}"
+    return s
+
+
 def normalize_amount(val):
     if not val:
         return 0
@@ -380,20 +391,19 @@ def normalize_billing_row(
 
     local     = bool(state) and state.upper() == work_state.upper()
     geo_state = "Local" if local else "OOS"
-    qualify   = "YES" if local else "NO-OOS"
 
     proj_fee_raw = raw.get("project_fee")
     proj_fee     = normalize_amount(proj_fee_raw) if proj_fee_raw not in (None, "", 0, 0.0) else None
 
     return {
-        "qualify":         qualify,
+        "qualify":         "",
         "vendorName":      vendor_name or clean_name(raw.get("vendor_name", "")),
         "vendorType":      _VENDOR_TYPE_LABELS.get(vendor_type.lower(), vendor_type),
         "jobType":         str(raw.get("job_type", "")).strip(),
         "state":           geo_state,
         "description":     str(raw.get("description", "")).strip(),
         "details":         str(raw.get("details", "")).strip(),
-        "invoiceDate":     str(raw.get("invoice_date", "")).strip(),
+        "invoiceDate":     normalize_date(raw.get("invoice_date", "")),
         "invoiceNo":       str(raw.get("invoice_number", "")).strip(),
         "eligibleTotal":   normalize_amount(raw.get("invoice_amount", 0)),
         "projectFee":      proj_fee,
@@ -403,7 +413,7 @@ def normalize_billing_row(
         "zip":             zip_,
         "receivedInvoice": "Yes",
         "pop":             "Yes" if raw.get("pop") else None,
-        "paymentDate":     str(raw.get("payment_date", "")).strip(),
+        "paymentDate":     normalize_date(raw.get("payment_date", "")),
         "paymentMethod":   str(raw.get("payment_method", "")).strip(),
         "jobNumber":       str(raw.get("job_number", "")).strip(),
         "notes":           str(raw.get("notes", "")).strip(),

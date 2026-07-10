@@ -21,9 +21,9 @@ FIELDS (return exactly these key names):
 9. payment_method — payment method if visible on the invoice or any payment confirmation page. Use the label as it appears (e.g., "ACH", "Wire Transfer", "Wired Transfer", "Check", "Credit Card"). Empty string if not visible.
 10. payment_date — if this PDF contains a bank statement, wire confirmation, ACH remittance, or any other document confirming payment was sent, extract the payment/transfer date in MM/DD/YYYY format. Empty string otherwise.
 11. pop — true if this PDF contains a bank statement, wire confirmation, ACH remittance, or any document confirming payment was sent. false otherwise.
-12. address — vendor's street address. Look first in "Remit To" section, then invoice header, then W-9. Do NOT use the Bill To address. Empty string if not found.
-13. city — vendor's city. Empty string if not found.
-14. state — vendor's state as 2-letter code. Empty string if not found.
+12. address — vendor's STREET NUMBER AND STREET NAME ONLY. Look first in "Remit To" section, then invoice header, then W-9. Do NOT include the city, state, or zip in this field. Do NOT use the Bill To address. Example: "1735 W 38th St". Empty string if not found.
+13. city — vendor's CITY NAME ONLY. Do NOT include state, country, or any other text. Example: "Chicago". Empty string if not found.
+14. state — vendor's state as 2-letter code ONLY (e.g. "IL"). Empty string if not found.
 15. zip — vendor's zip code (5 digits). Empty string if not found.
 16. notes — empty string in normal cases. Populate only if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice.
 
