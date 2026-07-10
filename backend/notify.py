@@ -89,6 +89,7 @@ _ENDPOINT_LABELS = {
     "freelance":     "Freelance Invoices",
     "hours_letters": "Hours Letters",
     "talent":        "Talent & Extras",
+    "billings":      "Billings",
 }
 
 

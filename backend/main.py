@@ -7,6 +7,8 @@ Two extractors the browser wizard POSTs documents to:
   • /extract-payroll   — fringe report parser for Wrapbook and CAPS PDFs
                          (auto-detects company; falls back to GPT-4o vision
                           for image-only Wrapbook fringe PDFs)
+  • /extract-billings  — GPT-4o vision for Agency, ProdCo, and Sub-ProdCo
+                         billing invoices; writes to the Billings tab
 
 It never builds the workbook — the wizard assembles the final .xlsx client-side.
 
@@ -15,6 +17,10 @@ Endpoints
   POST /extract-invoices  → multipart: files[]=<pdf/png/jpg>, prodco_names="A, B"
                             returns {"invoices": [...], "issues": [...]}
   POST /extract-payroll   → multipart: files[]=<pdf>
+                            returns {"rows": [...], "issues": [...]}
+  POST /extract-billings  → multipart: files[]=<pdf>, vendor_type, vendor_name,
+                            vendor_address, vendor_city, vendor_state, vendor_zip,
+                            prodco_names, work_state
                             returns {"rows": [...], "issues": [...]}
 
 Environment variables
@@ -54,6 +60,7 @@ _PROMPT_PATH                    = os.path.join(os.path.dirname(os.path.abspath(_
 _CREW_FREELANCE_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crew_freelance_prompt.txt")
 _TALENT_FREELANCE_PROMPT_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "talent_freelance_prompt.txt")
 _HOURS_LETTER_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_letter_prompt.txt")
+_BILLING_PROMPT_PATH            = os.path.join(os.path.dirname(os.path.abspath(__file__)), "billing_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -93,6 +100,26 @@ def _load_talent_freelance_prompt(prodco_names):
 def _load_hours_letter_prompt():
     with open(_HOURS_LETTER_PROMPT_PATH, "r", encoding="utf-8") as f:
         return f.read()
+
+
+_VENDOR_TYPE_LABELS = {
+    "sub_prodco": "Sub-ProdCo",
+    "prodco":     "ProdCo",
+    "agency":     "Agency",
+}
+
+
+def _load_billing_prompt(vendor_name: str, vendor_type: str, prodco_names: list) -> str:
+    with open(_BILLING_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    type_label   = _VENDOR_TYPE_LABELS.get(vendor_type.lower(), vendor_type)
+    prodco_label = ", ".join(prodco_names) if prodco_names else "the production company"
+    return (
+        template
+        .replace("{vendor_name}", vendor_name)
+        .replace("{vendor_type}", type_label)
+        .replace("{prodco_names}", prodco_label)
+    )
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -178,6 +205,8 @@ _STATE_ABBR = {
     "virginia":"VA","washington":"WA","west virginia":"WV","wisconsin":"WI",
     "wyoming":"WY","district of columbia":"DC",
 }
+
+_STATE_SET = frozenset(_STATE_ABBR.values())
 
 _PYMT_MAP = {
     "check":"Check","cheque":"Check","p-card":"P-Card","pcard":"P-Card","p card":"P-Card",
@@ -274,6 +303,38 @@ def clean_address(val):
     return " ".join(result).rstrip(",").strip()
 
 
+def _parse_vendor_address(full_address: str) -> dict:
+    """Split 'Street, City, ST Zip' into components working right-to-left."""
+    if not full_address:
+        return {"address": "", "city": "", "state": "", "zip": ""}
+    rest = full_address.strip()
+
+    zip_ = ""
+    m = re.search(r'\b(\d{5}(?:-\d{4})?)\s*$', rest)
+    if m:
+        zip_ = m.group(1)
+        rest = rest[:m.start()].strip().rstrip(",").strip()
+
+    state = ""
+    m = re.search(r'\b([A-Za-z]{2})\s*$', rest)
+    if m and m.group(1).upper() in _STATE_SET:
+        state = m.group(1).upper()
+        rest = rest[:m.start()].strip().rstrip(",").strip()
+
+    city = ""
+    if "," in rest:
+        idx  = rest.rfind(",")
+        city = rest[idx + 1:].strip()
+        rest = rest[:idx].strip()
+
+    return {
+        "address": clean_address(rest),
+        "city":    clean_name(city),
+        "state":   state,
+        "zip":     zip_,
+    }
+
+
 def normalize_invoice(inv):
     method = normalize_pymt_method(inv.get("pymt_method", ""))
     return {
@@ -290,6 +351,63 @@ def normalize_invoice(inv):
         "pymt_method":    method,
         "pymt_number":    normalize_pymt_number(method, inv.get("pymt_number", "")),
         "notes":          inv.get("notes", ""),
+    }
+
+
+def normalize_billing_row(
+    raw: dict,
+    vendor_type: str,
+    vendor_name: str,
+    vendor_address: str,
+    vendor_city: str,
+    vendor_state: str,
+    vendor_zip: str,
+    work_state: str,
+    filename: str,
+) -> dict:
+    # If the wizard sent split fields, use them; otherwise parse the full address string.
+    if vendor_city or vendor_state or vendor_zip:
+        addr  = clean_address(vendor_address or raw.get("address", ""))
+        city  = clean_name(vendor_city or raw.get("city", ""))
+        state = clean_state(vendor_state or raw.get("state", ""))
+        zip_  = clean_zip(vendor_zip or raw.get("zip", ""))
+    else:
+        parsed = _parse_vendor_address(vendor_address)
+        addr  = parsed["address"] or clean_address(raw.get("address", ""))
+        city  = parsed["city"]    or clean_name(raw.get("city", ""))
+        state = parsed["state"]   or clean_state(raw.get("state", ""))
+        zip_  = parsed["zip"]     or clean_zip(raw.get("zip", ""))
+
+    local     = bool(state) and state.upper() == work_state.upper()
+    geo_state = "Local" if local else "OOS"
+    qualify   = "YES" if local else "NO-OOS"
+
+    proj_fee_raw = raw.get("project_fee")
+    proj_fee     = normalize_amount(proj_fee_raw) if proj_fee_raw not in (None, "", 0, 0.0) else None
+
+    return {
+        "qualify":         qualify,
+        "vendorName":      vendor_name or clean_name(raw.get("vendor_name", "")),
+        "vendorType":      _VENDOR_TYPE_LABELS.get(vendor_type.lower(), vendor_type),
+        "jobType":         str(raw.get("job_type", "")).strip(),
+        "state":           geo_state,
+        "description":     str(raw.get("description", "")).strip(),
+        "details":         str(raw.get("details", "")).strip(),
+        "invoiceDate":     str(raw.get("invoice_date", "")).strip(),
+        "invoiceNo":       str(raw.get("invoice_number", "")).strip(),
+        "eligibleTotal":   normalize_amount(raw.get("invoice_amount", 0)),
+        "projectFee":      proj_fee,
+        "address":         addr,
+        "city":            city,
+        "vendorState":     state,
+        "zip":             zip_,
+        "receivedInvoice": "Yes",
+        "pop":             "Yes" if raw.get("pop") else None,
+        "paymentDate":     str(raw.get("payment_date", "")).strip(),
+        "paymentMethod":   str(raw.get("payment_method", "")).strip(),
+        "jobNumber":       str(raw.get("job_number", "")).strip(),
+        "notes":           str(raw.get("notes", "")).strip(),
+        "sourceFile":      filename,
     }
 
 
@@ -849,6 +967,75 @@ async def extract_hours_letters(
         for idx, (_, src_rows) in enumerate(sources, 1):
             for row in src_rows:
                 row["invoiceNo"] = f"Hours Letter {idx:03d}"
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Billings extractor ───────────────────────────────────────────────────────
+
+@app.post("/extract-billings")
+async def extract_billings(
+    files:          list[UploadFile] = File(...),
+    vendor_type:    str              = Form(""),
+    vendor_name:    str              = Form(""),
+    vendor_address: str              = Form(""),
+    vendor_city:    str              = Form(""),
+    vendor_state:   str              = Form(""),
+    vendor_zip:     str              = Form(""),
+    prodco_names:   str              = Form(""),
+    work_state:     str              = Form("IL"),
+    x_app_secret:   str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    client        = _client()
+    names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
+    system_prompt = _load_billing_prompt(vendor_name, vendor_type, names)
+    user_text     = "Extract billing invoice data from these document pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no billing data extracted — review manually")
+            issues.append(f"{uf.filename}: no billing data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_billing_row(
+                        raw,
+                        vendor_type=vendor_type,
+                        vendor_name=vendor_name,
+                        vendor_address=vendor_address,
+                        vendor_city=vendor_city,
+                        vendor_state=vendor_state,
+                        vendor_zip=vendor_zip,
+                        work_state=work_state,
+                        filename=uf.filename,
+                    ))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  vendor_name or "unknown",
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
 
     return {"rows": rows, "issues": issues, "files": file_summaries}
 
