@@ -730,7 +730,11 @@ def build_organized_ptip_xlsx(
                         row_norm, _ = _normalize_for_match(
                             str(row.get('Talent Name', '') or '')
                         )
-                        if row_norm == pdf_norm:
+                        # Exact match first; substring fallback for agency names
+                        # that differ between PDF (full legal) and PTIP (short).
+                        if (row_norm == pdf_norm or
+                                (row_norm and pdf_norm and
+                                 (row_norm in pdf_norm or pdf_norm in row_norm))):
                             ordered.append(remaining.pop(i))
                             break
                 ordered.extend(remaining)
@@ -1101,10 +1105,11 @@ def extract_talent(
             enumerate(inv_data['talent_rows']),
             key=lambda t: t[1].get('row_no') or t[0],
         )
+        # Include ALL rows (models and agents) so the PTIP mirrors the
+        # alternating model/agent order that ER invoices use.
         er_pdf_order[inv_no] = [
             _normalize_for_match(tr['name'])[0]
             for _, tr in ordered_rows
-            if not tr.get('is_agent', False)
         ]
 
     ptip_excel_b64 = None
