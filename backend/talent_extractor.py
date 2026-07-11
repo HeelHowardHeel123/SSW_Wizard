@@ -370,6 +370,11 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
     if m:
         pay_type = m.group(1).strip()
 
+    commercial_title = ''
+    m = re.search(r'Primary\s+\S+\s+(.+?)\s+Cycle\s+(?:Length|Dates)', text)
+    if m:
+        commercial_title = m.group(1).strip()
+
     total_wages    = _to_float(re.search(r'Wages\s+\$([\d,.]+)', text) and
                                 re.search(r'Wages\s+\$([\d,.]+)', text).group(1))
     total_misc     = _to_float(re.search(r'Misc Payments\s+\$([\d,.]+)', text) and
@@ -398,17 +403,18 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         i += 1
 
     return {
-        'invoice_no':      inv_no,
-        'invoice_date':    invoice_date,
-        'cycle_dates':     cycle_dates,
-        'union_type':      union_type,
-        'pay_type':        pay_type,
-        'total_wages':     total_wages,
-        'total_misc':      total_misc,
-        'total_pah':       total_pah,
-        'total_er_tax':    total_er_tax,
-        'total_handling':  total_handling,
-        'talent_rows':     talent_rows,
+        'invoice_no':        inv_no,
+        'invoice_date':      invoice_date,
+        'cycle_dates':       cycle_dates,
+        'union_type':        union_type,
+        'pay_type':          pay_type,
+        'commercial_title':  commercial_title,
+        'total_wages':       total_wages,
+        'total_misc':        total_misc,
+        'total_pah':         total_pah,
+        'total_er_tax':      total_er_tax,
+        'total_handling':    total_handling,
+        'talent_rows':       talent_rows,
     }
 
 
@@ -537,15 +543,20 @@ def _build_row(
         handling_ptip  = _to_float(ptip.get('Handling Fee'))
         sag_ptip       = _to_float(ptip.get('P&H'))
         signatory_ptip = _to_float(ptip.get('Signatory Fee'))
-        check_number   = str(ptip.get('Check Number', '') or '').strip()
-        commercial_id  = str(ptip.get('Commercial Id', '') or '').strip()
-        ssn_fein       = (str(ptip.get('SSN', '') or '').strip() or
-                          str(ptip.get('FEIN', '') or '').strip())
-        on_ptip        = True
+        check_number      = str(ptip.get('Check Number', '') or '').strip()
+        commercial_id     = str(ptip.get('Commercial Id', '') or '').strip()
+        commercial_title  = str(ptip.get('Commercial Title', '') or '').strip()
+        ssn_fein          = (str(ptip.get('SSN', '') or '').strip() or
+                             str(ptip.get('FEIN', '') or '').strip())
+        on_ptip           = True
     else:
         ptip_amount = er_tax_ptip = wc_ptip = handling_ptip = sag_ptip = signatory_ptip = None
-        check_number = commercial_id = ssn_fein = ''
+        check_number = commercial_id = commercial_title = ssn_fein = ''
         on_ptip = False
+
+    # Fall back to PDF invoice if PTIP didn't carry the title
+    if not commercial_title and pdf_invoice:
+        commercial_title = pdf_invoice.get('commercial_title', '')
 
     # ── Wages and Misc Pmt ───────────────────────────────────────────────────
     if scenario in ('A',) and pdf_talent:
@@ -673,9 +684,10 @@ def _build_row(
         'city':           city,
         'state':          state,
         'zip':            zip_code,
-        'ssn_fein':       ssn_fein,
-        'commercial_id':  commercial_id,
-        'notes':          '',
+        'ssn_fein':          ssn_fein,
+        'commercial_id':     commercial_id,
+        'commercial_title':  commercial_title,
+        'notes':             '',
         'ptip_row_no':    ptip_row_no,
         'is_duplicate':   is_duplicate,
     }
