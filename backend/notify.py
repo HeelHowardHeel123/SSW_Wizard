@@ -85,11 +85,12 @@ def send_parser_alert(
 
 
 _ENDPOINT_LABELS = {
-    "fringe":        "Fringe / Payroll",
-    "freelance":     "Freelance Invoices",
-    "hours_letters": "Hours Letters",
-    "talent":        "Talent & Extras",
-    "billings":      "Billings",
+    "fringe":             "Fringe / Payroll",
+    "freelance":          "Freelance Invoices",
+    "hours_letters":      "Hours Letters",
+    "talent":             "Talent & Extras",
+    "billings":           "Billings",
+    "agency_subvendors":  "Agency Sub-Vendors",
 }
 
 

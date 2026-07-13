@@ -3,25 +3,29 @@ TPC Extraction Service
 ──────────────────────
 Two extractors the browser wizard POSTs documents to:
 
-  • /extract-invoices  — GPT-4o vision + normalization for freelance invoices
-  • /extract-payroll   — fringe report parser for Wrapbook and CAPS PDFs
-                         (auto-detects company; falls back to GPT-4o vision
-                          for image-only Wrapbook fringe PDFs)
-  • /extract-billings  — GPT-4o vision for Agency, ProdCo, and Sub-ProdCo
-                         billing invoices; writes to the Billings tab
+  • /extract-invoices          — GPT-4o vision + normalization for freelance invoices
+  • /extract-payroll           — fringe report parser for Wrapbook and CAPS PDFs
+                                 (auto-detects company; falls back to GPT-4o vision
+                                  for image-only Wrapbook fringe PDFs)
+  • /extract-billings          — GPT-4o vision for Agency, ProdCo, and Sub-ProdCo
+                                 billing invoices; writes to the Billings tab
+  • /extract-agency-subvendors — GPT-4o vision for sub-vendor invoices billed to the
+                                 ad agency; writes to the Agency Sub-Vendors tab
 
 It never builds the workbook — the wizard assembles the final .xlsx client-side.
 
 Endpoints
-  GET  /health            → {"ok": true, "has_key": bool}
-  POST /extract-invoices  → multipart: files[]=<pdf/png/jpg>, prodco_names="A, B"
-                            returns {"invoices": [...], "issues": [...]}
-  POST /extract-payroll   → multipart: files[]=<pdf>
-                            returns {"rows": [...], "issues": [...]}
-  POST /extract-billings  → multipart: files[]=<pdf>, vendor_type, vendor_name,
-                            vendor_address, vendor_city, vendor_state, vendor_zip,
-                            prodco_names, work_state
-                            returns {"rows": [...], "issues": [...]}
+  GET  /health                    → {"ok": true, "has_key": bool}
+  POST /extract-invoices          → multipart: files[]=<pdf/png/jpg>, prodco_names="A, B"
+                                    returns {"invoices": [...], "issues": [...]}
+  POST /extract-payroll           → multipart: files[]=<pdf>
+                                    returns {"rows": [...], "issues": [...]}
+  POST /extract-billings          → multipart: files[]=<pdf>, vendor_type, vendor_name,
+                                    vendor_address, vendor_city, vendor_state, vendor_zip,
+                                    prodco_names, work_state
+                                    returns {"rows": [...], "issues": [...]}
+  POST /extract-agency-subvendors → multipart: files[]=<pdf>, agency_name, agency_address
+                                    returns {"rows": [...], "issues": [...]}
 
 Environment variables
   OPENAI_API_KEY     (required for invoices + image-based fringe) your OpenAI key
@@ -61,6 +65,7 @@ _CREW_FREELANCE_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(_
 _TALENT_FREELANCE_PROMPT_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "talent_freelance_prompt.txt")
 _HOURS_LETTER_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_letter_prompt.txt")
 _BILLING_PROMPT_PATH            = os.path.join(os.path.dirname(os.path.abspath(__file__)), "billing_extraction_prompt.txt")
+_AGENCY_SUBVENDORS_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_subvendors_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -120,6 +125,14 @@ def _load_billing_prompt(vendor_name: str, vendor_type: str, prodco_names: list)
         .replace("{vendor_type}", type_label)
         .replace("{prodco_names}", prodco_label)
     )
+
+
+def _load_agency_subvendors_prompt(agency_name: str, agency_address: str = "") -> str:
+    with open(_AGENCY_SUBVENDORS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label = agency_name.strip() or "the ad agency"
+    addr_label = f" ({agency_address.strip()})" if agency_address.strip() else ""
+    return template.replace("{agency_name}", f"{name_label}{addr_label}")
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -418,6 +431,32 @@ def normalize_billing_row(
         "jobNumber":       str(raw.get("job_number", "")).strip(),
         "notes":           str(raw.get("notes", "")).strip(),
         "sourceFile":      filename,
+    }
+
+
+def normalize_agency_subvendor_row(raw: dict, agency_name: str, filename: str) -> dict:
+    method = normalize_pymt_method(raw.get("payment_method", ""))
+    return {
+        "qualify":          "",
+        "vendorName":       clean_name(raw.get("vendor_name", "")),
+        "description":      str(raw.get("description", "")).strip(),
+        "address":          clean_address(raw.get("address", "")),
+        "city":             clean_name(raw.get("city", "")),
+        "zip":              clean_zip(raw.get("zip", "")),
+        "vendorState":      clean_state(raw.get("state", "")),
+        "invoiceDate":      normalize_date(raw.get("invoice_date", "")),
+        "invoiceNo":        str(raw.get("invoice_number", "")).strip(),
+        "invoiceAmount":    normalize_amount(raw.get("invoice_amount", 0)),
+        "receivedInvoice":  "Yes",
+        "w9ValidDate":      normalize_date(raw.get("w9_date", "")),
+        "pop":              "Yes" if raw.get("pop") else None,
+        "paymentMethod":    method,
+        "paymentNo":        normalize_pymt_number(method, raw.get("payment_number", "")),
+        "paymentEntity":    agency_name.strip(),
+        "jobNo":            str(raw.get("job_number", "")).strip(),
+        "clientBillingNo":  str(raw.get("client_billing_number", "")).strip(),
+        "notes":            str(raw.get("notes", "")).strip(),
+        "sourceFile":       filename,
     }
 
 
@@ -1043,6 +1082,59 @@ async def extract_billings(
         file_summaries.append({
             "filename": uf.filename,
             "company":  vendor_name or "unknown",
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Agency Sub-Vendors extractor ─────────────────────────────────────────────
+
+@app.post("/extract-agency-subvendors")
+async def extract_agency_subvendors(
+    files:          list[UploadFile] = File(...),
+    agency_name:    str              = Form(""),
+    agency_address: str              = Form(""),
+    x_app_secret:   str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    client        = _client()
+    system_prompt = _load_agency_subvendors_prompt(agency_name, agency_address)
+    user_text     = "Extract invoice data from these document pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no agency sub-vendor data extracted — review manually")
+            issues.append(f"{uf.filename}: no agency sub-vendor data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_agency_subvendor_row(raw, agency_name, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        vendor_label = file_rows[0]["vendorName"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  vendor_label,
             "rows":     len(file_rows),
             "issues":   errs,
         })
