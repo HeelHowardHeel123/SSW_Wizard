@@ -500,6 +500,8 @@ async def extract_invoices(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
     client = _client()
     names = [n.strip() for n in prodco_names.split(",") if n.strip()]
     system_prompt = _load_prompt(names)
@@ -534,6 +536,7 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
     for uf in files:
         data = await uf.read()
         loaded.append((uf.filename, data))
+    loaded.sort(key=lambda x: (x[0] or "").lower())
 
     # Classify each file: fringe PDF vs standalone Wrapbook register
     fringe_files   = []   # (filename, bytes)
@@ -760,6 +763,8 @@ async def extract_crew_freelance(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
     client = _client()
     names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
     system_prompt = _load_crew_freelance_prompt(names)
@@ -891,6 +896,8 @@ async def extract_talent_freelance(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
     client        = _client()
     names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
     system_prompt = _load_talent_freelance_prompt(names)
@@ -967,6 +974,8 @@ async def extract_hours_letters(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
     client        = _client()
     system_prompt = _load_hours_letter_prompt()
     user_text     = "Extract crew hours and billable amounts from this hours confirmation letter."
@@ -1038,6 +1047,8 @@ async def extract_billings(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
     client        = _client()
     names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
     system_prompt = _load_billing_prompt(vendor_name, vendor_type, names)
@@ -1101,6 +1112,8 @@ async def extract_agency_subvendors(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
     client        = _client()
     system_prompt = _load_agency_subvendors_prompt(agency_name, agency_address)
     user_text     = "Extract invoice data from these document pages."
@@ -1158,7 +1171,7 @@ async def extract_talent_endpoint(
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
     pdf_bytes_list: list[tuple[str, bytes]] = []
-    for uf in (pdf_files or []):
+    for uf in sorted(pdf_files or [], key=lambda f: (f.filename or "").lower()):
         data = await uf.read()
         if data:
             pdf_bytes_list.append((uf.filename, data))
