@@ -546,7 +546,7 @@ def normalize_retainer_billing_row(raw: dict, agency_name: str, filename: str) -
     }
 
 
-def normalize_residency_row(raw: dict, filename: str) -> dict:
+def normalize_residency_row(raw: dict, filename: str, handwritten: bool = False) -> dict:
     return {
         "documentName":   str(raw.get("document_name", "")).strip(),
         "documentType":   str(raw.get("document_type", "")).strip(),
@@ -556,6 +556,7 @@ def normalize_residency_row(raw: dict, filename: str) -> dict:
         "city":           clean_name(raw.get("city", "")),
         "zip":            clean_zip(raw.get("zip", "")),
         "state":          clean_state(raw.get("state", "")),
+        "notes":          "Handwritten - verify accuracy" if handwritten else "",
         "sourceFile":     filename,
     }
 
@@ -1403,7 +1404,7 @@ async def extract_residency_docs(
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_residency_row(raw, uf.filename))
+                    file_rows.append(normalize_residency_row(raw, uf.filename, handwritten=handwritten))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{uf.filename}: row normalization error: {e}")
