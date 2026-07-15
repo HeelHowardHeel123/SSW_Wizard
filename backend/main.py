@@ -67,6 +67,7 @@ _HOURS_LETTER_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(_
 _BILLING_PROMPT_PATH            = os.path.join(os.path.dirname(os.path.abspath(__file__)), "billing_extraction_prompt.txt")
 _AGENCY_SUBVENDORS_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_subvendors_extraction_prompt.txt")
 _AGENCY_HOURS_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_hours_prompt.txt")
+_RESIDENCY_DOCS_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "residency_docs_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -126,6 +127,11 @@ def _load_billing_prompt(vendor_name: str, vendor_type: str, prodco_names: list)
         .replace("{vendor_type}", type_label)
         .replace("{prodco_names}", prodco_label)
     )
+
+
+def _load_residency_docs_prompt() -> str:
+    with open(_RESIDENCY_DOCS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 def _load_agency_hours_prompt(agency_name: str = "") -> str:
@@ -513,6 +519,20 @@ def normalize_retainer_billing_row(raw: dict, agency_name: str, filename: str) -
         "amount":      normalize_amount(raw.get("invoice_amount", 0)),
         "vendorName":  agency_name.strip() or clean_name(raw.get("vendor_name", "")),
         "sourceFile":  filename,
+    }
+
+
+def normalize_residency_row(raw: dict, filename: str) -> dict:
+    return {
+        "documentName":   str(raw.get("document_name", "")).strip(),
+        "documentType":   str(raw.get("document_type", "")).strip(),
+        "issueDate":      normalize_date(raw.get("issue_date", "")),
+        "expirationDate": normalize_date(raw.get("expiration_date", "")),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "sourceFile":     filename,
     }
 
 
@@ -1313,6 +1333,59 @@ async def extract_retainer_billings(
         file_summaries.append({
             "filename": uf.filename,
             "company":  agency_name or "unknown",
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Residency documents extractor ────────────────────────────────────────────
+
+@app.post("/extract-residency-docs")
+async def extract_residency_docs(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_residency_docs_prompt()
+    user_text     = "Extract personal information from these residency verification documents."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no residency document data extracted — review manually")
+            issues.append(f"{uf.filename}: no residency document data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_residency_row(raw, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        name_label = file_rows[0]["documentName"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  name_label,
             "rows":     len(file_rows),
             "issues":   errs,
         })

@@ -93,6 +93,7 @@ _ENDPOINT_LABELS = {
     "agency_subvendors":   "Agency Sub-Vendors",
     "agency_hours":        "Agency Hours",
     "retainer_billings":   "Retainer Billings",
+    "residency_docs":      "Residency Documents",
 }
 
 
