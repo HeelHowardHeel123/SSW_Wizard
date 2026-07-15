@@ -66,6 +66,7 @@ _TALENT_FREELANCE_PROMPT_PATH   = os.path.join(os.path.dirname(os.path.abspath(_
 _HOURS_LETTER_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_letter_prompt.txt")
 _BILLING_PROMPT_PATH            = os.path.join(os.path.dirname(os.path.abspath(__file__)), "billing_extraction_prompt.txt")
 _AGENCY_SUBVENDORS_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_subvendors_extraction_prompt.txt")
+_AGENCY_HOURS_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_hours_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -125,6 +126,22 @@ def _load_billing_prompt(vendor_name: str, vendor_type: str, prodco_names: list)
         .replace("{vendor_type}", type_label)
         .replace("{prodco_names}", prodco_label)
     )
+
+
+def _load_agency_hours_prompt(agency_name: str = "") -> str:
+    with open(_AGENCY_HOURS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    if agency_name.strip():
+        context = (
+            f"AGENCY: {agency_name.strip()} — this is the company that wrote these letters. "
+            f"Use this name for agency_name on each row."
+        )
+    else:
+        context = (
+            "Extract the agency name from the letter header or signature block. "
+            "Include it as agency_name on each row."
+        )
+    return template.replace("{agency_context}", context)
 
 
 def _load_agency_subvendors_prompt(agency_name: str, agency_address: str = "") -> str:
@@ -457,6 +474,45 @@ def normalize_agency_subvendor_row(raw: dict, agency_name: str, filename: str) -
         "clientBillingNo":  str(raw.get("client_billing_number", "")).strip(),
         "notes":            str(raw.get("notes", "")).strip(),
         "sourceFile":       filename,
+    }
+
+
+def normalize_agency_hours_row(raw: dict, agency_name: str, filename: str) -> dict:
+    hours = raw.get("agency_hours")
+    try:
+        hours = round(float(hours), 2) if hours is not None else None
+    except (ValueError, TypeError):
+        hours = None
+
+    name = agency_name.strip() or clean_name(raw.get("agency_name", ""))
+
+    return {
+        "hoursLetter":        "Hours Letter",
+        "invoiceDate":        normalize_date(raw.get("invoice_date", "")),
+        "qualify":            "",
+        "crewName":           clean_name(raw.get("crew_name", "")),
+        "jobDescription":     str(raw.get("job_description", "")).strip(),
+        "positionCategory":   str(raw.get("position_category", "")).strip(),
+        "address":            clean_address(raw.get("address", "")),
+        "city":               clean_name(raw.get("city", "")),
+        "zip":                clean_zip(raw.get("zip", "")),
+        "state":              clean_state(raw.get("state", "")),
+        "agencyHours":        hours,
+        "agencyHoursAmount":  normalize_amount(raw.get("agency_hours_amount", 0)),
+        "hoursLetterType":    "Agency Hours Letter",
+        "datesWorked":        str(raw.get("dates_worked", "")).strip(),
+        "agencyName":         name,
+        "sourceFile":         filename,
+    }
+
+
+def normalize_retainer_billing_row(raw: dict, agency_name: str, filename: str) -> dict:
+    return {
+        "invoiceNo":   str(raw.get("invoice_number", "")).strip(),
+        "invoiceDate": normalize_date(raw.get("invoice_date", "")),
+        "amount":      normalize_amount(raw.get("invoice_amount", 0)),
+        "vendorName":  agency_name.strip() or clean_name(raw.get("vendor_name", "")),
+        "sourceFile":  filename,
     }
 
 
@@ -1148,6 +1204,115 @@ async def extract_agency_subvendors(
         file_summaries.append({
             "filename": uf.filename,
             "company":  vendor_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Agency Hours extractor ───────────────────────────────────────────────────
+
+@app.post("/extract-agency-hours")
+async def extract_agency_hours(
+    files:        list[UploadFile] = File(...),
+    agency_name:  str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_agency_hours_prompt(agency_name)
+    user_text     = "Extract crew hours data from these agency hours letter pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no agency hours data extracted — review manually")
+            issues.append(f"{uf.filename}: no agency hours data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_agency_hours_row(raw, agency_name, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        agency_label = agency_name or (file_rows[0]["agencyName"] if file_rows else "unknown")
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  agency_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Retainer Billings extractor ───────────────────────────────────────────────
+
+@app.post("/extract-retainer-billings")
+async def extract_retainer_billings(
+    files:        list[UploadFile] = File(...),
+    agency_name:  str              = Form(""),
+    prodco_names: str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
+    system_prompt = _load_billing_prompt(agency_name, "agency", names)
+    user_text     = "Extract retainer billing invoice data from these document pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no retainer billing data extracted — review manually")
+            issues.append(f"{uf.filename}: no retainer billing data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_retainer_billing_row(raw, agency_name, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  agency_name or "unknown",
             "rows":     len(file_rows),
             "issues":   errs,
         })

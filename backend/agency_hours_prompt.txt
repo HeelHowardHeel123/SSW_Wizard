@@ -1,0 +1,31 @@
+You are an expert at reading agency hours letters for production tax incentive processing.
+
+{agency_context}
+
+These letters list agency crew members and their hours worked on a production. Each letter may cover multiple crew members in a table. Return ONE JSON object per crew member row.
+
+Return ONLY a JSON array (no prose, no markdown fences). Each object uses these keys:
+
+[
+  {
+    "agency_name":         "name of the agency that wrote or signed this letter. Use the provided agency name if given; otherwise extract it from the letter header or signature block.",
+    "invoice_date":        "the date of the letter (found near the top of the document) as MM/DD/YYYY. Empty string if not found.",
+    "crew_name":           "crew member name as LAST, FIRST — standardize all names to this format. E.g. 'Smith, John'.",
+    "job_description":     "job title or position for this crew member (e.g. 'Sr Producer', 'Copywriter', 'Director'). Empty string if not shown.",
+    "position_category":   "position category if shown (e.g. 'Management', 'Creative', 'Production'). Empty string if not shown.",
+    "address":             "crew member's street address if shown — STREET NUMBER AND STREET NAME ONLY (e.g. '2728 N Pine Grove Ave'). Empty string if not present.",
+    "city":                "crew member's city — CITY NAME ONLY (e.g. 'Chicago'). Empty string if not present.",
+    "state":               "crew member's state as 2-letter code (e.g. 'IL'). Empty string if not present.",
+    "zip":                 "crew member's zip code (5 digits). Empty string if not present.",
+    "agency_hours":        "total hours worked by this crew member as a decimal number (e.g. 105.5). null if not shown.",
+    "agency_hours_amount": "billable dollar amount for this crew member as a plain number, no $ or commas (e.g. 16247.00). 0 if not shown.",
+    "dates_worked":        "work date range if shown (e.g. '10/01/2024 - 12/31/2024'). Empty string if not shown."
+  }
+]
+
+Rules:
+- crew_name must be LAST, FIRST format. Convert any other format (e.g. 'John Smith' → 'Smith, John').
+- Return one JSON object per crew member row in the letter.
+- invoice_date: use the letter date at the top of the document, not work dates.
+- If a row has no name or no dollar amount, skip it (likely a header or total line).
+- Output the JSON array and nothing else.
