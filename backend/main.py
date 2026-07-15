@@ -207,8 +207,32 @@ def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices
     return []
 
 
-def _extract_from_file(filename, data, system_prompt, client, user_text="Extract all invoices from these document pages."):
-    images = _file_to_images_b64(filename, data)
+def _is_handwritten(filename: str, data: bytes, client) -> bool:
+    """Render first page only at low res and ask GPT if the form is handwritten."""
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+        img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+        doc.close()
+    except Exception:
+        return False
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Look at the data entry fields on this form (name, address, dates, etc.) — NOT the signature lines. Are those data fields filled in by hand (handwritten) or typed/digital? Reply with exactly one word: 'handwritten' or 'typed'."},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}", "detail": "low"}},
+            ],
+        }],
+        max_tokens=10,
+        temperature=0,
+    )
+    return "handwritten" in resp.choices[0].message.content.strip().lower()
+
+
+def _extract_from_file(filename, data, system_prompt, client, user_text="Extract all invoices from these document pages.", dpi_scale=2.0):
+    images = _file_to_images_b64(filename, data, dpi_scale=dpi_scale)
     MAX_BYTES = 45 * 1024 * 1024
     batches, cur, cur_size = [], [], 0
     for img in images:
@@ -1362,8 +1386,11 @@ async def extract_residency_docs(
         data = await uf.read()
         errs: list[str] = []
 
+        handwritten = _is_handwritten(uf.filename, data, client)
+        dpi_scale   = 4.17 if handwritten else 2.0  # ~300 DPI for handwritten, ~144 for typed
+
         try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text, dpi_scale=dpi_scale)
         except Exception as e:
             errs.append(str(e))
             issues.append(f"{uf.filename}: {e}")
