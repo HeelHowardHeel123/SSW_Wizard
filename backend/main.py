@@ -546,7 +546,58 @@ def normalize_retainer_billing_row(raw: dict, agency_name: str, filename: str) -
     }
 
 
-def normalize_residency_row(raw: dict, filename: str, handwritten: bool = False) -> dict:
+def _i9_notes(raw: dict, handwritten: bool, shoot_date: str) -> str:
+    notes = []
+
+    if handwritten:
+        notes.append("Handwritten - verify accuracy")
+
+    if str(raw.get("document_type", "")).strip() != "I-9":
+        return "; ".join(notes)
+
+    if raw.get("employee_signed") is False:
+        notes.append("Missing employee signature")
+
+    sig_date = normalize_date(str(raw.get("employee_signature_date") or ""))
+    if sig_date and shoot_date:
+        try:
+            from datetime import datetime
+            diff = abs((datetime.strptime(sig_date, "%m/%d/%Y") - datetime.strptime(shoot_date, "%m/%d/%Y")).days)
+            if diff > 90:
+                notes.append(f"Signature date ({sig_date}) is not close to shoot date ({shoot_date})")
+        except ValueError:
+            pass
+
+    exp_date = normalize_date(str(raw.get("expiration_date") or ""))
+    dob      = normalize_date(str(raw.get("date_of_birth") or ""))
+    if exp_date and dob:
+        try:
+            from datetime import datetime
+            exp_dt = datetime.strptime(exp_date, "%m/%d/%Y")
+            dob_dt = datetime.strptime(dob,      "%m/%d/%Y")
+            if exp_dt.month != dob_dt.month or exp_dt.day != dob_dt.day:
+                notes.append(f"Work auth expiration ({exp_date}) month/day does not match birth date ({dob})")
+        except ValueError:
+            pass
+
+    missing = []
+    if raw.get("employer_signed") is False:
+        missing.append("employer signature")
+    if not str(raw.get("employer_signature_date") or "").strip():
+        missing.append("employer date")
+    if not str(raw.get("first_day_of_employment") or "").strip():
+        missing.append("first day of employment")
+    if not str(raw.get("employer_name") or "").strip():
+        missing.append("employer name")
+    if not str(raw.get("employer_address") or "").strip():
+        missing.append("employer address")
+    if missing:
+        notes.append("Missing employer section: " + ", ".join(missing))
+
+    return "; ".join(notes)
+
+
+def normalize_residency_row(raw: dict, filename: str, handwritten: bool = False, shoot_date: str = "") -> dict:
     return {
         "documentName":   str(raw.get("document_name", "")).strip(),
         "documentType":   str(raw.get("document_type", "")).strip(),
@@ -556,7 +607,7 @@ def normalize_residency_row(raw: dict, filename: str, handwritten: bool = False)
         "city":           clean_name(raw.get("city", "")),
         "zip":            clean_zip(raw.get("zip", "")),
         "state":          clean_state(raw.get("state", "")),
-        "notes":          "Handwritten - verify accuracy" if handwritten else "",
+        "notes":          _i9_notes(raw, handwritten, shoot_date),
         "sourceFile":     filename,
     }
 
@@ -1370,6 +1421,7 @@ async def extract_retainer_billings(
 @app.post("/extract-residency-docs")
 async def extract_residency_docs(
     files:        list[UploadFile] = File(...),
+    shoot_date:   str              = Form(default=""),
     x_app_secret: str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
@@ -1404,7 +1456,7 @@ async def extract_residency_docs(
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_residency_row(raw, uf.filename, handwritten=handwritten))
+                    file_rows.append(normalize_residency_row(raw, uf.filename, handwritten=handwritten, shoot_date=shoot_date))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{uf.filename}: row normalization error: {e}")

@@ -15,13 +15,31 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
     "address":          "the person's street address — STREET NUMBER AND STREET NAME ONLY (e.g. '2728 N Pine Grove Ave'). Do NOT include city, state, or zip. Empty string if not present.",
     "city":             "city name ONLY. Empty string if not present.",
     "state":            "2-letter state abbreviation (e.g. 'IL'). Empty string if not present.",
-    "zip":              "5-digit zip code. Empty string if not present."
+    "zip":              "5-digit zip code. Empty string if not present.",
+    "employee_signed":         null,
+    "employee_signature_date": null,
+    "date_of_birth":           null,
+    "employer_signed":         null,
+    "employer_signature_date": null,
+    "first_day_of_employment": null,
+    "employer_name":           null,
+    "employer_address":        null
   }
 ]
 
 Rules:
 - Return ONE object per document. If a PDF has front and back images of the same ID card, that is still ONE document — return one object.
 - If a PDF contains multiple different documents (e.g. a driver's license and a social security card), return one object per document.
+- For non-I-9 documents: set employee_signed, employee_signature_date, date_of_birth, employer_signed, employer_signature_date, first_day_of_employment, employer_name, employer_address to null.
 - For I-9 forms (any version — 1-page or 2-page): extract the employee's name from Section 1 and the employee's address from Section 1. Document type = 'I-9'. issue_date = empty string. expiration_date = empty string UNLESS the employee specifically checked box 4 ("A noncitizen authorized to work until") in Section 1 AND wrote an expiration date on that same line — in that case use that date. DO NOT use expiration dates from Section 2 (the employer document verification table) — those belong to the identity documents the employee presented, not to the employee's work authorization. DO NOT use the "Expires" date printed in the form header — that is the form version expiration, not the employee's authorization.
+- For I-9 forms, also populate these fields:
+  - employee_signed: true if there is a signature (any handwriting or mark) in the Signature of Employee field in Section 1. false if that field is completely blank.
+  - employee_signature_date: the date in the "Today's Date" field next to the employee signature in Section 1, MM/DD/YYYY. Empty string if blank.
+  - date_of_birth: from the Date of Birth field in Section 1, MM/DD/YYYY. Empty string if blank.
+  - employer_signed: true if there is a signature in Section 2's "Signature of Employer or Authorized Representative" field. false if blank.
+  - employer_signature_date: the date in Section 2's "Today's Date" field next to the employer signature, MM/DD/YYYY. Empty string if blank.
+  - first_day_of_employment: from the "First Day of Employment (mm/dd/yyyy)" field in Section 2, MM/DD/YYYY. Empty string if blank.
+  - employer_name: the "Employer's Business or Organization Name" from Section 2. Empty string if blank.
+  - employer_address: the full "Employer's Business or Organization Address" from Section 2 (include city, state, zip — this is the employer's address, not the employee's). Empty string if blank.
 - address: street number and street name only — never include city, state, or zip in this field.
 - Output the JSON array and nothing else.
