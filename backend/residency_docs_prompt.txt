@@ -12,7 +12,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
     "document_type":    "the type of document. Use one of these labels: 'Driver's License', 'State ID', 'I-9', 'FOID Card', 'Medical Cannabis Card', 'Passport', 'Permanent Resident Card'. If none of these match, use the document's own label.",
     "issue_date":       "the issue or effective date in MM/DD/YYYY format. Empty string if not present.",
     "expiration_date":  "the expiration date in MM/DD/YYYY format. Empty string if the document does not have one or it is not visible.",
-    "address":          "the person's street address — STREET NUMBER AND STREET NAME ONLY (e.g. '2728 N Pine Grove Ave'). Do NOT include city, state, or zip. Empty string if not present.",
+    "address":          "the person's street address including apartment/unit/suite number if present (e.g. '2728 N Pine Grove Ave' or '125 S Green St Apt 808A'). Do NOT include city, state, or zip. Empty string if not present.",
     "city":             "city name ONLY. Empty string if not present.",
     "state":            "2-letter state abbreviation (e.g. 'IL'). Empty string if not present.",
     "zip":              "5-digit zip code. Empty string if not present.",
@@ -41,5 +41,5 @@ Rules:
   - first_day_of_employment: from the "First Day of Employment (mm/dd/yyyy)" field in Section 2, MM/DD/YYYY. Empty string if blank.
   - employer_name: the "Employer's Business or Organization Name" from Section 2. Empty string if blank.
   - employer_address: the full "Employer's Business or Organization Address" from Section 2 (include city, state, zip — this is the employer's address, not the employee's). Empty string if blank.
-- address: street number and street name only — never include city, state, or zip in this field.
+- address: street number, street name, and apartment/unit number if present — never include city, state, or zip in this field.
 - Output the JSON array and nothing else.

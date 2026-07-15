@@ -84,6 +84,13 @@ def _client():
     return OpenAI(api_key=OPENAI_API_KEY)
 
 
+def _anthropic_client():
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(500, "Server is missing ANTHROPIC_API_KEY.")
+    import anthropic as ant
+    return ant.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
 def _load_prompt(prodco_names):
     with open(_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
@@ -160,8 +167,13 @@ def _load_agency_subvendors_prompt(agency_name: str, agency_address: str = "") -
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
 
-def _file_to_images_b64(filename, data, dpi_scale=2.0):
-    """Render every page of a PDF (or a single image file) to base64 PNGs."""
+def _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=None):
+    """Render every page of a PDF (or a single image file) to base64 PNGs.
+
+    max_dim: if set, downsamples any page whose rendered width or height
+    exceeds this pixel count (preserving aspect ratio). Useful for
+    high-resolution photos embedded in PDFs (e.g. driver's license scans).
+    """
     lower = filename.lower()
     if lower.endswith((".png", ".jpg", ".jpeg")):
         doc = fitz.open(stream=data, filetype="png" if lower.endswith(".png") else "jpg")
@@ -171,6 +183,9 @@ def _file_to_images_b64(filename, data, dpi_scale=2.0):
     images = []
     for page in doc:
         pix = page.get_pixmap(matrix=fitz.Matrix(dpi_scale, dpi_scale))
+        if max_dim and (pix.width > max_dim or pix.height > max_dim):
+            factor = min(max_dim / pix.width, max_dim / pix.height)
+            pix = page.get_pixmap(matrix=fitz.Matrix(dpi_scale * factor, dpi_scale * factor))
         images.append(base64.b64encode(pix.tobytes("png")).decode())
     doc.close()
     return images
@@ -205,6 +220,53 @@ def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices
             except Exception:
                 return []
     return []
+
+
+# ── Claude vision call ───────────────────────────────────────────────────────
+
+def _call_claude(images_b64, system_prompt, client, user_text="Extract data from these document pages."):
+    content = []
+    for img in images_b64:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": img},
+        })
+    content.append({"type": "text", "text": user_text})
+    resp = client.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=2000,
+        system=system_prompt,
+        messages=[{"role": "user", "content": content}],
+    )
+    raw = resp.content[0].text.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                return []
+    return []
+
+
+def _extract_from_file_claude(filename, data, system_prompt, client, user_text="Extract data from these document pages.", dpi_scale=2.0, max_dim=None):
+    images = _file_to_images_b64(filename, data, dpi_scale=dpi_scale, max_dim=max_dim)
+    MAX_BYTES = 40 * 1024 * 1024
+    batches, cur, cur_size = [], [], 0
+    for img in images:
+        approx = len(img) * 3 // 4
+        if cur and cur_size + approx > MAX_BYTES:
+            batches.append(cur); cur, cur_size = [img], approx
+        else:
+            cur.append(img); cur_size += approx
+    if cur:
+        batches.append(cur)
+    results = []
+    for batch in batches:
+        results.extend(_call_claude(batch, system_prompt, client, user_text=user_text))
+    return results
 
 
 def _is_handwritten(filename: str, data: bytes, client) -> bool:
@@ -1429,7 +1491,8 @@ async def extract_residency_docs(
 
     files = sorted(files, key=lambda f: (f.filename or "").lower())
 
-    client        = _client()
+    oai_client    = _client()           # OpenAI — used only for handwriting detection
+    claude_client = _anthropic_client() # Anthropic Claude — used for extraction
     system_prompt = _load_residency_docs_prompt()
     user_text     = "Extract personal information from these residency verification documents."
 
@@ -1439,11 +1502,14 @@ async def extract_residency_docs(
         data = await uf.read()
         errs: list[str] = []
 
-        handwritten = _is_handwritten(uf.filename, data, client)
+        handwritten = _is_handwritten(uf.filename, data, oai_client)
         dpi_scale   = 4.17 if handwritten else 2.0  # ~300 DPI for handwritten, ~144 for typed
 
         try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text, dpi_scale=dpi_scale)
+            raw_list = _extract_from_file_claude(
+                uf.filename, data, system_prompt, claude_client,
+                user_text=user_text, dpi_scale=dpi_scale, max_dim=2000,
+            )
         except Exception as e:
             errs.append(str(e))
             issues.append(f"{uf.filename}: {e}")
