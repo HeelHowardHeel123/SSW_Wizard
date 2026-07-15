@@ -22,6 +22,6 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
 Rules:
 - Return ONE object per document. If a PDF has front and back images of the same ID card, that is still ONE document — return one object.
 - If a PDF contains multiple different documents (e.g. a driver's license and a social security card), return one object per document.
-- For I-9 forms: extract the employee's name from Section 1, the date the form was completed, and the employee's address from Section 1. Document type = 'I-9'. Expiration date = empty string.
+- For I-9 forms: extract the employee's name from Section 1 and the employee's address from Section 1. Document type = 'I-9'. issue_date = empty string (I-9s do not have an issue date). expiration_date = the employment authorization expiration date from Section 1 if present, otherwise empty string.
 - address: street number and street name only — never include city, state, or zip in this field.
 - Output the JSON array and nothing else.
