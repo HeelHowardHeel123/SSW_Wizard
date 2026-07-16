@@ -620,7 +620,7 @@ def _i9_notes(raw: dict, handwritten: bool, shoot_date: str) -> str:
     if handwritten:
         notes.append("Handwritten - verify accuracy")
 
-    if str(raw.get("document_type", "")).strip() != "I-9":
+    if str(raw.get("document_type", "")).strip() != "I9":
         return "; ".join(notes)
 
     if raw.get("employee_signed") is False:
