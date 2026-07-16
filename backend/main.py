@@ -1681,6 +1681,11 @@ async def extract_diversity_docs(
     return {"rows": rows, "issues": issues}
 
 
+class _MatchNamesRequest(BaseModel):
+    residency_names: list[str] = []
+    diversity_names: list[str] = []
+
+
 @app.post("/match-names")
 async def match_names(
     payload:      _MatchNamesRequest,
@@ -1807,11 +1812,6 @@ async def extract_talent_endpoint(
 
 
 # ── Consolidated run summary email ───────────────────────────────────────────
-
-class _MatchNamesRequest(BaseModel):
-    residency_names: list[str] = []
-    diversity_names: list[str] = []
-
 
 class _FileSummaryIn(BaseModel):
     filename: str = ""
