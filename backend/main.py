@@ -38,6 +38,8 @@ import re
 import io
 import json
 import base64
+import asyncio
+import functools
 
 import fitz  # PyMuPDF
 import pdfplumber
@@ -1571,75 +1573,103 @@ async def extract_residency_docs(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
-    files = sorted(files, key=lambda f: (f.filename or "").lower())
-
-    oai_client    = _client()           # OpenAI — used only for handwriting detection
-    claude_client = _anthropic_client() # Anthropic Claude — used for extraction
+    oai_client    = _client()
+    claude_client = _anthropic_client()
     system_prompt = _load_residency_docs_prompt()
-    user_text     = "Extract personal information from these residency verification documents."
+    div_prompt    = _load_diversity_form_prompt()
+    res_user_text = "Extract personal information from these residency verification documents."
+
+    # Read all files upfront while we still have the UploadFile handles
+    loaded_res = []
+    for uf in sorted(files, key=lambda f: (f.filename or "").lower()):
+        data = await uf.read()
+        loaded_res.append((uf.filename, data))
+
+    loaded_div = []
+    for uf in sorted(diversity_files or [], key=lambda f: (f.filename or "").lower()):
+        data = await uf.read()
+        loaded_div.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)  # max 5 AI calls in-flight at once
+
+    async def process_one_residency(filename, data):
+        async with sem:
+            hw  = await loop.run_in_executor(None, _is_handwritten, filename, data, oai_client)
+            dpi = 4.17 if hw else 2.0
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        _extract_from_file_claude,
+                        filename, data, system_prompt, claude_client,
+                        user_text=res_user_text, dpi_scale=dpi, max_dim=2000, max_pages=4,
+                    )
+                )
+            except Exception as e:
+                return filename, hw, [], [str(e)]
+            return filename, hw, raw_list, []
+
+    async def process_one_diversity(filename, data):
+        async with sem:
+            # DCEO tracking sheets are always printed — skip handwriting check, hardcode 2.0 DPI
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        _extract_from_file_claude,
+                        filename, data, div_prompt, claude_client,
+                        user_text="Extract diversity information from this form.",
+                        dpi_scale=2.0, max_dim=2000, max_pages=2,
+                    )
+                )
+            except Exception as e:
+                return filename, [], [str(e)]
+            return filename, raw_list, []
+
+    # Fan out all files concurrently (semaphore limits to 5 in-flight at once)
+    res_tasks  = [process_one_residency(fn, d) for fn, d in loaded_res]
+    div_tasks  = [process_one_diversity(fn, d) for fn, d in loaded_div]
+    all_results = await asyncio.gather(*(res_tasks + div_tasks))
+    res_results = all_results[:len(loaded_res)]
+    div_results = all_results[len(loaded_res):]
 
     rows, issues, file_summaries = [], [], []
 
-    for uf in files:
-        data = await uf.read()
-        errs: list[str] = []
-
-        handwritten = _is_handwritten(uf.filename, data, oai_client)
-        dpi_scale   = 4.17 if handwritten else 2.0  # ~300 DPI for handwritten, ~144 for typed
-
-        try:
-            raw_list = _extract_from_file_claude(
-                uf.filename, data, system_prompt, claude_client,
-                user_text=user_text, dpi_scale=dpi_scale, max_dim=2000, max_pages=4,
-            )
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
-
-        file_rows: list[dict] = []
+    for filename, handwritten, raw_list, errs in res_results:
+        for e in errs:
+            issues.append(f"{filename}: {e}")
+        file_rows = []
+        file_errs = list(errs)
         if not raw_list:
-            errs.append("no residency document data extracted — review manually")
-            issues.append(f"{uf.filename}: no residency document data extracted")
+            file_errs.append("no residency document data extracted — review manually")
+            issues.append(f"{filename}: no residency document data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_residency_row(raw, uf.filename, handwritten=handwritten, shoot_date=shoot_date))
+                    file_rows.append(normalize_residency_row(raw, filename, handwritten=handwritten, shoot_date=shoot_date))
                 except Exception as e:
-                    errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
-
+                    msg = f"row normalization error: {e}"
+                    issues.append(f"{filename}: {msg}")
+                    file_errs.append(msg)
         rows.extend(file_rows)
         name_label = file_rows[0]["documentName"] if file_rows else "unknown"
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  name_label,
             "rows":     len(file_rows),
-            "issues":   errs,
+            "issues":   file_errs,
         })
 
-    # ── Process diversity forms ──────────────────────────────────────────────
     diversity_rows: list[dict] = []
-    if diversity_files:
-        div_prompt = _load_diversity_form_prompt()
-        for uf in sorted(diversity_files, key=lambda f: (f.filename or "").lower()):
-            data = await uf.read()
-            handwritten = _is_handwritten(uf.filename, data, oai_client)
-            dpi_scale   = 4.17 if handwritten else 2.0
+    for filename, raw_list, errs in div_results:
+        for e in errs:
+            issues.append(f"{filename}: {e}")
+        for raw in raw_list:
             try:
-                raw_list = _extract_from_file_claude(
-                    uf.filename, data, div_prompt, claude_client,
-                    user_text="Extract diversity information from this form.",
-                    dpi_scale=dpi_scale, max_dim=2000, max_pages=2,
-                )
+                diversity_rows.append(normalize_diversity_row(raw, filename))
             except Exception as e:
-                issues.append(f"{uf.filename}: {e}")
-                raw_list = []
-            for raw in raw_list:
-                try:
-                    diversity_rows.append(normalize_diversity_row(raw, uf.filename))
-                except Exception as e:
-                    issues.append(f"{uf.filename}: diversity row error: {e}")
+                issues.append(f"{filename}: diversity row error: {e}")
 
     if diversity_rows:
         rows = _merge_residency_diversity(rows, diversity_rows)
