@@ -1,0 +1,20 @@
+You extract diversity information from Illinois Film Tax Credit Tracking Sheets for production tax incentive processing.
+
+For each form, return ONE JSON object.
+
+Return ONLY a JSON array (no prose, no markdown fences). Each object uses these keys:
+
+[
+  {
+    "name":      "the employee's full name in 'Last, First' format using proper title case (e.g. 'Smith, John' or 'Acosta-Conley, Consuelo'). Take the name from the Employee Name field.",
+    "sex":       "MALE if Male is checked in the 'Sex as Listed on Driver's License or State ID' section, FEMALE if Female is checked. Empty string if neither is checked.",
+    "diversity": "the race/ethnicity code for the single checked option in the Race/Ethnicity section. Use exactly one of these codes: 'AA' (Black or African American), 'ASIAN' (Asian), 'WHITE' (Caucasian/White American), 'HISP' (Hispanic or Latino), 'NA' (American Indian or Alaska Native). Empty string if 'Decline to answer' is marked or no option is checked."
+  }
+]
+
+Rules:
+- Return ONE object per form.
+- A checkmark, X, slash, or any pen mark next to or near a checkbox counts as that option being selected.
+- For sex: look only at the 'Sex as Listed on Driver's License or State ID' checkboxes (Female / Male). Ignore the Gender Identity section entirely.
+- For diversity: look only at the Race/Ethnicity checkboxes. Return the code for the single checked option.
+- Output the JSON array and nothing else.

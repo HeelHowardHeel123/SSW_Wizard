@@ -68,6 +68,7 @@ _BILLING_PROMPT_PATH            = os.path.join(os.path.dirname(os.path.abspath(_
 _AGENCY_SUBVENDORS_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_subvendors_extraction_prompt.txt")
 _AGENCY_HOURS_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_hours_prompt.txt")
 _RESIDENCY_DOCS_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "residency_docs_prompt.txt")
+_DIVERSITY_FORM_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diversity_form_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -138,6 +139,11 @@ def _load_billing_prompt(vendor_name: str, vendor_type: str, prodco_names: list)
 
 def _load_residency_docs_prompt() -> str:
     with open(_RESIDENCY_DOCS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _load_diversity_form_prompt() -> str:
+    with open(_DIVERSITY_FORM_PROMPT_PATH, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -665,6 +671,73 @@ def _i9_notes(raw: dict, handwritten: bool, shoot_date: str) -> str:
     return "; ".join(notes)
 
 
+def normalize_diversity_row(raw: dict, filename: str) -> dict:
+    sex = str(raw.get("sex", "")).strip().upper()
+    diversity = str(raw.get("diversity", "")).strip().upper()
+    if sex not in ("MALE", "FEMALE"):
+        sex = ""
+    if diversity not in ("AA", "ASIAN", "WHITE", "HISP", "NA"):
+        diversity = ""
+    return {
+        "name":       str(raw.get("name", "")).strip().title(),
+        "sex":        sex,
+        "diversity":  diversity,
+        "sourceFile": filename,
+    }
+
+
+def _last_name_key(name: str) -> str:
+    last = name.split(",")[0] if "," in name else name
+    return re.sub(r"[^a-z]", "", last.lower())
+
+
+def _merge_residency_diversity(residency_rows: list, diversity_rows: list) -> list:
+    div_map: dict = {}
+    for d in diversity_rows:
+        key = _last_name_key(d["name"])
+        div_map.setdefault(key, []).append(d)
+
+    matched_keys: set = set()
+    merged = []
+
+    for row in residency_rows:
+        key = _last_name_key(row.get("documentName", ""))
+        divs = div_map.get(key, [])
+        if divs:
+            matched_keys.add(key)
+            row["sex"]       = divs[0].get("sex", "")
+            row["diversity"] = divs[0].get("diversity", "")
+            if len(divs) > 1:
+                note = "Multiple diversity forms - verify manually"
+                existing = row.get("notes", "")
+                row["notes"] = f"{existing}; {note}".strip("; ") if existing else note
+        else:
+            row.setdefault("sex", "")
+            row.setdefault("diversity", "")
+        merged.append(row)
+
+    for key, divs in div_map.items():
+        if key in matched_keys:
+            continue
+        note = "Multiple diversity forms - verify manually" if len(divs) > 1 else ""
+        merged.append({
+            "documentName":   divs[0]["name"],
+            "documentType":   "",
+            "issueDate":      "",
+            "expirationDate": "",
+            "address":        "",
+            "city":           "",
+            "zip":            "",
+            "state":          "",
+            "notes":          note,
+            "sex":            divs[0].get("sex", ""),
+            "diversity":      divs[0].get("diversity", ""),
+            "sourceFile":     divs[0].get("sourceFile", ""),
+        })
+
+    return merged
+
+
 def normalize_residency_row(raw: dict, filename: str, handwritten: bool = False, shoot_date: str = "") -> dict:
     return {
         "documentName":   str(raw.get("document_name", "")).strip().title(),
@@ -676,6 +749,8 @@ def normalize_residency_row(raw: dict, filename: str, handwritten: bool = False,
         "zip":            clean_zip(raw.get("zip", "")),
         "state":          clean_state(raw.get("state", "")),
         "notes":          _i9_notes(raw, handwritten, shoot_date),
+        "sex":            "",
+        "diversity":      "",
         "sourceFile":     filename,
     }
 
@@ -1488,9 +1563,10 @@ async def extract_retainer_billings(
 
 @app.post("/extract-residency-docs")
 async def extract_residency_docs(
-    files:        list[UploadFile] = File(...),
-    shoot_date:   str              = Form(default=""),
-    x_app_secret: str              = Header(default=""),
+    files:           list[UploadFile] = File(...),
+    diversity_files: list[UploadFile] = File(default=[]),
+    shoot_date:      str              = Form(default=""),
+    x_app_secret:    str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -1541,6 +1617,32 @@ async def extract_residency_docs(
             "rows":     len(file_rows),
             "issues":   errs,
         })
+
+    # ── Process diversity forms ──────────────────────────────────────────────
+    diversity_rows: list[dict] = []
+    if diversity_files:
+        div_prompt = _load_diversity_form_prompt()
+        for uf in sorted(diversity_files, key=lambda f: (f.filename or "").lower()):
+            data = await uf.read()
+            handwritten = _is_handwritten(uf.filename, data, oai_client)
+            dpi_scale   = 4.17 if handwritten else 2.0
+            try:
+                raw_list = _extract_from_file_claude(
+                    uf.filename, data, div_prompt, claude_client,
+                    user_text="Extract diversity information from this form.",
+                    dpi_scale=dpi_scale, max_dim=2000, max_pages=2,
+                )
+            except Exception as e:
+                issues.append(f"{uf.filename}: {e}")
+                raw_list = []
+            for raw in raw_list:
+                try:
+                    diversity_rows.append(normalize_diversity_row(raw, uf.filename))
+                except Exception as e:
+                    issues.append(f"{uf.filename}: diversity row error: {e}")
+
+    if diversity_rows:
+        rows = _merge_residency_diversity(rows, diversity_rows)
 
     return {"rows": rows, "issues": issues, "files": file_summaries}
 
