@@ -71,6 +71,7 @@ _AGENCY_SUBVENDORS_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(_
 _AGENCY_HOURS_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_hours_prompt.txt")
 _RESIDENCY_DOCS_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "residency_docs_prompt.txt")
 _DIVERSITY_FORM_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diversity_form_prompt.txt")
+_CALL_SHEET_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "call_sheet_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -146,6 +147,11 @@ def _load_residency_docs_prompt() -> str:
 
 def _load_diversity_form_prompt() -> str:
     with open(_DIVERSITY_FORM_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _load_call_sheet_prompt() -> str:
+    with open(_CALL_SHEET_PROMPT_PATH, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -1748,6 +1754,199 @@ async def match_names(
             mapping = {}
 
     return {"mapping": mapping}
+
+
+# ── Call sheet extractor ──────────────────────────────────────────────────────
+
+def _call_claude_call_sheet(images_b64: list, system_prompt: str, client) -> list:
+    """Send a batch of call sheet page images to Claude.
+
+    Returns a list of {date, crew} dicts — one entry per page in the batch.
+    Sending all pages from one file at once lets Claude infer missing years
+    from surrounding context (e.g., Day 3 lacks a year but Day 1 shows 2023).
+    """
+    content = []
+    for img in images_b64:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": img},
+        })
+    content.append({
+        "type": "text",
+        "text": (
+            f"This document has {len(images_b64)} page(s). "
+            "Extract the shoot date and crew/talent list from each page. "
+            "Return a JSON array with exactly one object per page, in page order."
+        ),
+    })
+    resp = client.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        system=system_prompt,
+        messages=[{"role": "user", "content": content}],
+    )
+    text_block = next((b for b in resp.content if b.type == "text"), None)
+    if not text_block:
+        return []
+    raw = text_block.text.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        m = re.search(r'\[.*\]', raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                return []
+    return []
+
+
+def _normalize_cs_date(val: str) -> str:
+    """Normalize various date formats to MM/DD/YYYY.
+
+    Claude may return dates in many formats: "01/30/2023", "1/30/23",
+    "2023-01-30", "January 30, 2023", etc.  We handle the common patterns
+    and pass through anything we can't parse so issues are surfaced.
+    """
+    if not val:
+        return ""
+    s = str(val).strip()
+    # Already MM/DD/YYYY
+    if re.match(r'^\d{2}/\d{2}/\d{4}$', s):
+        return s
+    # M/D/YYYY or MM/DD/YYYY with single-digit parts
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', s)
+    if m:
+        return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}/{m.group(3)}"
+    # MM/DD/YY
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2})$', s)
+    if m:
+        yr = m.group(3)
+        year = f"20{yr}" if int(yr) < 50 else f"19{yr}"
+        return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}/{year}"
+    # YYYY-MM-DD
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', s)
+    if m:
+        return f"{m.group(2)}/{m.group(3)}/{m.group(1)}"
+    return s
+
+
+def _cs_date_sort_key(d: str):
+    try:
+        parts = d.split("/")
+        return (int(parts[2]), int(parts[0]), int(parts[1]))
+    except Exception:
+        return (9999, 0, 0)
+
+
+@app.post("/extract-call-sheet")
+async def extract_call_sheet(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    if not files:
+        return {"crew": [], "shoot_dates": [], "issues": []}
+
+    claude_client = _anthropic_client()
+    system_prompt = _load_call_sheet_prompt()
+
+    loaded = []
+    for uf in sorted(files, key=lambda f: (f.filename or "").lower()):
+        data = await uf.read()
+        if data:
+            loaded.append((uf.filename, data))
+
+    if not loaded:
+        return {"crew": [], "shoot_dates": [], "issues": []}
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def process_file(filename, data):
+        async with sem:
+            try:
+                images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_dim=1800)
+            except Exception as e:
+                return filename, [], [f"{filename}: {e}"]
+
+            # Batch pages to stay under Claude's 40 MB image limit per call
+            MAX_BYTES = 40 * 1024 * 1024
+            batches, cur, cur_size = [], [], 0
+            for img in images:
+                approx = len(img) * 3 // 4
+                if cur and cur_size + approx > MAX_BYTES:
+                    batches.append(cur)
+                    cur, cur_size = [img], approx
+                else:
+                    cur.append(img)
+                    cur_size += approx
+            if cur:
+                batches.append(cur)
+
+            page_results, file_issues = [], []
+            for batch in batches:
+                try:
+                    result = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            _call_claude_call_sheet,
+                            batch, system_prompt, claude_client,
+                        )
+                    )
+                    if isinstance(result, list):
+                        page_results.extend(result)
+                except Exception as e:
+                    file_issues.append(f"{filename}: {e}")
+
+            return filename, page_results, file_issues
+
+    results = await asyncio.gather(*[process_file(fn, d) for fn, d in loaded])
+
+    all_page_data, issues = [], []
+    for filename, page_results, file_issues in results:
+        issues.extend(file_issues)
+        for page in page_results:
+            if isinstance(page, dict):
+                all_page_data.append(page)
+
+    # Aggregate: deduplicate crew across all pages/files
+    shoot_dates_set: set = set()
+    crew_by_key: dict = {}
+
+    for page in all_page_data:
+        raw_date = page.get("date") or ""
+        date_str = _normalize_cs_date(str(raw_date)) if raw_date else ""
+        if date_str:
+            shoot_dates_set.add(date_str)
+
+        for person in page.get("crew") or []:
+            if not isinstance(person, dict):
+                continue
+            name     = (person.get("name") or "").strip()
+            position = (person.get("position") or "").strip()
+            if not name:
+                continue
+            key = name.lower().strip()
+            if key not in crew_by_key:
+                crew_by_key[key] = {"name": name, "positions": [], "dates": []}
+            entry = crew_by_key[key]
+            if position and position not in entry["positions"]:
+                entry["positions"].append(position)
+            if date_str and date_str not in entry["dates"]:
+                entry["dates"].append(date_str)
+
+    shoot_dates = sorted(list(shoot_dates_set), key=_cs_date_sort_key)
+
+    crew = []
+    for entry in crew_by_key.values():
+        entry["dates"] = sorted(entry["dates"], key=_cs_date_sort_key)
+        crew.append(entry)
+    crew.sort(key=lambda e: e["name"].lower())
+
+    return {"crew": crew, "shoot_dates": shoot_dates, "issues": issues}
 
 
 # ── Talent & Extras extractor ────────────────────────────────────────────────
