@@ -1565,10 +1565,9 @@ async def extract_retainer_billings(
 
 @app.post("/extract-residency-docs")
 async def extract_residency_docs(
-    files:           list[UploadFile] = File(...),
-    diversity_files: list[UploadFile] = File(default=[]),
-    shoot_date:      str              = Form(default=""),
-    x_app_secret:    str              = Header(default=""),
+    files:        list[UploadFile] = File(...),
+    shoot_date:   str              = Form(default=""),
+    x_app_secret: str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -1576,26 +1575,22 @@ async def extract_residency_docs(
     oai_client    = _client()
     claude_client = _anthropic_client()
     system_prompt = _load_residency_docs_prompt()
-    div_prompt    = _load_diversity_form_prompt()
     res_user_text = "Extract personal information from these residency verification documents."
 
-    # Read all files upfront while we still have the UploadFile handles
     loaded_res = []
     for uf in sorted(files, key=lambda f: (f.filename or "").lower()):
         data = await uf.read()
         loaded_res.append((uf.filename, data))
 
-    loaded_div = []
-    for uf in sorted(diversity_files or [], key=lambda f: (f.filename or "").lower()):
-        data = await uf.read()
-        loaded_div.append((uf.filename, data))
-
     loop = asyncio.get_running_loop()
-    sem  = asyncio.Semaphore(5)  # max 5 AI calls in-flight at once
+    sem  = asyncio.Semaphore(5)
 
     async def process_one_residency(filename, data):
         async with sem:
-            hw  = await loop.run_in_executor(None, _is_handwritten, filename, data, oai_client)
+            try:
+                hw = await loop.run_in_executor(None, _is_handwritten, filename, data, oai_client)
+            except Exception:
+                hw = False
             dpi = 4.17 if hw else 2.0
             try:
                 raw_list = await loop.run_in_executor(
@@ -1610,29 +1605,7 @@ async def extract_residency_docs(
                 return filename, hw, [], [str(e)]
             return filename, hw, raw_list, []
 
-    async def process_one_diversity(filename, data):
-        async with sem:
-            # DCEO tracking sheets are always printed — skip handwriting check, hardcode 2.0 DPI
-            try:
-                raw_list = await loop.run_in_executor(
-                    None,
-                    functools.partial(
-                        _extract_from_file_claude,
-                        filename, data, div_prompt, claude_client,
-                        user_text="Extract diversity information from this form.",
-                        dpi_scale=2.0, max_dim=2000, max_pages=2,
-                    )
-                )
-            except Exception as e:
-                return filename, [], [str(e)]
-            return filename, raw_list, []
-
-    # Fan out all files concurrently (semaphore limits to 5 in-flight at once)
-    res_tasks  = [process_one_residency(fn, d) for fn, d in loaded_res]
-    div_tasks  = [process_one_diversity(fn, d) for fn, d in loaded_div]
-    all_results = await asyncio.gather(*(res_tasks + div_tasks))
-    res_results = all_results[:len(loaded_res)]
-    div_results = all_results[len(loaded_res):]
+    res_results = await asyncio.gather(*[process_one_residency(fn, d) for fn, d in loaded_res])
 
     rows, issues, file_summaries = [], [], []
 
@@ -1661,20 +1634,57 @@ async def extract_residency_docs(
             "issues":   file_errs,
         })
 
-    diversity_rows: list[dict] = []
-    for filename, raw_list, errs in div_results:
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+@app.post("/extract-diversity-docs")
+async def extract_diversity_docs(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    claude_client = _anthropic_client()
+    div_prompt    = _load_diversity_form_prompt()
+
+    loaded = []
+    for uf in sorted(files, key=lambda f: (f.filename or "").lower()):
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def process_one_diversity(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        _extract_from_file_claude,
+                        filename, data, div_prompt, claude_client,
+                        user_text="Extract diversity information from this form.",
+                        dpi_scale=2.0, max_dim=2000, max_pages=2,
+                    )
+                )
+            except Exception as e:
+                return filename, [], [str(e)]
+            return filename, raw_list, []
+
+    results = await asyncio.gather(*[process_one_diversity(fn, d) for fn, d in loaded])
+
+    rows, issues = [], []
+    for filename, raw_list, errs in results:
         for e in errs:
             issues.append(f"{filename}: {e}")
         for raw in raw_list:
             try:
-                diversity_rows.append(normalize_diversity_row(raw, filename))
+                rows.append(normalize_diversity_row(raw, filename))
             except Exception as e:
                 issues.append(f"{filename}: diversity row error: {e}")
 
-    if diversity_rows:
-        rows = _merge_residency_diversity(rows, diversity_rows)
-
-    return {"rows": rows, "issues": issues, "files": file_summaries}
+    return {"rows": rows, "issues": issues}
 
 
 # ── Talent & Extras extractor ────────────────────────────────────────────────
