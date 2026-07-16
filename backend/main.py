@@ -1709,17 +1709,21 @@ async def match_names(
     div_list = "\n".join(f"  {i+1}. {n}" for i, n in enumerate(payload.diversity_names))
 
     user_prompt = (
-        "Match crew member names across two lists. The diversity list comes from handwritten "
-        "DCEO forms and may contain OCR or transcription errors.\n\n"
-        f"RESIDENCY NAMES (accurate — from government-issued IDs):\n{res_list}\n\n"
-        f"DIVERSITY NAMES (may have OCR errors or abbreviations):\n{div_list}\n\n"
-        "For each residency name, find the best matching diversity name using fuzzy logic:\n"
+        "Match crew member names across two lists. The second list may use a different "
+        "name format or contain OCR/transcription errors.\n\n"
+        f"LIST A — map FROM (these become the JSON keys):\n{res_list}\n\n"
+        f"LIST B — match TO (these become the JSON values):\n{div_list}\n\n"
+        "For each name in List A, find the best matching name in List B using fuzzy logic:\n"
+        "- Names may be in different formats: 'First Last' and 'Last, First' or "
+        "'Last, First Middle' refer to the same person when name components match — "
+        "match them regardless of order (e.g. 'Damian Huck' matches 'Huck, Damian Michael')\n"
+        "- Ignore middle names: 'Damian Huck' matches 'Huck, Damian Michael'\n"
         "- Correct OCR errors (e.g. \"Cowley\" vs \"Conley\", \"Lecy\" vs \"Levy\", \"Pawch\" vs \"Pawela\")\n"
         "- Handle first-name abbreviations (\"Josh\" matches \"Joshua\", \"Matt\" matches \"Matthew\")\n"
-        "- When multiple people share the same last name, use first names to assign each one uniquely\n"
-        "- Map to null if no reasonable match exists in the diversity list\n\n"
-        "Return ONLY a JSON object. Keys must be EXACTLY the residency names as given:\n"
-        "{\"Residency Name 1\": \"Matched Diversity Name or null\", ...}"
+        "- When multiple people share the same last name, use first names to distinguish them\n"
+        "- Map to null only if no reasonable match exists in List B\n\n"
+        "Return ONLY a JSON object. Keys must be EXACTLY the List A names as given:\n"
+        "{\"List A Name 1\": \"Matched List B Name or null\", ...}"
     )
 
     loop = asyncio.get_running_loop()
