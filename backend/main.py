@@ -667,7 +667,7 @@ def _i9_notes(raw: dict, handwritten: bool, shoot_date: str) -> str:
 
 def normalize_residency_row(raw: dict, filename: str, handwritten: bool = False, shoot_date: str = "") -> dict:
     return {
-        "documentName":   str(raw.get("document_name", "")).strip(),
+        "documentName":   str(raw.get("document_name", "")).strip().title(),
         "documentType":   str(raw.get("document_type", "")).strip(),
         "issueDate":      normalize_date(raw.get("issue_date", "")),
         "expirationDate": normalize_date(raw.get("expiration_date", "")),

@@ -10,7 +10,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
 
 [
   {
-    "document_name":    "the person's full name exactly as it appears on the document",
+    "document_name":    "the person's full name in 'Last, First' format using proper title case — capitalize the first letter of each name part, lowercase the rest (e.g. 'Smith, John' or 'Anderson, Kylie Elizabeth'). Use the document's field labels to identify last vs. first name. Include middle name or initial if present. Place suffixes (Jr, Sr, II, III, etc.) after the first name (e.g. 'Clark, Adonis Sr'). Never output all-caps.",
     "document_type":    "the type of document. Use one of these labels: 'Driver's License', 'State ID', 'I9', 'FOID Card', 'Medical Cannabis Card', 'Passport', 'Permanent Resident Card'. Learner's Permits and Instruction Permits issued by a state DMV should be labeled 'Driver's License'. If none of these match, use the document's own label.",
     "issue_date":       "the issue or effective date in MM/DD/YYYY format. Empty string if not present.",
     "expiration_date":  "the expiration date in MM/DD/YYYY format. Empty string if the document does not have one or it is not visible.",
