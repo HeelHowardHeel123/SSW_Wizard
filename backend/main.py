@@ -167,12 +167,13 @@ def _load_agency_subvendors_prompt(agency_name: str, agency_address: str = "") -
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
 
-def _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=None):
-    """Render every page of a PDF (or a single image file) to base64 PNGs.
+def _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=None, max_pages=None):
+    """Render pages of a PDF (or a single image file) to base64 PNGs.
 
     max_dim: if set, downsamples any page whose rendered width or height
-    exceeds this pixel count (preserving aspect ratio). Useful for
-    high-resolution photos embedded in PDFs (e.g. driver's license scans).
+    exceeds this pixel count (preserving aspect ratio).
+    max_pages: if set, only renders the first N pages (prevents memory spikes
+    from multi-page PDFs that contain extra non-document pages).
     """
     lower = filename.lower()
     if lower.endswith((".png", ".jpg", ".jpeg")):
@@ -181,7 +182,9 @@ def _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=None):
         doc.close()
     doc = fitz.open(stream=data, filetype="pdf")
     images = []
-    for page in doc:
+    for i, page in enumerate(doc):
+        if max_pages and i >= max_pages:
+            break
         pix = page.get_pixmap(matrix=fitz.Matrix(dpi_scale, dpi_scale))
         if max_dim and (pix.width > max_dim or pix.height > max_dim):
             factor = min(max_dim / pix.width, max_dim / pix.height)
@@ -238,7 +241,10 @@ def _call_claude(images_b64, system_prompt, client, user_text="Extract data from
         system=system_prompt,
         messages=[{"role": "user", "content": content}],
     )
-    raw = resp.content[0].text.strip()
+    text_block = next((b for b in resp.content if b.type == "text"), None)
+    if not text_block:
+        return []
+    raw = text_block.text.strip()
     try:
         return json.loads(raw)
     except Exception:
@@ -251,8 +257,8 @@ def _call_claude(images_b64, system_prompt, client, user_text="Extract data from
     return []
 
 
-def _extract_from_file_claude(filename, data, system_prompt, client, user_text="Extract data from these document pages.", dpi_scale=2.0, max_dim=None):
-    images = _file_to_images_b64(filename, data, dpi_scale=dpi_scale, max_dim=max_dim)
+def _extract_from_file_claude(filename, data, system_prompt, client, user_text="Extract data from these document pages.", dpi_scale=2.0, max_dim=None, max_pages=None):
+    images = _file_to_images_b64(filename, data, dpi_scale=dpi_scale, max_dim=max_dim, max_pages=max_pages)
     MAX_BYTES = 40 * 1024 * 1024
     batches, cur, cur_size = [], [], 0
     for img in images:
@@ -1508,7 +1514,7 @@ async def extract_residency_docs(
         try:
             raw_list = _extract_from_file_claude(
                 uf.filename, data, system_prompt, claude_client,
-                user_text=user_text, dpi_scale=dpi_scale, max_dim=2000,
+                user_text=user_text, dpi_scale=dpi_scale, max_dim=2000, max_pages=4,
             )
         except Exception as e:
             errs.append(str(e))
