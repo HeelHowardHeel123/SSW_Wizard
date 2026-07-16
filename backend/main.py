@@ -1572,7 +1572,6 @@ async def extract_residency_docs(
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
-    oai_client    = _client()
     claude_client = _anthropic_client()
     system_prompt = _load_residency_docs_prompt()
     res_user_text = "Extract personal information from these residency verification documents."
@@ -1588,22 +1587,17 @@ async def extract_residency_docs(
     async def process_one_residency(filename, data):
         async with sem:
             try:
-                hw = await loop.run_in_executor(None, _is_handwritten, filename, data, oai_client)
-            except Exception:
-                hw = False
-            dpi = 4.17 if hw else 2.0
-            try:
                 raw_list = await loop.run_in_executor(
                     None,
                     functools.partial(
                         _extract_from_file_claude,
                         filename, data, system_prompt, claude_client,
-                        user_text=res_user_text, dpi_scale=dpi, max_dim=2000, max_pages=4,
+                        user_text=res_user_text, dpi_scale=2.0, max_dim=2000, max_pages=4,
                     )
                 )
             except Exception as e:
-                return filename, hw, [], [str(e)]
-            return filename, hw, raw_list, []
+                return filename, False, [], [str(e)]
+            return filename, False, raw_list, []
 
     res_results = await asyncio.gather(*[process_one_residency(fn, d) for fn, d in loaded_res])
 
