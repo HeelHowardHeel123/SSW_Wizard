@@ -1681,6 +1681,70 @@ async def extract_diversity_docs(
     return {"rows": rows, "issues": issues}
 
 
+@app.post("/match-names")
+async def match_names(
+    payload:      _MatchNamesRequest,
+    x_app_secret: str = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    if not payload.residency_names or not payload.diversity_names:
+        return {"mapping": {}}
+
+    claude_client = _anthropic_client()
+
+    res_list = "\n".join(f"  {i+1}. {n}" for i, n in enumerate(payload.residency_names))
+    div_list = "\n".join(f"  {i+1}. {n}" for i, n in enumerate(payload.diversity_names))
+
+    user_prompt = (
+        "Match crew member names across two lists. The diversity list comes from handwritten "
+        "DCEO forms and may contain OCR or transcription errors.\n\n"
+        f"RESIDENCY NAMES (accurate — from government-issued IDs):\n{res_list}\n\n"
+        f"DIVERSITY NAMES (may have OCR errors or abbreviations):\n{div_list}\n\n"
+        "For each residency name, find the best matching diversity name using fuzzy logic:\n"
+        "- Correct OCR errors (e.g. \"Cowley\" vs \"Conley\", \"Lecy\" vs \"Levy\", \"Pawch\" vs \"Pawela\")\n"
+        "- Handle first-name abbreviations (\"Josh\" matches \"Joshua\", \"Matt\" matches \"Matthew\")\n"
+        "- When multiple people share the same last name, use first names to assign each one uniquely\n"
+        "- Map to null if no reasonable match exists in the diversity list\n\n"
+        "Return ONLY a JSON object. Keys must be EXACTLY the residency names as given:\n"
+        "{\"Residency Name 1\": \"Matched Diversity Name or null\", ...}"
+    )
+
+    loop = asyncio.get_running_loop()
+    try:
+        resp = await loop.run_in_executor(
+            None,
+            functools.partial(
+                claude_client.messages.create,
+                model="claude-sonnet-5",
+                max_tokens=4096,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+        )
+    except Exception as e:
+        return {"mapping": {}, "error": str(e)}
+
+    text_block = next((b for b in resp.content if b.type == "text"), None)
+    if not text_block:
+        return {"mapping": {}}
+
+    raw = text_block.text.strip()
+    try:
+        mapping = json.loads(raw)
+    except Exception:
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            try:
+                mapping = json.loads(m.group())
+            except Exception:
+                mapping = {}
+        else:
+            mapping = {}
+
+    return {"mapping": mapping}
+
+
 # ── Talent & Extras extractor ────────────────────────────────────────────────
 
 @app.post("/extract-talent")
@@ -1743,6 +1807,11 @@ async def extract_talent_endpoint(
 
 
 # ── Consolidated run summary email ───────────────────────────────────────────
+
+class _MatchNamesRequest(BaseModel):
+    residency_names: list[str] = []
+    diversity_names: list[str] = []
+
 
 class _FileSummaryIn(BaseModel):
     filename: str = ""
