@@ -1071,6 +1071,7 @@ def extract_talent(
     # ── Step 7: Assemble workbook rows (invoice-sorted, PDF order within each) ─
     workbook_rows: list[dict] = []
     item_no = 1
+    all_llm_matches: dict[str, dict[str, str]] = {}  # {inv_no: {invoice_name: ptip_name}}
 
     all_invoice_nos = sorted(
         set(received_invoice_nos) | set(ptip_by_invoice.keys()),
@@ -1133,6 +1134,7 @@ def extract_talent(
                     ]
                     llm_map, llm_reasons = _llm_fuzzy_match_talent(inv_names, remaining_ptip_names, openai_key)
                     if llm_map:
+                        all_llm_matches[inv_no] = llm_map
                         ptip_name_to_local = {
                             str(inv_ptip_rows[li].get('Talent Name', '') or '').split('\n')[0].strip(): li
                             for li in remaining_ptip_local
@@ -1237,6 +1239,20 @@ def extract_talent(
         er_pdf_order[inv_no] = [
             _normalize_for_match(tr['name'])[0]
             for _, tr in ordered_rows
+        ]
+
+    # Patch er_pdf_order with LLM matches: replace normalized invoice names with
+    # normalized PTIP names so build_organized_ptip_xlsx can find exact matches.
+    for inv_no, llm_inv_matches in all_llm_matches.items():
+        if inv_no not in er_pdf_order:
+            continue
+        norm_inv_to_norm_ptip = {
+            _normalize_for_match(inv_name)[0]: _normalize_for_match(ptip_name)[0]
+            for inv_name, ptip_name in llm_inv_matches.items()
+        }
+        er_pdf_order[inv_no] = [
+            norm_inv_to_norm_ptip.get(n, n)
+            for n in er_pdf_order[inv_no]
         ]
 
     ptip_excel_b64 = None
