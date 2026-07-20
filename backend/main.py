@@ -578,7 +578,7 @@ def normalize_agency_subvendor_row(raw: dict, agency_name: str, filename: str) -
         "invoiceAmount":    normalize_amount(raw.get("invoice_amount", 0)),
         "receivedInvoice":  "Yes",
         "w9ValidDate":      normalize_date(raw.get("w9_date", "")),
-        "pop":              "Yes" if raw.get("pop") else None,
+        "pop":              "Yes" if raw.get("pop") else "No",
         "paymentMethod":    method,
         "paymentNo":        normalize_pymt_number(method, raw.get("payment_number", "")),
         "paymentEntity":    agency_name.strip(),
