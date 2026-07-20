@@ -104,10 +104,18 @@ def _load_prompt(prodco_names):
     return template.replace("{prodco_names}", ", ".join(prodco_names))
 
 
-def _load_crew_freelance_prompt(prodco_names):
+def _load_crew_freelance_prompt(prodco_names: list, prodco_addresses: list | None = None):
     with open(_CREW_FREELANCE_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
-    label = ", ".join(prodco_names) if prodco_names else "the production company"
+    addrs = prodco_addresses or []
+    if prodco_names:
+        entries = []
+        for i, name in enumerate(prodco_names):
+            addr = addrs[i].strip() if i < len(addrs) else ""
+            entries.append(f"{name} ({addr})" if addr else name)
+        label = ", ".join(entries)
+    else:
+        label = "the production company"
     return template.replace("{prodco_names}", label)
 
 
@@ -1132,18 +1140,20 @@ def normalize_crew_freelance_row(raw: dict, filename: str) -> dict:
 
 @app.post("/extract-crew-freelance")
 async def extract_crew_freelance(
-    files: list[UploadFile] = File(...),
-    prodco_names: str = Form(""),
-    x_app_secret: str = Header(default=""),
+    files:            list[UploadFile] = File(...),
+    prodco_names:     str              = Form(""),
+    prodco_addresses: str              = Form(""),
+    x_app_secret:     str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
     files = sorted(files, key=lambda f: (f.filename or "").lower())
 
-    client = _client()
-    names         = [n.strip() for n in prodco_names.split(",") if n.strip()]
-    system_prompt = _load_crew_freelance_prompt(names)
+    client  = _client()
+    names   = [n.strip() for n in prodco_names.split(",") if n.strip()]
+    addrs   = [a.strip() for a in prodco_addresses.split(",")]
+    system_prompt = _load_crew_freelance_prompt(names, addrs)
     user_text     = "Extract crew freelance invoice data from these document pages."
 
     rows, issues, file_summaries = [], [], []
