@@ -24,8 +24,10 @@ Endpoints
                                     vendor_address, vendor_city, vendor_state, vendor_zip,
                                     prodco_names, work_state
                                     returns {"rows": [...], "issues": [...]}
-  POST /extract-agency-subvendors → multipart: files[]=<pdf>, agency_name, agency_address
-                                    returns {"rows": [...], "issues": [...]}
+  POST /extract-agency-subvendors  → multipart: files[]=<pdf>, agency_name, agency_address
+                                     returns {"rows": [...], "issues": [...]}
+  POST /extract-prodco-subvendors  → multipart: files[]=<pdf>, prodco_name, prodco_address
+                                     returns {"rows": [...], "issues": [...]}
 
 Environment variables
   OPENAI_API_KEY     (required for invoices + image-based fringe) your OpenAI key
@@ -180,10 +182,12 @@ def _load_agency_subvendors_prompt(agency_name: str, agency_address: str = "") -
     return template.replace("{agency_name}", f"{name_label}{addr_label}")
 
 
-def _load_prodco_subvendors_prompt(prodco_name: str) -> str:
+def _load_prodco_subvendors_prompt(prodco_name: str, prodco_address: str = "") -> str:
     with open(_PRODCO_SUBVENDORS_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
-    return template.replace("{prodco_name}", prodco_name.strip() or "the production company")
+    name_label = prodco_name.strip() or "the production company"
+    addr_label = f" ({prodco_address.strip()})" if prodco_address.strip() else ""
+    return template.replace("{prodco_name}", f"{name_label}{addr_label}")
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -1517,9 +1521,10 @@ async def extract_agency_subvendors(
 
 @app.post("/extract-prodco-subvendors")
 async def extract_prodco_subvendors(
-    files:        list[UploadFile] = File(...),
-    prodco_name:  str              = Form(""),
-    x_app_secret: str              = Header(default=""),
+    files:           list[UploadFile] = File(...),
+    prodco_name:     str              = Form(""),
+    prodco_address:  str              = Form(""),
+    x_app_secret:    str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -1527,7 +1532,7 @@ async def extract_prodco_subvendors(
     files = sorted(files, key=lambda f: (f.filename or "").lower())
 
     client        = _client()
-    system_prompt = _load_prodco_subvendors_prompt(prodco_name)
+    system_prompt = _load_prodco_subvendors_prompt(prodco_name, prodco_address)
     user_text     = "Extract invoice data from these document pages."
 
     rows, issues, file_summaries = [], [], []
