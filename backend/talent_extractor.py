@@ -372,7 +372,7 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         pay_type = m.group(1).strip()
 
     commercial_title = ''
-    m = re.search(r'Primary\s+\S+\s+(.+?)\s+Cycle\s+(?:Length|Dates)', text)
+    m = re.search(r'Primary\s+\S+\s+(.+)', text)
     if m:
         commercial_title = m.group(1).strip()
 
@@ -555,9 +555,9 @@ def _build_row(
         check_number = commercial_id = commercial_title = ssn_fein = ''
         on_ptip = False
 
-    # Fall back to PDF invoice if PTIP didn't carry the title
-    if not commercial_title and pdf_invoice:
-        commercial_title = pdf_invoice.get('commercial_title', '')
+    # PDF title includes spot length (e.g. "Carried Away :30"); prefer it over PTIP
+    if pdf_invoice and pdf_invoice.get('commercial_title'):
+        commercial_title = pdf_invoice['commercial_title']
 
     # ── Wages and Misc Pmt ───────────────────────────────────────────────────
     if scenario in ('A',) and pdf_talent:
