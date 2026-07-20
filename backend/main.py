@@ -565,6 +565,18 @@ def normalize_billing_row(
 
 def normalize_agency_subvendor_row(raw: dict, agency_name: str, filename: str) -> dict:
     method = normalize_pymt_method(raw.get("payment_method", ""))
+
+    w9_status = str(raw.get("w9_status", "not_present")).strip().lower()
+    w9_date   = normalize_date(raw.get("w9_date", ""))
+    if w9_status == "signed_dated" and w9_date:
+        w9_value = w9_date
+    elif w9_status == "unsigned":
+        w9_value = "Unsigned"
+    elif w9_status == "undated":
+        w9_value = "Not Dated"
+    else:
+        w9_value = "No"
+
     return {
         "qualify":          "",
         "vendorName":       clean_name(raw.get("vendor_name", "")),
@@ -577,7 +589,7 @@ def normalize_agency_subvendor_row(raw: dict, agency_name: str, filename: str) -
         "invoiceNo":        str(raw.get("invoice_number", "")).strip(),
         "invoiceAmount":    normalize_amount(raw.get("invoice_amount", 0)),
         "receivedInvoice":  "Yes",
-        "w9ValidDate":      normalize_date(raw.get("w9_date", "")),
+        "w9ValidDate":      w9_value,
         "pop":              "Yes" if raw.get("pop") else "No",
         "paymentMethod":    method,
         "paymentNo":        normalize_pymt_number(method, raw.get("payment_number", "")),

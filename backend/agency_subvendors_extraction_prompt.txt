@@ -23,6 +23,11 @@ FIELDS (return exactly these key names):
 14. state — vendor's state as 2-letter code ONLY (e.g. "IL"). Empty string if not found.
 15. zip — vendor's zip code (5 digits). Empty string if not found.
 16. w9_date — if a W-9 form is included in this PDF, extract the date the W-9 was signed or dated. Use MM/DD/YYYY format. Empty string if no W-9 is present or no date is visible.
-17. notes — empty string in normal cases. Populate only if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice.
+17. w9_status — describes the W-9 included in this PDF. Use exactly one of these values:
+    "not_present"  — no W-9 form found in this PDF
+    "unsigned"     — W-9 is present but no signature is visible
+    "undated"      — W-9 is present and signed but no date is visible
+    "signed_dated" — W-9 is present, signed, and dated (w9_date will also be populated)
+18. notes — empty string in normal cases. Populate only if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice.
 
 Return ONLY a valid JSON array. No markdown. No explanation. No code fences. JSON array only.
