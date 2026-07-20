@@ -68,6 +68,7 @@ _TALENT_FREELANCE_PROMPT_PATH   = os.path.join(os.path.dirname(os.path.abspath(_
 _HOURS_LETTER_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hours_letter_prompt.txt")
 _BILLING_PROMPT_PATH            = os.path.join(os.path.dirname(os.path.abspath(__file__)), "billing_extraction_prompt.txt")
 _AGENCY_SUBVENDORS_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_subvendors_extraction_prompt.txt")
+_PRODCO_SUBVENDORS_PROMPT_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prodco_subvendors_extraction_prompt.txt")
 _AGENCY_HOURS_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agency_hours_prompt.txt")
 _RESIDENCY_DOCS_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "residency_docs_prompt.txt")
 _DIVERSITY_FORM_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diversity_form_prompt.txt")
@@ -177,6 +178,12 @@ def _load_agency_subvendors_prompt(agency_name: str, agency_address: str = "") -
     name_label = agency_name.strip() or "the ad agency"
     addr_label = f" ({agency_address.strip()})" if agency_address.strip() else ""
     return template.replace("{agency_name}", f"{name_label}{addr_label}")
+
+
+def _load_prodco_subvendors_prompt(prodco_name: str) -> str:
+    with open(_PRODCO_SUBVENDORS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    return template.replace("{prodco_name}", prodco_name.strip() or "the production company")
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -596,6 +603,42 @@ def normalize_agency_subvendor_row(raw: dict, agency_name: str, filename: str) -
         "paymentEntity":    agency_name.strip(),
         "jobNo":            str(raw.get("job_number", "")).strip(),
         "clientBillingNo":  str(raw.get("client_billing_number", "")).strip(),
+        "notes":            str(raw.get("notes", "")).strip(),
+        "sourceFile":       filename,
+    }
+
+
+def normalize_prodco_subvendor_row(raw: dict, prodco_name: str, filename: str) -> dict:
+    method = normalize_pymt_method(raw.get("pymt_method", ""))
+
+    w9_status = str(raw.get("w9_status", "not_present")).strip().lower()
+    w9_date   = normalize_date(raw.get("w9_date", ""))
+    if w9_status == "signed_dated" and w9_date:
+        w9_value = w9_date
+    elif w9_status == "unsigned":
+        w9_value = "Unsigned"
+    elif w9_status == "undated":
+        w9_value = "Not Dated"
+    else:
+        w9_value = "No"
+
+    return {
+        "poNumber":         str(raw.get("po_number", "")).strip(),
+        "vendorName":       clean_name(raw.get("vendor_name", "")),
+        "description":      str(raw.get("description", "")).strip(),
+        "address":          clean_address(raw.get("address", "")),
+        "city":             clean_name(raw.get("city", "")),
+        "vendorState":      clean_state(raw.get("state", "")),
+        "zip":              clean_zip(raw.get("zip", "")),
+        "invoiceDate":      normalize_date(raw.get("invoice_date", "")),
+        "invoiceNo":        str(raw.get("invoice_number", "")).strip(),
+        "invoiceAmount":    normalize_amount(raw.get("invoice_amount", 0)),
+        "receivedInvoice":  "Yes",
+        "w9ValidDate":      w9_value,
+        "pop":              "Yes" if raw.get("pop") else "No",
+        "paymentMethod":    method,
+        "paymentNo":        normalize_pymt_number(method, raw.get("pymt_number", "")),
+        "paymentEntity":    prodco_name.strip(),
         "notes":            str(raw.get("notes", "")).strip(),
         "sourceFile":       filename,
     }
@@ -1454,6 +1497,60 @@ async def extract_agency_subvendors(
             for raw in raw_list:
                 try:
                     file_rows.append(normalize_agency_subvendor_row(raw, agency_name, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        vendor_label = file_rows[0]["vendorName"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  vendor_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── ProdCo Sub-Vendors extractor ─────────────────────────────────────────────
+
+@app.post("/extract-prodco-subvendors")
+async def extract_prodco_subvendors(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_prodco_subvendors_prompt(prodco_name)
+    user_text     = "Extract invoice data from these document pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no prodco sub-vendor data extracted — review manually")
+            issues.append(f"{uf.filename}: no prodco sub-vendor data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_prodco_subvendor_row(raw, prodco_name, uf.filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{uf.filename}: row normalization error: {e}")
