@@ -454,29 +454,48 @@ def _strip_mi(name: str) -> str:
 
 
 def _parse_employer_payroll_jobs(pdf_bytes: bytes) -> dict:
-    """Extract Name → Job Title from the Wrapbook Employer Payroll breakdown page.
+    """Extract Name → Job Title from the Wrapbook Employer Payroll breakdown table.
 
-    Returns {normalized_name: job_title} where names have middle initials
-    stripped to match what fringe rows store in the worker field.
+    Handles two layout variants:
+      - Single-page: header and all data rows on one page (e.g. Invoice 00346118)
+      - Multi-page:  header on one page, data continuing across subsequent pages
+                     with 2+ line row wrapping (last name + job title start on
+                     line 1, first name + continuation on line 2+)
+
+    Main rows are identified by the presence of at least one dollar-amount word.
+    Continuation rows (no $ values) are accumulated into the current employee.
+
+    Returns {normalized_name: job_title} with middle initials stripped.
     """
     jobs = {}
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            col_job_x0 = col_job_x1 = None
+            collecting = False
+            pending_name: list[str] = []
+            pending_job: list[str] = []
+
+            def flush():
+                if pending_name and pending_job:
+                    raw = _merge_text("worker", pending_name)
+                    if raw and "total" not in raw.lower():
+                        jobs[_strip_mi(raw)] = " ".join(pending_job)
+                pending_name.clear()
+                pending_job.clear()
+
             for pg in pdf.pages:
                 text = pg.extract_text() or ""
-                if "EMPLOYER PAYROLL" not in text or "Job Title" not in text:
-                    continue
-                # Skip the category summary page (has "Category" and "Grand Total" but no Name column)
+                # Skip the category summary page — it has no Name/Job Title data
                 if "Category" in text and "Grand Total" in text:
                     continue
 
                 words = pg.extract_words(x_tolerance=1.5, keep_blank_chars=False)
                 lines = _cluster_lines(words)
 
-                # Locate header line and Job Title column x-bounds
-                col_job_x0 = col_job_x1 = header_top = None
                 for ln in lines:
                     txts = [w["text"] for w in ln["words"]]
+
+                    # Detect the breakdown table header to start collection
                     if "Job" in txts and "Title" in txts and ("Name" in txts or "Worker" in txts):
                         hw = ln["words"]
                         ht = [w["text"] for w in hw]
@@ -488,23 +507,26 @@ def _parse_employer_payroll_jobs(pdf_bytes: bytes) -> dict:
                         if job_idx is not None:
                             col_job_x0 = hw[job_idx]["x0"]
                             col_job_x1 = hw[hrs_idx]["x0"] if hrs_idx is not None else col_job_x0 + 150
-                            header_top = ln["top"]
-                        break
-
-                if col_job_x0 is None:
-                    continue
-
-                for ln in lines:
-                    if ln["top"] <= header_top + 2:
+                            collecting = True
                         continue
+
+                    if not collecting:
+                        continue
+
                     name_frags = [w["text"] for w in ln["words"] if w["x0"] < col_job_x0]
                     job_frags  = [w["text"] for w in ln["words"] if col_job_x0 <= w["x0"] < col_job_x1]
-                    if not name_frags or not job_frags:
-                        continue
-                    raw_name = _merge_text("worker", name_frags)
-                    if not raw_name or "total" in raw_name.lower():
-                        continue
-                    jobs[_strip_mi(raw_name)] = " ".join(job_frags)
+
+                    if any("$" in w["text"] for w in ln["words"]):
+                        # New employee main row — flush previous and start fresh
+                        flush()
+                        pending_name.extend(name_frags)
+                        pending_job.extend(job_frags)
+                    elif pending_name:
+                        # Continuation line (no $ values) — accumulate into current employee
+                        pending_name.extend(name_frags)
+                        pending_job.extend(job_frags)
+
+            flush()  # last employee
     except Exception:
         pass
     return jobs
