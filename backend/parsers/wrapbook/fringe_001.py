@@ -338,6 +338,14 @@ def _extract_text(pdf_bytes: bytes) -> tuple[list[dict], list[str]]:
             if register_data:
                 _enrich_rows(rows, register_data)
 
+        # Fill missing job titles from the Employer Payroll breakdown page
+        if rows:
+            emp_jobs = _parse_employer_payroll_jobs(pdf_bytes)
+            if emp_jobs:
+                for row in rows:
+                    if not row.get("jobTitle"):
+                        row["jobTitle"] = emp_jobs.get(row.get("worker", ""), "")
+
     return rows, issues
 
 
@@ -436,6 +444,70 @@ def _extract_vision(pdf_bytes: bytes, openai_key: str) -> tuple[list[dict], list
         source_page += len(batch)
 
     return rows, issues
+
+
+# ─── Employer Payroll job-title enrichment ───────────────────────────────────
+
+def _strip_mi(name: str) -> str:
+    """Strip trailing middle initial so names match fringe rows: 'Bristol, Joseph B.' → 'Bristol, Joseph'"""
+    return re.sub(r"(,\s*\S+)\s+[A-Z]\.?\s*$", r"\1", name.strip())
+
+
+def _parse_employer_payroll_jobs(pdf_bytes: bytes) -> dict:
+    """Extract Name → Job Title from the Wrapbook Employer Payroll breakdown page.
+
+    Returns {normalized_name: job_title} where names have middle initials
+    stripped to match what fringe rows store in the worker field.
+    """
+    jobs = {}
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for pg in pdf.pages:
+                text = pg.extract_text() or ""
+                if "EMPLOYER PAYROLL" not in text or "Job Title" not in text:
+                    continue
+                # Skip the category summary page (has "Category" and "Grand Total" but no Name column)
+                if "Category" in text and "Grand Total" in text:
+                    continue
+
+                words = pg.extract_words(x_tolerance=1.5, keep_blank_chars=False)
+                lines = _cluster_lines(words)
+
+                # Locate header line and Job Title column x-bounds
+                col_job_x0 = col_job_x1 = header_top = None
+                for ln in lines:
+                    txts = [w["text"] for w in ln["words"]]
+                    if "Job" in txts and "Title" in txts and ("Name" in txts or "Worker" in txts):
+                        hw = ln["words"]
+                        ht = [w["text"] for w in hw]
+                        job_idx = next(
+                            (k for k in range(len(ht) - 1) if ht[k] == "Job" and ht[k + 1] == "Title"),
+                            None,
+                        )
+                        hrs_idx = next((k for k, t in enumerate(ht) if t == "Hours"), None)
+                        if job_idx is not None:
+                            col_job_x0 = hw[job_idx]["x0"]
+                            col_job_x1 = hw[hrs_idx]["x0"] if hrs_idx is not None else col_job_x0 + 150
+                            header_top = ln["top"]
+                        break
+
+                if col_job_x0 is None:
+                    continue
+
+                for ln in lines:
+                    if ln["top"] <= header_top + 2:
+                        continue
+                    name_frags = [w["text"] for w in ln["words"] if w["x0"] < col_job_x0]
+                    job_frags  = [w["text"] for w in ln["words"] if col_job_x0 <= w["x0"] < col_job_x1]
+                    if not name_frags or not job_frags:
+                        continue
+                    raw_name = _merge_text("worker", name_frags)
+                    if not raw_name or "total" in raw_name.lower():
+                        continue
+                    jobs[_strip_mi(raw_name)] = " ".join(job_frags)
+    except Exception:
+        pass
+    return jobs
 
 
 # ─── Register enrichment ──────────────────────────────────────────────────────
