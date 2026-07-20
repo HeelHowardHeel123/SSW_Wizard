@@ -453,6 +453,34 @@ def _strip_mi(name: str) -> str:
     return re.sub(r"(,\s*\S+)\s+[A-Z]\.?\s*$", r"\1", name.strip())
 
 
+def _split_name_job(text: str) -> tuple:
+    """Split a name-column word that pdfplumber merged across the column boundary.
+
+    Handles:
+      'AmandaProperty'  → ('Amanda',  'Property')   lowercase→uppercase
+      'B.Set'           → ('B.',       'Set')        MI-period→uppercase
+      'JosephKey'       → ('Joseph',   'Key')        lowercase→uppercase
+      'Alejandro1st'    → ('Alejandro','1st')        lowercase→digit
+      'J.Production'    → ('J.',       'Production') MI-period→uppercase
+
+    Returns (name_part, job_part); job_part is '' if no boundary found.
+    Only called for name-column words that lack a comma (not last-name tokens).
+    """
+    # lowercase → uppercase: 'AmandaProperty', 'JosephKey', 'CynthiaProduction'
+    m = re.search(r"[a-z]([A-Z])", text)
+    if m:
+        return text[: m.start(1)], text[m.start(1):]
+    # single letter + period → uppercase or digit: 'B.Set', 'J.Production'
+    m = re.search(r"[A-Z]\.([A-Z\d])", text)
+    if m:
+        return text[: m.start(1)], text[m.start(1):]
+    # lowercase → digit: 'Alejandro1st'
+    m = re.search(r"[a-z](\d)", text)
+    if m:
+        return text[: m.start(1)], text[m.start(1):]
+    return text, ""
+
+
 def _parse_employer_payroll_jobs(pdf_bytes: bytes) -> dict:
     """Extract Name → Job Title from the Wrapbook Employer Payroll breakdown table.
 
@@ -513,8 +541,25 @@ def _parse_employer_payroll_jobs(pdf_bytes: bytes) -> dict:
                     if not collecting:
                         continue
 
-                    name_frags = [w["text"] for w in ln["words"] if w["x0"] < col_job_x0]
-                    job_frags  = [w["text"] for w in ln["words"] if col_job_x0 <= w["x0"] < col_job_x1]
+                    name_frags = []
+                    job_frags  = []
+                    for w in ln["words"]:
+                        if w["x0"] < col_job_x0:
+                            if "," in w["text"]:
+                                # Last-name token (has comma) — never needs splitting
+                                name_frags.append(w["text"])
+                            else:
+                                # First-name / MI — split if merged across column boundary
+                                np, jp = _split_name_job(w["text"])
+                                if np:
+                                    name_frags.append(np)
+                                if jp:
+                                    job_frags.append(jp)
+                        elif w["x0"] < col_job_x1:
+                            # Job title column — strip trailing digits (hours bleed-in)
+                            jt = re.sub(r"\d+$", "", w["text"]).strip()
+                            if jt:
+                                job_frags.append(jt)
 
                     if any("$" in w["text"] for w in ln["words"]):
                         # New employee main row — flush previous and start fresh
