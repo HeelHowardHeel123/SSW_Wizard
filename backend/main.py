@@ -182,12 +182,26 @@ def _load_agency_subvendors_prompt(agency_name: str, agency_address: str = "") -
     return template.replace("{agency_name}", f"{name_label}{addr_label}")
 
 
-def _load_prodco_subvendors_prompt(prodco_name: str, prodco_address: str = "") -> str:
+def _load_prodco_subvendors_prompt(
+    prodco_name: str,
+    prodco_address: str = "",
+    sub_prodco_name: str = "",
+    sub_prodco_address: str = "",
+) -> str:
     with open(_PRODCO_SUBVENDORS_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
     name_label = prodco_name.strip() or "the production company"
     addr_label = f" ({prodco_address.strip()})" if prodco_address.strip() else ""
-    return template.replace("{prodco_name}", f"{name_label}{addr_label}")
+    if sub_prodco_name.strip():
+        sub_addr = f" ({sub_prodco_address.strip()})" if sub_prodco_address.strip() else ""
+        sub_line = f"SUB-CONTRACTED PRODUCTION COMPANY: {sub_prodco_name.strip()}{sub_addr}\n"
+    else:
+        sub_line = ""
+    return (
+        template
+        .replace("{prodco_name}", f"{name_label}{addr_label}")
+        .replace("{sub_prodco_line}", sub_line)
+    )
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -1521,10 +1535,12 @@ async def extract_agency_subvendors(
 
 @app.post("/extract-prodco-subvendors")
 async def extract_prodco_subvendors(
-    files:           list[UploadFile] = File(...),
-    prodco_name:     str              = Form(""),
-    prodco_address:  str              = Form(""),
-    x_app_secret:    str              = Header(default=""),
+    files:              list[UploadFile] = File(...),
+    prodco_name:        str              = Form(""),
+    prodco_address:     str              = Form(""),
+    sub_prodco_name:    str              = Form(""),
+    sub_prodco_address: str              = Form(""),
+    x_app_secret:       str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -1532,7 +1548,7 @@ async def extract_prodco_subvendors(
     files = sorted(files, key=lambda f: (f.filename or "").lower())
 
     client        = _client()
-    system_prompt = _load_prodco_subvendors_prompt(prodco_name, prodco_address)
+    system_prompt = _load_prodco_subvendors_prompt(prodco_name, prodco_address, sub_prodco_name, sub_prodco_address)
     user_text     = "Extract invoice data from these document pages."
 
     rows, issues, file_summaries = [], [], []
