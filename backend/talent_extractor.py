@@ -14,6 +14,7 @@ column order.  It never touches the .xlsx.
 
 import io
 import re
+import json
 import base64
 from collections import defaultdict
 from datetime import datetime
@@ -909,11 +910,70 @@ def build_organized_ptip_xlsx(
 
 # ── Main extraction entry point ───────────────────────────────────────────────
 
+def _llm_fuzzy_match_talent(
+    invoice_names: list[str],
+    ptip_names: list[str],
+    openai_key: str,
+) -> dict[str, str]:
+    """LLM fallback: match invoice names to PTIP names that exact normalization missed.
+
+    Handles name-order differences (First Last vs Last, First), suffixes (II/Jr/Sr),
+    and company DBA variations ('Ashley Washington Holdings LLC dba Karen Stavins
+    Enterprises' → 'Karen Stavins Enterprises').
+
+    Returns {invoice_name: ptip_name} for confident matches only.
+    """
+    if not invoice_names or not ptip_names or not openai_key:
+        return {}
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=openai_key)
+        prompt = (
+            "You are reconciling a payroll invoice against a PTIP (Production Tax Incentive) report.\n\n"
+            "Invoice names (not yet matched):\n"
+            f"{json.dumps(invoice_names, indent=2)}\n\n"
+            "PTIP names (not yet matched):\n"
+            f"{json.dumps(ptip_names, indent=2)}\n\n"
+            "Identify which invoice name and PTIP name refer to the SAME person or company despite "
+            "formatting differences. Common differences:\n"
+            "- Name order: 'William Rose II' (invoice) = 'Rose, William' (PTIP)\n"
+            "- Company DBA: 'Ashley Washington Holdings LLC dba Karen Stavins Enterprises' = "
+            "'Karen Stavins Enterprises'\n\n"
+            "Rules:\n"
+            "- Only match if you are CONFIDENT they are the same person or entity.\n"
+            "- Do NOT guess — if uncertain, omit the pair.\n"
+            "- Each invoice name maps to at most one PTIP name and vice versa.\n\n"
+            'Return ONLY a JSON object: {"invoice_name": "ptip_name", ...}. '
+            "Return {} if no confident matches exist."
+        )
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=500,
+            response_format={"type": "json_object"},
+        )
+        raw = json.loads(resp.choices[0].message.content)
+        if not isinstance(raw, dict):
+            return {}
+        # Validate: keys must be in invoice_names, values in ptip_names
+        inv_set  = set(invoice_names)
+        ptip_set = set(ptip_names)
+        return {
+            str(k): str(v)
+            for k, v in raw.items()
+            if str(k) in inv_set and str(v) in ptip_set
+        }
+    except Exception:
+        return {}
+
+
 def extract_talent(
     pdf_files: list[tuple[str, bytes]],  # [(filename, bytes), ...]
     ptip_bytes: bytes | None,
     project_title: str,
     workbook_type: str,
+    openai_key: str = "",
 ) -> dict:
     """
     Run the full talent extraction.
@@ -1020,6 +1080,8 @@ def extract_talent(
             ptip_consumed: set[int] = set()
             first_talent_seen = False
 
+            # Pass 1: exact normalized matching
+            matched_pairs: list[tuple] = []  # (tr, ptip_match | None, ptip_match_local_i | None)
             for tr in inv_data['talent_rows']:
                 ptip_match: dict | None = None
                 ptip_match_local_i: int | None = None
@@ -1038,6 +1100,43 @@ def extract_talent(
                         ptip_consumed.add(local_i)
                         break
 
+                matched_pairs.append((tr, ptip_match, ptip_match_local_i))
+
+            # LLM fallback: attempt fuzzy matches for rows still unmatched after exact pass
+            if openai_key and inv_has_ptip:
+                unmatched_inv = [
+                    tr for tr, pm, _ in matched_pairs
+                    if pm is None and not tr['is_agent']
+                ]
+                remaining_ptip_local = [
+                    li for li in range(len(inv_ptip_rows))
+                    if li not in ptip_consumed
+                    and inv_ptip_orig[li] not in duplicate_indices
+                ]
+                if unmatched_inv and remaining_ptip_local:
+                    inv_names = [tr['name'] for tr in unmatched_inv]
+                    ptip_names = [
+                        str(inv_ptip_rows[li].get('Talent Name', '') or '').split('\n')[0].strip()
+                        for li in remaining_ptip_local
+                    ]
+                    llm_map = _llm_fuzzy_match_talent(inv_names, ptip_names, openai_key)
+                    if llm_map:
+                        ptip_name_to_local = {
+                            str(inv_ptip_rows[li].get('Talent Name', '') or '').split('\n')[0].strip(): li
+                            for li in remaining_ptip_local
+                        }
+                        for idx, (tr, pm, pm_li) in enumerate(matched_pairs):
+                            if pm is not None or tr['is_agent']:
+                                continue
+                            matched_ptip_name = llm_map.get(tr['name'])
+                            if matched_ptip_name:
+                                li = ptip_name_to_local.get(matched_ptip_name)
+                                if li is not None and li not in ptip_consumed:
+                                    matched_pairs[idx] = (tr, inv_ptip_rows[li], li)
+                                    ptip_consumed.add(li)
+
+            # Pass 2: emit rows in PDF order
+            for tr, ptip_match, ptip_match_local_i in matched_pairs:
                 # Invoice-level tax stacking only when no PTIP exists for this invoice
                 is_first_tax = (not inv_has_ptip) and (not tr['is_agent']) and (not first_talent_seen)
                 if not tr['is_agent']:

@@ -2011,6 +2011,7 @@ async def extract_talent_endpoint(
         ptip_bytes=ptip_bytes,
         project_title=project_title,
         workbook_type=workbook_type,
+        openai_key=OPENAI_API_KEY,
     )
 
 
