@@ -53,6 +53,14 @@ _IL_TAX_RE = re.compile(r"Illinois State Tax\s+([\d,]+\.\d{2})", re.IGNORECASE)
 # Explicit res state override: "Res State: IL"
 _RES_STATE_RE = re.compile(r"Res State:\s*([A-Z]{2})", re.IGNORECASE)
 
+# Location codes on payment-type lines: "STRAIGHT-TIME CA-LAC 8.00 ..."
+# The state is the 2-letter prefix before the hyphen in the location code.
+_PAYMENT_LOC_RE = re.compile(
+    r"^(?:STRAIGHT[-\s]?TIME|TIME[-\s]AND[-\s]ONE[-\s]HALF|DOUBLE[-\s]?TIME|"
+    r"OVERTIME|HOLIDAY|PREMIUM|GOLDEN\s+TIME)\s+([A-Z]{2})-[A-Z]{2,4}\b",
+    re.IGNORECASE,
+)
+
 # Page stamp to filter: "11/05/2025 12:27 PM 2"
 _PAGE_STAMP_RE = re.compile(r"^\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}\s+[AP]M\s+\d+$")
 
@@ -117,6 +125,7 @@ def _parse_employee_block(emp_lines: list[str], addr_state: str) -> dict:
     days_worked = 0
     il_tax = None
     res_state = addr_state
+    work_states: set[str] = set()
 
     for line in emp_lines:
         if not work_dates:
@@ -140,12 +149,19 @@ def _parse_employee_block(emp_lines: list[str], addr_state: str) -> dict:
         if rm:
             res_state = rm.group(1).upper()
 
+        pm = _PAYMENT_LOC_RE.match(line)
+        if pm:
+            work_states.add(pm.group(1).upper())
+
+    work_state = "/".join(sorted(work_states)) if work_states else ""
+
     return {
         "jobTitle":       job_title,
         "workDates":      work_dates,
         "daysWorked":     days_worked if days_worked else None,
         "resState":       res_state,
         "withholdingsIL": il_tax,
+        "workState":      work_state,
     }
 
 

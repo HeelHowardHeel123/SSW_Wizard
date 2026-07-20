@@ -241,6 +241,7 @@ def extract(pdf_bytes: bytes, **_) -> tuple[list[dict], list[str]]:
                 row["street"]         = enrichment.get("street", "")
                 row["city"]           = enrichment.get("city", "")
                 row["zip"]            = enrichment.get("zip", "")
+                row["workState"]      = enrichment.get("workState", "")
                 # Override workDates with register's per-employee dates if available
                 if enrichment.get("workDates"):
                     row["workDates"] = enrichment["workDates"]
