@@ -37,7 +37,10 @@ FIELDS (return exactly these key names):
     "unsigned"     — W-9 is present but no signature is visible
     "undated"      — W-9 is present and signed but no date is visible
     "signed_dated" — W-9 is present, signed, and dated (w9_date will also be populated)
-16. notes — empty string in normal cases. Populate ONLY if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice. One sentence max.
+16. notes — ALWAYS populate this field with one of the following:
+    - If invoice_date is populated: "Date: <the date you found> — labeled as: <exact label or 'unlabeled, top of invoice'>"
+    - If invoice_date is empty: "No date: <one-sentence reason why no date was found>"
+    Append any genuine concerns (ambiguous amounts, unreadable pages, etc.) after a semicolon.
 
 Return ONLY a valid JSON array using exactly these key names per object:
 vendor_name, invoice_number, invoice_date, invoice_amount, description, po_number, pymt_method, pymt_number, address, city, state, zip, pop, w9_date, w9_status, notes
