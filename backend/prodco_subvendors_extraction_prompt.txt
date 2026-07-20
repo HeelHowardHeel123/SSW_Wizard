@@ -14,7 +14,7 @@ Never skip a PDF. Always return at least one row if any invoice, receipt, or pay
 FIELDS (return exactly these key names):
 1.  vendor_name — the business or person who issued the invoice. Never the production company. Use the name exactly as it appears on the invoice. Required.
 2.  invoice_number — invoice/reference number exactly as shown. If no formal number, use a short label: "Receipt", "Loc Agreement", or "Invoice". Required.
-3.  invoice_date — in MM/DD/YYYY format. Empty string if not found on any document.
+3.  invoice_date — in MM/DD/YYYY format. On vendor invoices the date often appears near the top of the page without a label — just a standalone date like "1/8/24" or "January 8, 2024". Use it. Convert two-digit years to four digits (e.g., "1/8/24" → "01/08/2024"). Empty string only if no date appears anywhere on the invoice itself.
 4.  invoice_amount — total as a plain number, no $ or commas (e.g. 1088.54). Use final balance due for hotel folios. Required.
 5.  description — choose the best category: Hotel, Equipment Rental, Vehicle Rental, Crew Meal, Location Fee, Permit, Production Services, Casting, Airfare, Car Service, Props, Stage/Equip Rental, Post Production — or best concise fit. Empty string if unclear.
 6.  po_number — PO number if visible on any document in the PDF. Empty string if not found.

@@ -399,13 +399,25 @@ _CARD_ABBR = {
 
 
 def normalize_date(val: str) -> str:
-    """Convert YYYY-MM-DD to MM/DD/YYYY; pass through anything else."""
+    """Normalize dates to MM/DD/YYYY.
+    Handles: YYYY-MM-DD, M/D/YY, M/D/YYYY, MM/DD/YY, MM/DD/YYYY."""
     if not val:
         return ""
     s = str(val).strip()
+    # ISO format: YYYY-MM-DD
     m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', s)
     if m:
         return f"{m.group(2)}/{m.group(3)}/{m.group(1)}"
+    # M/D/YY or MM/DD/YY — expand two-digit year
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2})$', s)
+    if m:
+        mo, dy, yr = m.group(1).zfill(2), m.group(2).zfill(2), m.group(3)
+        year = f"20{yr}" if int(yr) <= 50 else f"19{yr}"
+        return f"{mo}/{dy}/{year}"
+    # M/D/YYYY or MM/DD/YYYY — zero-pad if needed
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', s)
+    if m:
+        return f"{m.group(1).zfill(2)}/{m.group(2).zfill(2)}/{m.group(3)}"
     return s
 
 
