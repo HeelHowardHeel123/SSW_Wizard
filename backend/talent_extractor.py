@@ -914,17 +914,18 @@ def _llm_fuzzy_match_talent(
     invoice_names: list[str],
     ptip_names: list[str],
     openai_key: str,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, str]]:
     """LLM fallback: match invoice names to PTIP names that exact normalization missed.
 
     Handles name-order differences (First Last vs Last, First), suffixes (II/Jr/Sr),
-    and company DBA variations ('Ashley Washington Holdings LLC dba Karen Stavins
-    Enterprises' → 'Karen Stavins Enterprises').
+    company DBA variations, and typos.
 
-    Returns {invoice_name: ptip_name} for confident matches only.
+    Returns (matches, unmatched_reasons) where:
+      matches:           {invoice_name: ptip_name} for confident matches
+      unmatched_reasons: {invoice_name: reason} for names that couldn't be matched
     """
     if not invoice_names or not ptip_names or not openai_key:
-        return {}
+        return {}, {}
     try:
         from openai import OpenAI
         client = OpenAI(api_key=openai_key)
@@ -938,34 +939,42 @@ def _llm_fuzzy_match_talent(
             "formatting differences. Common differences:\n"
             "- Name order: 'William Rose II' (invoice) = 'Rose, William' (PTIP)\n"
             "- Company DBA: 'Ashley Washington Holdings LLC dba Karen Stavins Enterprises' = "
-            "'Karen Stavins Enterprises'\n\n"
+            "'Karen Stavins Enterprises'\n"
+            "- Typos: 'Bac Talent Managment Inc' = 'Bac Talent Management Inc'\n\n"
             "Rules:\n"
             "- Only match if you are CONFIDENT they are the same person or entity.\n"
-            "- Do NOT guess — if uncertain, omit the pair.\n"
-            "- Each invoice name maps to at most one PTIP name and vice versa.\n\n"
-            'Return ONLY a JSON object: {"invoice_name": "ptip_name", ...}. '
-            "Return {} if no confident matches exist."
+            "- Do NOT guess — if uncertain, put the name in 'unmatched' with a brief reason.\n"
+            "- Each invoice name maps to at most one PTIP name and vice versa.\n"
+            "- Every invoice name must appear in either 'matches' or 'unmatched'.\n\n"
+            "Return ONLY a JSON object with exactly two keys:\n"
+            '{"matches": {"invoice_name": "ptip_name", ...}, '
+            '"unmatched": {"invoice_name": "brief reason why no confident match was found", ...}}'
         )
         resp = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=500,
+            max_tokens=800,
             response_format={"type": "json_object"},
         )
         raw = json.loads(resp.choices[0].message.content)
         if not isinstance(raw, dict):
-            return {}
-        # Validate: keys must be in invoice_names, values in ptip_names
+            return {}, {}
         inv_set  = set(invoice_names)
         ptip_set = set(ptip_names)
-        return {
+        matches = {
             str(k): str(v)
-            for k, v in raw.items()
+            for k, v in (raw.get("matches") or {}).items()
             if str(k) in inv_set and str(v) in ptip_set
         }
+        reasons = {
+            str(k): str(v)
+            for k, v in (raw.get("unmatched") or {}).items()
+            if str(k) in inv_set
+        }
+        return matches, reasons
     except Exception:
-        return {}
+        return {}, {}
 
 
 def extract_talent(
@@ -1102,11 +1111,14 @@ def extract_talent(
 
                 matched_pairs.append((tr, ptip_match, ptip_match_local_i))
 
-            # LLM fallback: attempt fuzzy matches for rows still unmatched after exact pass
-            if openai_key and inv_has_ptip:
+            # LLM fallback: attempt fuzzy matches for rows still unmatched after exact pass.
+            # Only fire when at least one row already matched (ptip_consumed non-empty) — if
+            # nothing matched at all, there's no basis to trust the invoice/PTIP pair.
+            llm_reasons: dict[str, str] = {}
+            if openai_key and inv_has_ptip and ptip_consumed:
                 unmatched_inv = [
                     tr for tr, pm, _ in matched_pairs
-                    if pm is None and not tr['is_agent']
+                    if pm is None
                 ]
                 remaining_ptip_local = [
                     li for li in range(len(inv_ptip_rows))
@@ -1115,18 +1127,18 @@ def extract_talent(
                 ]
                 if unmatched_inv and remaining_ptip_local:
                     inv_names = [tr['name'] for tr in unmatched_inv]
-                    ptip_names = [
+                    remaining_ptip_names = [
                         str(inv_ptip_rows[li].get('Talent Name', '') or '').split('\n')[0].strip()
                         for li in remaining_ptip_local
                     ]
-                    llm_map = _llm_fuzzy_match_talent(inv_names, ptip_names, openai_key)
+                    llm_map, llm_reasons = _llm_fuzzy_match_talent(inv_names, remaining_ptip_names, openai_key)
                     if llm_map:
                         ptip_name_to_local = {
                             str(inv_ptip_rows[li].get('Talent Name', '') or '').split('\n')[0].strip(): li
                             for li in remaining_ptip_local
                         }
                         for idx, (tr, pm, pm_li) in enumerate(matched_pairs):
-                            if pm is not None or tr['is_agent']:
+                            if pm is not None:
                                 continue
                             matched_ptip_name = llm_map.get(tr['name'])
                             if matched_ptip_name:
@@ -1154,6 +1166,10 @@ def extract_talent(
                     scenario=eff_scenario,
                     ptip_row_no=(inv_ptip_orig[ptip_match_local_i] + 1) if ptip_match_local_i is not None else None,
                 )
+                if ptip_match is None:
+                    reason = llm_reasons.get(tr['name'], '')
+                    if reason:
+                        row['notes'] = f"[LLM no match] {reason}"
                 workbook_rows.append(row)
                 item_no += 1
 
