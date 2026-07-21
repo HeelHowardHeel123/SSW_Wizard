@@ -38,7 +38,11 @@ FIELDS (return exactly these key names):
 10. received_invoice — whether a supporting receipt document for this line item exists in the PDF:
     "YES" — a receipt, agreement, or other document for this item is present in the PDF
     "NO"  — this line item appears on the summary sheet but no receipt document was found in the PDF
-11. notes — empty string in normal cases. Use only for genuine concerns: unreadable receipts, amounts that conflict between the summary and the actual receipt, or items that appear questionable. One sentence max.
+11. notes — always include a brief note explaining where the amount came from:
+    - Receipt found and amount matches summary: "Receipt $X = summary"
+    - Receipt found but amount differs from summary: "Receipt $X; summary $Y — used receipt" (or "used summary" if you trusted the summary amount instead)
+    - No receipt found for this line: "No receipt; used summary $X"
+    If there is also a genuine concern (unreadable scan, questionable item, etc.), append it after a semicolon.
 12. envelope_total — the grand total shown at the bottom of the PETTY CASH SUMMARY page (the total the custodian is claiming for this packet). Plain number, no $ or commas (e.g. 3820.84). Include this on EVERY row. If no total is visible on the summary page, use 0.
 
 Return ONLY a valid JSON array using exactly these key names per object:

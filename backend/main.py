@@ -1718,7 +1718,7 @@ async def extract_petty_cash(
                 )
                 existing = file_rows[0]["notes"]
                 file_rows[0]["notes"] = (
-                    f"{existing} | {mismatch_note}" if existing else mismatch_note
+                    f"{mismatch_note} | {existing}" if existing else mismatch_note
                 )
 
         rows.extend(file_rows)
