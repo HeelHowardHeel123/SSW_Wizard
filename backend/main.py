@@ -710,6 +710,12 @@ def normalize_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
     except (TypeError, ValueError):
         env_num = 1
 
+    line_num = raw.get("line_number", 0)
+    try:
+        line_num = max(0, int(line_num))
+    except (TypeError, ValueError):
+        line_num = 0
+
     received = str(raw.get("received_invoice", "YES")).strip().upper()
     if received not in ("YES", "NO"):
         received = "YES"
@@ -717,6 +723,7 @@ def normalize_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
     return {
         "custodian_name":   clean_name(raw.get("custodian_name", "")),
         "env_number":       env_num,
+        "line_number":      line_num,
         "vendor_name":      clean_name(raw.get("vendor_name", "")),
         "receipt_type":     str(raw.get("receipt_type", "Receipt")).strip() or "Receipt",
         "receipt_date":     normalize_date(str(raw.get("receipt_date", "")).strip()),
@@ -1681,6 +1688,7 @@ async def extract_petty_cash(
     )
 
     rows, issues, file_summaries = [], [], []
+    custodian_env_max: dict[str, int] = {}
 
     for uf in files:
         data = await uf.read()
@@ -1696,7 +1704,7 @@ async def extract_petty_cash(
         file_rows: list[dict] = []
         env_total = 0.0
         if not raw_list:
-            errs.append("no petty cash data extracted — review manually")
+            errs.append("no petty cash data extracted - review manually")
             issues.append(f"{uf.filename}: no petty cash data extracted")
         else:
             env_total = normalize_amount(raw_list[0].get("envelope_total", 0))
@@ -1706,6 +1714,15 @@ async def extract_petty_cash(
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        if file_rows:
+            custodian = file_rows[0]["custodian_name"]
+            env_offset = custodian_env_max.get(custodian, 0)
+            if env_offset > 0:
+                for r in file_rows:
+                    r["env_number"] = r["env_number"] + env_offset
+            new_max = max(r["env_number"] for r in file_rows)
+            custodian_env_max[custodian] = max(custodian_env_max.get(custodian, 0), new_max)
 
         if file_rows and env_total:
             extracted_total = round(sum(r["amount"] for r in file_rows), 2)
