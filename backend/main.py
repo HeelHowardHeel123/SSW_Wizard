@@ -28,6 +28,8 @@ Endpoints
                                      returns {"rows": [...], "issues": [...]}
   POST /extract-prodco-subvendors  → multipart: files[]=<pdf>, prodco_name, prodco_address
                                      returns {"rows": [...], "issues": [...]}
+  POST /extract-petty-cash         → multipart: files[]=<pdf>, prodco_name, work_state
+                                     returns {"rows": [...], "issues": [...]}
 
 Environment variables
   OPENAI_API_KEY     (required for invoices + image-based fringe) your OpenAI key
@@ -75,6 +77,7 @@ _AGENCY_HOURS_PROMPT_PATH       = os.path.join(os.path.dirname(os.path.abspath(_
 _RESIDENCY_DOCS_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "residency_docs_prompt.txt")
 _DIVERSITY_FORM_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diversity_form_prompt.txt")
 _CALL_SHEET_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "call_sheet_prompt.txt")
+_PETTY_CASH_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "petty_cash_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -209,6 +212,18 @@ def _load_prodco_subvendors_prompt(
         template
         .replace("{prodco_name}", f"{name_label}{addr_label}")
         .replace("{sub_prodco_line}", sub_line)
+    )
+
+
+def _load_petty_cash_prompt(prodco_name: str, work_state: str = "IL") -> str:
+    with open(_PETTY_CASH_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "IL"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
     )
 
 
@@ -677,6 +692,39 @@ def normalize_prodco_subvendor_row(raw: dict, prodco_name: str, filename: str) -
         "paymentMethod":    method,
         "paymentNo":        normalize_pymt_number(method, raw.get("pymt_number", "")),
         "paymentEntity":    prodco_name.strip(),
+        "notes":            str(raw.get("notes", "")).strip(),
+        "sourceFile":       filename,
+    }
+
+
+def normalize_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
+    method = normalize_pymt_method(str(raw.get("pymt_method", "")).strip()) or "Cash"
+
+    state_val = clean_state(raw.get("state", ""))
+    if not state_val and work_state:
+        state_val = clean_state(work_state) or work_state.strip().upper()[:2]
+
+    env_num = raw.get("env_number", 1)
+    try:
+        env_num = max(1, int(env_num))
+    except (TypeError, ValueError):
+        env_num = 1
+
+    received = str(raw.get("received_invoice", "YES")).strip().upper()
+    if received not in ("YES", "NO"):
+        received = "YES"
+
+    return {
+        "custodian_name":   clean_name(raw.get("custodian_name", "")),
+        "env_number":       env_num,
+        "vendor_name":      clean_name(raw.get("vendor_name", "")),
+        "receipt_type":     str(raw.get("receipt_type", "Receipt")).strip() or "Receipt",
+        "receipt_date":     normalize_date(str(raw.get("receipt_date", "")).strip()),
+        "amount":           normalize_amount(raw.get("amount", 0)),
+        "description":      str(raw.get("description", "")).strip(),
+        "state":            state_val,
+        "pymt_method":      method,
+        "received_invoice": received,
         "notes":            str(raw.get("notes", "")).strip(),
         "sourceFile":       filename,
     }
@@ -1603,6 +1651,65 @@ async def extract_prodco_subvendors(
         file_summaries.append({
             "filename": uf.filename,
             "company":  vendor_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── Petty Cash extractor ──────────────────────────────────────────────────────
+
+@app.post("/extract-petty-cash")
+async def extract_petty_cash(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("IL"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_petty_cash_prompt(prodco_name, work_state)
+    user_text     = (
+        "Extract all petty cash line items from this custodian's packet. "
+        "Read the summary sheet first for the canonical ordered list, "
+        "then check which receipts are present in the PDF."
+    )
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no petty cash data extracted — review manually")
+            issues.append(f"{uf.filename}: no petty cash data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_petty_cash_row(raw, work_state, uf.filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        custodian_label = file_rows[0]["custodian_name"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": uf.filename,
+            "company":  custodian_label,
             "rows":     len(file_rows),
             "issues":   errs,
         })
