@@ -258,7 +258,7 @@ def _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=None, max_pages=N
 
 # ── GPT-4o vision call ────────────────────────────────────────────────────────
 
-def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices from these document pages."):
+def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices from these document pages.", max_tokens=4096):
     content = [{"type": "text", "text": user_text}]
     for img in images_b64:
         content.append({
@@ -272,7 +272,7 @@ def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices
             {"role": "user", "content": content},
         ],
         temperature=0,
-        max_tokens=4096,
+        max_tokens=max_tokens,
     )
     raw = resp.choices[0].message.content.strip()
     try:
@@ -285,6 +285,56 @@ def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices
             except Exception:
                 return []
     return []
+
+
+def _extract_petty_cash_from_file(filename, data, system_prompt, client, user_text=""):
+    """Petty cash extractor: lower DPI to reduce input token count, higher
+    max_tokens for large JSON responses, and page-chunking for big packets.
+    Summary pages are always prepended to every chunk so the LLM retains
+    line-number context across the entire packet."""
+    images = _file_to_images_b64(filename, data, dpi_scale=1.5)
+    if not images:
+        return []
+
+    MAX_TOKENS    = 16384
+    SUMMARY_PAGES = 2   # first N pages are always summary; safe even if only 1
+    CHUNK_SIZE    = 30  # receipt pages per chunk
+
+    summary_imgs = images[:SUMMARY_PAGES]
+    receipt_imgs = images[SUMMARY_PAGES:]
+
+    if len(receipt_imgs) <= CHUNK_SIZE:
+        return _call_gpt(summary_imgs + receipt_imgs, system_prompt, client,
+                         user_text=user_text, max_tokens=MAX_TOKENS)
+
+    # Large packet: chunk receipt pages, prepend summary to each chunk.
+    # Tell the LLM to skip lines whose receipts are not in this subset.
+    chunk_user_text = (
+        user_text
+        + " NOTE: You are seeing a subset of the receipt pages. "
+        "Return rows ONLY for receipts physically visible on these pages. "
+        "Do not return rows for summary lines whose receipts are not shown here."
+    )
+    results_by_key: dict[tuple, dict] = {}
+    for i in range(0, len(receipt_imgs), CHUNK_SIZE):
+        chunk = summary_imgs + receipt_imgs[i : i + CHUNK_SIZE]
+        for row in _call_gpt(chunk, system_prompt, client,
+                             user_text=chunk_user_text, max_tokens=MAX_TOKENS):
+            key = (row.get("env_number", 1), row.get("line_number", 0))
+            ri  = str(row.get("received_invoice", "NO")).strip().upper()
+            existing = results_by_key.get(key)
+            # Keep this row if it's the first occurrence, or if it has a real
+            # receipt and the existing entry does not.
+            if existing is None or (
+                ri == "YES"
+                and str(existing.get("received_invoice", "NO")).strip().upper() != "YES"
+            ):
+                results_by_key[key] = row
+
+    return sorted(
+        results_by_key.values(),
+        key=lambda r: (r.get("env_number", 1), r.get("line_number", 0)),
+    )
 
 
 # ── Claude vision call ───────────────────────────────────────────────────────
@@ -1695,7 +1745,7 @@ async def extract_petty_cash(
         errs: list[str] = []
 
         try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+            raw_list = _extract_petty_cash_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
         except Exception as e:
             errs.append(str(e))
             issues.append(f"{uf.filename}: {e}")
