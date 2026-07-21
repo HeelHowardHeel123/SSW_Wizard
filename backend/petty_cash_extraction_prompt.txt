@@ -19,8 +19,8 @@ YOUR PROCESS:
 
 FIELDS (return exactly these key names):
 1.  custodian_name - the person who submitted this packet. Use the name exactly as shown on the summary page header. Format: LAST, FIRST. Required.
-2.  env_number - envelope number as an integer. Default is 1. Increment to 2, 3, etc. only if the summary page explicitly labels multiple envelope sections (e.g., ENVELOPE #1, ENVELOPE #2).
-3.  line_number - the line number exactly as shown on the summary page for this item (e.g., if the summary shows "15. Smith & Wollensky", return 15). If the summary has no explicit line numbers, use the item's sequential position on the summary page (1, 2, 3...). Required.
+2.  env_number - the envelope number as an integer. Look for it in the form header (e.g., "Envelope No: 1 of 2", "Envelope No: 2 of 3", "ENV 2 of 4") or in explicit section labels (e.g., "ENVELOPE #1", "ENVELOPE #2"). Use that number directly. If no envelope number is shown anywhere, default to 1.
+3.  line_number - the sequential receipt/item counter from the leftmost column of the summary page (1, 2, 3...). WARNING: some summary forms have a separate column also labeled "Line No" or "Line Number" that contains AICP budget codes (numbers like 181, 182, 188, 190, etc.) — do NOT use those codes. Use only the small sequential counter in the leftmost column. If the summary shows "15. Smith & Wollensky", return 15. Required.
 4.  vendor_name - the store, service, or person the expense was paid to. Read from the individual receipt first. If the vendor name is not readable on the receipt, use the name from the summary sheet and add "Vendor from summary" to the notes field. Required.
 5.  receipt_type - use exactly one of these values:
     "Receipt"       - for store receipts, rideshare emails/screenshots, or any standard purchase receipt
@@ -50,7 +50,7 @@ FIELDS (return exactly these key names):
     If you used the summary sheet for the vendor name, add "Vendor from summary" to the notes.
     If there is also a genuine concern, append it after a semicolon.
     Use only plain ASCII characters in all notes. No em dashes, no special Unicode symbols, no emoji.
-13. envelope_total - the grand total shown at the bottom of the PETTY CASH SUMMARY page (the total the custodian is claiming for this packet). Plain number, no $ or commas (e.g. 3820.84). Include this on EVERY row. If no total is visible on the summary page, use 0.
+13. envelope_total - the subtotal for THIS envelope only (the "TOTAL (THIS ENVELOPE)" line or equivalent). Plain number, no $ or commas (e.g. 1341.94). Include on EVERY row for that envelope. If the PDF has multiple envelopes, each envelope's rows carry that envelope's own subtotal - do NOT use the grand total across all envelopes. If only one envelope exists, this equals the overall total. Use 0 if no total is visible.
 
 Return ONLY a valid JSON array using exactly these key names per object:
 custodian_name, env_number, line_number, vendor_name, receipt_type, receipt_date, amount, description, state, pymt_method, received_invoice, notes, envelope_total

@@ -1702,12 +1702,21 @@ async def extract_petty_cash(
             raw_list = []
 
         file_rows: list[dict] = []
-        env_total = 0.0
+        env_totals: dict[int, float] = {}
         if not raw_list:
             errs.append("no petty cash data extracted - review manually")
             issues.append(f"{uf.filename}: no petty cash data extracted")
         else:
-            env_total = normalize_amount(raw_list[0].get("envelope_total", 0))
+            # Collect per-envelope totals from raw rows before normalization
+            for raw in raw_list:
+                en = raw.get("env_number", 1)
+                try:
+                    en = max(1, int(en))
+                except (TypeError, ValueError):
+                    en = 1
+                et = normalize_amount(raw.get("envelope_total", 0))
+                if et and en not in env_totals:
+                    env_totals[en] = et
             for raw in raw_list:
                 try:
                     file_rows.append(normalize_petty_cash_row(raw, work_state, uf.filename))
@@ -1721,22 +1730,30 @@ async def extract_petty_cash(
             if env_offset > 0:
                 for r in file_rows:
                     r["env_number"] = r["env_number"] + env_offset
+                env_totals = {k + env_offset: v for k, v in env_totals.items()}
             new_max = max(r["env_number"] for r in file_rows)
             custodian_env_max[custodian] = max(custodian_env_max.get(custodian, 0), new_max)
 
-        if file_rows and env_total:
-            extracted_total = round(sum(r["amount"] for r in file_rows), 2)
-            if abs(extracted_total - env_total) > 0.01:
-                diff = round(extracted_total - env_total, 2)
-                mismatch_note = (
-                    f"Envelope total ${env_total:,.2f} | "
-                    f"Extracted total ${extracted_total:,.2f} | "
-                    f"Difference ${diff:,.2f}"
-                )
-                existing = file_rows[0]["notes"]
-                file_rows[0]["notes"] = (
-                    f"{mismatch_note} | {existing}" if existing else mismatch_note
-                )
+        if file_rows and env_totals:
+            env_groups: dict[int, list] = {}
+            for r in file_rows:
+                env_groups.setdefault(r["env_number"], []).append(r)
+            for env_num, group_rows in env_groups.items():
+                et = env_totals.get(env_num, 0.0)
+                if not et:
+                    continue
+                extracted_total = round(sum(r["amount"] for r in group_rows), 2)
+                if abs(extracted_total - et) > 0.01:
+                    diff = round(extracted_total - et, 2)
+                    mismatch_note = (
+                        f"Envelope total ${et:,.2f} | "
+                        f"Extracted total ${extracted_total:,.2f} | "
+                        f"Difference ${diff:,.2f}"
+                    )
+                    existing = group_rows[0]["notes"]
+                    group_rows[0]["notes"] = (
+                        f"{mismatch_note} | {existing}" if existing else mismatch_note
+                    )
 
         rows.extend(file_rows)
         custodian_label = file_rows[0]["custodian_name"] if file_rows else "unknown"
