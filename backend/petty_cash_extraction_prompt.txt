@@ -7,10 +7,12 @@ DOCUMENT STRUCTURE:
 Each PDF is a petty cash packet submitted by a single custodian (crew member). The packet starts with a PETTY CASH SUMMARY cover page that lists all line items in order, followed by the actual receipts (store receipts, rideshare screenshots, location agreements, etc.).
 
 YOUR PROCESS:
-1. Find the PETTY CASH SUMMARY page first. This is your authoritative source for what line items exist and their order. Read the custodian name from this page.
+1. Find the PETTY CASH SUMMARY (or PETTY CASH DISTRIBUTION) page first. This is your authoritative source for what line items exist and their order. Read the custodian name and the grand total from this page.
 2. Check if the summary has multiple envelope sections (ENVELOPE #1, ENVELOPE #2, etc.). If so, track the envelope number for each group of items.
 3. For each line item listed on the summary, look through the rest of the PDF for a corresponding receipt document.
-4. Return one JSON object per line item from the summary, in summary page order.
+4. Custodians sometimes write a number (circled or plain) directly on a receipt — this is a handwritten line number that corresponds to a line on the summary page. When you see one, use it as the primary key to match that receipt to the correct summary line. Not all packets have them; fall back to vendor name and position order when absent.
+5. Some receipts (especially long thermal receipts like Costco) are physically cut into segments and scanned across multiple pages or side-by-side on one page. Treat all segments of the same receipt as a single item. Use only the final TOTAL or BALANCE DUE line as the amount — never a subtotal from a partial segment.
+6. Return one JSON object per line item from the summary, in summary page order.
 
 FIELDS (return exactly these key names):
 1.  custodian_name — the person who submitted this packet. Use the name exactly as shown on the summary page header. Format: LAST, FIRST. Required.
@@ -25,7 +27,7 @@ FIELDS (return exactly these key names):
 6.  amount — total as a plain number, no $ or commas (e.g. 15.35). Use a negative number for returns or credits (e.g. -336.06).
 7.  description — choose the best category:
     Wardrobe Purchase, Wardrobe Return, Crafty, Crew Meal, Parking, Location Fee, Set Dressing, Props, Production Supplies, Car Service, Fuel — or the best concise fit if none of these apply.
-8.  state — 2-letter state code. Read from the receipt if visible. If not visible, use the work state: {work_state}.
+8.  state — 2-letter state code. Look for the vendor's physical address on the receipt (store header, address block, or footer) and extract the state from that address. Only fall back to {work_state} when no vendor address is visible anywhere on the receipt.
 9.  pymt_method — how the custodian paid for this item. Determine from the receipt itself:
     - "Cash" if no card info is shown, or if the receipt shows a cash transaction or "PAID CASH" notation
     - "Credit Card" if a credit or debit card was used but the brand is not visible
@@ -36,8 +38,9 @@ FIELDS (return exactly these key names):
     "YES" — a receipt, agreement, or other document for this item is present in the PDF
     "NO"  — this line item appears on the summary sheet but no receipt document was found in the PDF
 11. notes — empty string in normal cases. Use only for genuine concerns: unreadable receipts, amounts that conflict between the summary and the actual receipt, or items that appear questionable. One sentence max.
+12. envelope_total — the grand total shown at the bottom of the PETTY CASH SUMMARY page (the total the custodian is claiming for this packet). Plain number, no $ or commas (e.g. 3820.84). Include this on EVERY row. If no total is visible on the summary page, use 0.
 
 Return ONLY a valid JSON array using exactly these key names per object:
-custodian_name, env_number, vendor_name, receipt_type, receipt_date, amount, description, state, pymt_method, received_invoice, notes
+custodian_name, env_number, vendor_name, receipt_type, receipt_date, amount, description, state, pymt_method, received_invoice, notes, envelope_total
 
 No explanation. No markdown. No code fences. JSON array only.

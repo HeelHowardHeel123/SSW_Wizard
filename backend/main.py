@@ -1694,16 +1694,32 @@ async def extract_petty_cash(
             raw_list = []
 
         file_rows: list[dict] = []
+        env_total = 0.0
         if not raw_list:
             errs.append("no petty cash data extracted — review manually")
             issues.append(f"{uf.filename}: no petty cash data extracted")
         else:
+            env_total = normalize_amount(raw_list[0].get("envelope_total", 0))
             for raw in raw_list:
                 try:
                     file_rows.append(normalize_petty_cash_row(raw, work_state, uf.filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        if file_rows and env_total:
+            extracted_total = round(sum(r["amount"] for r in file_rows), 2)
+            if abs(extracted_total - env_total) > 0.01:
+                diff = round(extracted_total - env_total, 2)
+                mismatch_note = (
+                    f"Envelope total ${env_total:,.2f} | "
+                    f"Extracted total ${extracted_total:,.2f} | "
+                    f"Difference ${diff:,.2f}"
+                )
+                existing = file_rows[0]["notes"]
+                file_rows[0]["notes"] = (
+                    f"{existing} | {mismatch_note}" if existing else mismatch_note
+                )
 
         rows.extend(file_rows)
         custodian_label = file_rows[0]["custodian_name"] if file_rows else "unknown"
