@@ -10,7 +10,9 @@ YOUR PROCESS:
 1. Find the PETTY CASH SUMMARY (or PETTY CASH DISTRIBUTION) page first. This is your authoritative source for what line items exist and their order. Read the custodian name and the grand total from this page.
 2. Count the number of line items on the summary page and hold that number. Your response MUST contain exactly that many JSON objects — no more, no fewer.
 3. Check if the summary has multiple envelope sections (ENVELOPE #1, ENVELOPE #2, etc.). If so, track the envelope number for each group of items.
-4. For each line item listed on the summary, look through the rest of the PDF for a corresponding receipt document. If no receipt is found for a line, still return that line using the vendor name and amount from the summary sheet, and set received_invoice to "NO". Never skip a summary line.
+4. Note whether the summary page is handwritten or typed/printed — this matters for how carefully you must verify amounts (see step 4b below).
+4a. For each line item listed on the summary, find the physical receipt in the PDF and read the total amount directly from it. The receipt is your primary source for the amount. If no receipt is found for a line, still return that line using the vendor name and amount from the summary sheet, and set received_invoice to "NO". Never skip a summary line.
+4b. If the summary page is handwritten: treat all summary amounts as potentially misread. For every line that has a receipt, read the amount from the receipt and use that — do not rely on the handwritten summary amount. Only use the summary amount when no receipt exists.
 5. Custodians sometimes write a number (circled or plain) directly on a receipt — this is a handwritten line number that corresponds to a line on the summary page. When you see one, use it as the primary key to match that receipt to the correct summary line. Not all packets have them; fall back to vendor name and position order when absent.
 6. Some receipts (especially long thermal receipts like Costco) are physically cut into segments and scanned across multiple pages or side-by-side on one page. Treat all segments of the same receipt as a single item. Use only the final TOTAL or BALANCE DUE line as the amount — never a subtotal from a partial segment.
 7. Before returning, verify your array length matches the count from step 2. If it does not, find the missing line(s) and add them.
@@ -25,7 +27,7 @@ FIELDS (return exactly these key names):
     "Invoice"       — for formal vendor invoices
     "various"       — only if the summary itself groups multiple items together under "various"
 5.  receipt_date — in MM/DD/YYYY format. Look first on the individual receipt; supplement from the summary sheet if the receipt is missing or the date is unclear. Convert two-digit years (e.g., "9/25/24" → "09/25/2024"). Empty string only if no date is visible on either the receipt or the summary.
-6.  amount — total as a plain number, no $ or commas (e.g. 15.35). Use a negative number for returns or credits (e.g. -336.06).
+6.  amount — always read from the physical receipt first. Only use the summary sheet amount when no receipt is present. Plain number, no $ or commas (e.g. 15.35). Use a negative number for returns or credits (e.g. -336.06).
 7.  description — choose the best category:
     Wardrobe Purchase, Wardrobe Return, Crafty, Crew Meal, Parking, Location Fee, Set Dressing, Props, Production Supplies, Car Service, Fuel — or the best concise fit if none of these apply.
 8.  state — 2-letter state code. Look for the vendor's physical address on the receipt (store header, address block, or footer) and extract the state from that address. Only fall back to {work_state} when no vendor address is visible anywhere on the receipt.
@@ -38,11 +40,13 @@ FIELDS (return exactly these key names):
 10. received_invoice — whether a supporting receipt document for this line item exists in the PDF:
     "YES" — a receipt, agreement, or other document for this item is present in the PDF
     "NO"  — this line item appears on the summary sheet but no receipt document was found in the PDF
-11. notes — always include a brief note explaining where the amount came from:
-    - Receipt found and amount matches summary: "Receipt $X = summary"
-    - Receipt found but amount differs from summary: "Receipt $X; summary $Y — used receipt" (or "used summary" if you trusted the summary amount instead)
-    - No receipt found for this line: "No receipt; used summary $X"
-    If there is also a genuine concern (unreadable scan, questionable item, etc.), append it after a semicolon.
+11. notes — always include a brief note confirming you read the amount from the receipt:
+    - Receipt found, amount matches summary: "Read $X from receipt; matches summary"
+    - Receipt found, amount differs from summary: "Read $X from receipt; summary shows $Y — used receipt"
+    - Receipt found but amount unreadable: "Receipt present but amount unreadable; used summary $Y"
+    - No receipt found: "No receipt; used summary $X"
+    If the summary is handwritten, add "(handwritten summary)" to any note where you had to rely on the summary amount.
+    If there is also a genuine concern, append it after a semicolon.
 12. envelope_total — the grand total shown at the bottom of the PETTY CASH SUMMARY page (the total the custodian is claiming for this packet). Plain number, no $ or commas (e.g. 3820.84). Include this on EVERY row. If no total is visible on the summary page, use 0.
 
 Return ONLY a valid JSON array using exactly these key names per object:
