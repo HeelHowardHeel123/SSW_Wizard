@@ -308,18 +308,32 @@ def _extract_petty_cash_from_file(filename, data, system_prompt, client, user_te
                          user_text=user_text, max_tokens=MAX_TOKENS)
 
     # Large packet: chunk receipt pages, prepend summary to each chunk.
-    # Tell the LLM to skip lines whose receipts are not in this subset.
-    chunk_user_text = (
-        user_text
-        + " NOTE: You are seeing a subset of the receipt pages. "
-        "Return rows ONLY for receipts physically visible on these pages. "
-        "Do not return rows for summary lines whose receipts are not shown here."
-    )
+    # First chunk: return ALL summary lines (YES for visible receipts, NO for
+    # the rest) so no-receipt rows are captured even if they never appear in a
+    # later chunk.  Later chunks return only their own visible receipts; the
+    # dedup loop below upgrades NO → YES when the receipt eventually shows up.
     results_by_key: dict[tuple, dict] = {}
     for i in range(0, len(receipt_imgs), CHUNK_SIZE):
         chunk = summary_imgs + receipt_imgs[i : i + CHUNK_SIZE]
+        if i == 0:
+            current_user_text = (
+                user_text
+                + " NOTE: You are seeing only the first batch of receipt pages. "
+                "Return ALL lines from the summary page -- "
+                "lines whose receipts appear in these pages (received_invoice=YES) AND "
+                "lines whose receipts are NOT in these pages (received_invoice=NO, "
+                "use vendor name and amount from the summary). "
+                "Do not skip any summary line."
+            )
+        else:
+            current_user_text = (
+                user_text
+                + " NOTE: You are seeing a later batch of receipt pages. "
+                "Return rows ONLY for receipts physically visible on these pages. "
+                "Do not re-return rows already covered by earlier batches."
+            )
         for row in _call_gpt(chunk, system_prompt, client,
-                             user_text=chunk_user_text, max_tokens=MAX_TOKENS):
+                             user_text=current_user_text, max_tokens=MAX_TOKENS):
             key = (row.get("env_number", 1), row.get("line_number", 0))
             ri  = str(row.get("received_invoice", "NO")).strip().upper()
             existing = results_by_key.get(key)
