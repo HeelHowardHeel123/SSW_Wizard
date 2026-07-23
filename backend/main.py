@@ -1758,6 +1758,22 @@ async def extract_petty_cash(
         data = await uf.read()
         errs: list[str] = []
 
+        file_mb = len(data) / (1024 * 1024)
+        if file_mb > 40:
+            msg = (
+                f"File too large to process ({file_mb:.0f} MB) -- "
+                "compress to under 40 MB and resubmit"
+            )
+            errs.append(msg)
+            issues.append(f"{uf.filename}: {msg}")
+            file_summaries.append({
+                "filename": uf.filename,
+                "company":  "unknown",
+                "rows":     0,
+                "issues":   errs,
+            })
+            continue
+
         try:
             raw_list = _extract_petty_cash_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
         except Exception as e:
