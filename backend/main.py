@@ -2450,8 +2450,16 @@ async def send_run_summary_endpoint(
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
 
-_FRONTEND_INDEX = os.path.join(os.path.dirname(__file__), "frontend", "index.html")
+_FRONTEND_DIR   = os.path.join(os.path.dirname(__file__), "frontend")
+_FRONTEND_INDEX = os.path.join(_FRONTEND_DIR, "index.html")
 
 @app.get("/", include_in_schema=False)
 async def serve_frontend():
     return FileResponse(_FRONTEND_INDEX)
+
+@app.get("/workbook-engine.js", include_in_schema=False)
+async def serve_workbook_engine():
+    return FileResponse(
+        os.path.join(_FRONTEND_DIR, "workbook-engine.js"),
+        media_type="application/javascript",
+    )
