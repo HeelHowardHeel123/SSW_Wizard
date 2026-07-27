@@ -49,6 +49,7 @@ import fitz  # PyMuPDF
 import pdfplumber
 from openai import OpenAI
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -2445,3 +2446,12 @@ async def send_run_summary_endpoint(
         runs=runs_dicts,
     )
     return {"ok": True}
+
+
+# ── Frontend ─────────────────────────────────────────────────────────────────
+
+_FRONTEND_INDEX = os.path.join(os.path.dirname(__file__), "frontend", "index.html")
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend():
+    return FileResponse(_FRONTEND_INDEX)
