@@ -94,8 +94,9 @@ FIELDS — return exactly these key names:
     YES    = Georgia-qualified spend (GA vendor/resident, qualifying category, GA work)
     NO-GA  = in Georgia but does not qualify (e.g., tips, government permit fees, no sales tax account, withholding not paid, non-qualifying category)
     NO-OOS = vendor address is out-of-state, or work was performed outside Georgia
-35. notes — any concern a reviewer should know: ambiguous amounts, low-confidence judgment calls, conflicting data, unreadable pages. Empty string in normal cases. Use only plain ASCII — no em dashes, no special Unicode.
-36. website_address — vendor website if printed on the invoice. Empty string if not found.
+35. labor — true if this line item is primarily for human labor or personal services: crew member invoices, freelance individuals, loan-out corporations, casting fees, staffing agencies, talent agencies. false for goods, equipment rentals, facilities, catering, transportation, and all other non-labor vendor invoices. This field is not written to the submission workbook but is used downstream for tab routing.
+36. notes — any concern a reviewer should know: ambiguous amounts, low-confidence judgment calls, conflicting data, unreadable pages. Empty string in normal cases. Use only plain ASCII — no em dashes, no special Unicode.
+37. website_address — vendor website if printed on the invoice. Empty string if not found.
 
 QUALIFICATION LOGIC — use this to set ff2 and qualified together:
 - GA vendor address (state = GA) + qualifying AICP category → ff2=GS, qualified=YES
@@ -123,6 +124,6 @@ ff1, ff2, je_number, distribution_description, last_name, first_name, home_state
 episode, nights, address, city, state, zip, amount, non_qualified,
 payment_method, proof_of_payment, payment_entity, received_invoice,
 loan_out, loan_out_individual_name, sales_tax_on_invoice, active_sales_tax_account,
-withholding, w9, business_license, aicp_code, qualified, notes, website_address
+withholding, w9, business_license, aicp_code, qualified, notes, website_address, labor
 
 No explanation. No markdown. No code fences. JSON array only.

@@ -2562,6 +2562,8 @@ def normalize_ga_ap_row(raw: dict) -> dict:
         "qualified":                qual,
         "notes":                    str(raw.get("notes", "")).strip(),
         "website_address":          str(raw.get("website_address", "")).strip(),
+        # Not written to AP tab — used downstream for tab routing (Payroll Roster, GL, etc.)
+        "labor":                    bool(raw.get("labor", False)),
     }
 
 
