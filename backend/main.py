@@ -2645,8 +2645,12 @@ async def extract_ga_ap(
 
 # ── GA workbook writer ────────────────────────────────────────────────────────
 
-# Column numbers for the GA AP tab (1-indexed, matching the template layout).
-# Row 1 = metadata/labels  Row 2 = headers  Row 3+ = data
+# Column numbers for the GA AP tab (1-indexed, matching the bundled template).
+# Row 1 = metadata/labels  Row 2 = col notes  Row 3 = headers  Row 4+ = data
+# Confirmed against frontend-bundled georgia.xlsx by Frontend Claude.
+# NOTE: /build-ga-workbook is deprioritized; the frontend writes the workbook
+# client-side.  This map is kept accurate for reference and for any server-side
+# utility use.
 _GA_AP_COL = {
     "seq":             1,   # A  — generated (1, 2, 3…)
     "check_number":    2,   # B
@@ -2654,8 +2658,8 @@ _GA_AP_COL = {
     "invoice_date":    4,   # D  — datetime
     "po_number":       5,   # E
     "vendor_name":     6,   # F
-    # 7 = FF1 (G)  — skipped until FF codes phase
-    # 8 = FF2 (H)  — skipped
+    "ff1":             7,   # G  — short code (HT/BX/CR/AF/GX/HF/FA1/FA2/PD1/PD2/LO/NQ)
+    "ff2":             8,   # H  — short code (GS/GL/DL/NQ)
     "source_code":     9,   # I  — constant "AP"
     "je_number":      10,   # J
     "description":    11,   # K
@@ -2674,30 +2678,32 @@ _GA_AP_COL = {
     "qualified_fml":  24,   # X  — formula =VN-WN
     "payment_method": 25,   # Y
     "proof_of_pay":   26,   # Z
-    "received_inv":   27,   # AA
-    "loan_out":       28,   # AB
-    "loan_out_name":  29,   # AC
-    "sales_tax":      30,   # AD
-    "active_tax_acct":31,   # AE
-    "withholding":    32,   # AF
-    "w9":             33,   # AG
-    "biz_license":    34,   # AH
-    # 35 = AICP Code (AI)           — skipped
-    # 36 = AICP Description (AJ)    — skipped
-    # 37 = Qualified (AK)           — skipped
-    "notes":          38,   # AL
-    "website":        39,   # AM
+    "payment_entity": 27,   # AA — was missing in original map; shifts everything below
+    "received_inv":   28,   # AB
+    "loan_out":       29,   # AC
+    "loan_out_name":  30,   # AD
+    "sales_tax":      31,   # AE
+    "active_tax_acct":32,   # AF
+    "withholding":    33,   # AG
+    "w9":             34,   # AH
+    "biz_license":    35,   # AI
+    "aicp_code":      36,   # AJ
+    # 37 = AICP Category Description (AK) — formula, frontend writes it
+    "qualified":      38,   # AL
+    "notes":          39,   # AM
+    "website":        40,   # AN
+    # AO–AR (41–44) = TPC review columns — always blank
 }
 
 
 def _write_ga_ap_rows(ws, rows: list[dict]) -> int:
-    """Write extracted GA AP rows into an openpyxl worksheet starting at row 3.
+    """Write extracted GA AP rows into an openpyxl worksheet starting at row 4.
 
-    Keeps rows 1-2 (metadata and headers) untouched.  Overwrites data cells
-    from row 3 onward and blanks any leftover cells below the new data.
+    Keeps rows 1-3 (metadata, col notes, headers) untouched.  Overwrites data
+    cells from row 4 onward and blanks any leftover cells below the new data.
     Returns the number of rows written.
     """
-    DATA_START = 3
+    DATA_START = 4   # row 1=metadata, 2=col notes, 3=headers, 4=first data row
     prev_max   = ws.max_row
 
     def _num(v):
@@ -2744,6 +2750,8 @@ def _write_ga_ap_rows(ws, rows: list[dict]) -> int:
         c(row=r, column=_GA_AP_COL["invoice_date"]).value   = _date(row.get("invoice_date"))
         c(row=r, column=_GA_AP_COL["po_number"]).value      = _txt(row.get("po_number"))
         c(row=r, column=_GA_AP_COL["vendor_name"]).value    = _txt(row.get("vendor_name"))
+        c(row=r, column=_GA_AP_COL["ff1"]).value             = _txt(row.get("ff1"))
+        c(row=r, column=_GA_AP_COL["ff2"]).value             = _txt(row.get("ff2"))
         c(row=r, column=_GA_AP_COL["source_code"]).value    = "AP"
         c(row=r, column=_GA_AP_COL["je_number"]).value      = _txt(row.get("je_number"))
         c(row=r, column=_GA_AP_COL["description"]).value    = _txt(row.get("distribution_description"))
@@ -2762,6 +2770,7 @@ def _write_ga_ap_rows(ws, rows: list[dict]) -> int:
         c(row=r, column=_GA_AP_COL["qualified_fml"]).value  = f"=V{r}-W{r}"
         c(row=r, column=_GA_AP_COL["payment_method"]).value = _txt(row.get("payment_method"))
         c(row=r, column=_GA_AP_COL["proof_of_pay"]).value   = _txt(row.get("proof_of_payment"))
+        c(row=r, column=_GA_AP_COL["payment_entity"]).value = _txt(row.get("payment_entity"))
         c(row=r, column=_GA_AP_COL["received_inv"]).value   = _txt(row.get("received_invoice"))
         c(row=r, column=_GA_AP_COL["loan_out"]).value       = _txt(row.get("loan_out"))
         c(row=r, column=_GA_AP_COL["loan_out_name"]).value  = _txt(row.get("loan_out_individual_name"))
@@ -2770,6 +2779,8 @@ def _write_ga_ap_rows(ws, rows: list[dict]) -> int:
         c(row=r, column=_GA_AP_COL["withholding"]).value    = _txt(row.get("withholding"))
         c(row=r, column=_GA_AP_COL["w9"]).value             = _txt(row.get("w9"))
         c(row=r, column=_GA_AP_COL["biz_license"]).value    = _txt(row.get("business_license"))
+        c(row=r, column=_GA_AP_COL["aicp_code"]).value      = row.get("aicp_code")
+        c(row=r, column=_GA_AP_COL["qualified"]).value      = _txt(row.get("qualified"))
         c(row=r, column=_GA_AP_COL["notes"]).value          = _txt(row.get("notes"))
         c(row=r, column=_GA_AP_COL["website"]).value        = _txt(row.get("website_address"))
 
