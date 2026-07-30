@@ -15,8 +15,8 @@ names the frontend should read to populate the AP tab.
 | `po_number` | string | PO number visible on any document in the PDF |
 | `vendor_name` | string | Business or individual who issued the invoice |
 | `payee_type` | `"person"` \| `"company"` | Explicit — never infer from last_name |
-| `ff1` | string | Short code: `HT` `BX` `CR` `AF` `GX` `HF` `FA1` `FA2` `PD1` `PD2` `LO` `NQ` — or empty string |
-| `ff2` | string | Short code: `GS` `GL` `DL` `NQ` — or empty string |
+| `ff1` | string | **v001: always empty string.** User fills in manually. |
+| `ff2` | string | **v001: always empty string.** User fills in manually. |
 | `je_number` | string | Journal entry number; empty string if not found |
 | `distribution_description` | string | Short description of what was purchased |
 | `last_name` | string | Last name; populated only when `payee_type === "person"` |
@@ -29,7 +29,7 @@ names the frontend should read to populate the AP tab.
 | `state` | string | 2-letter state code |
 | `zip` | string | 5-digit zip |
 | `amount` | number | Plain float, no `$` or commas |
-| `non_qualified` | number | Portion that does NOT qualify; `0` if fully qualifying |
+| `non_qualified` | number | **v001: always 0.** User fills in manually. |
 | `payment_method` | string | `Check` `ACH` `Wire` `Credit Card` `P-Card` — or empty string |
 | `proof_of_payment` | `"Yes"` \| `"No"` | |
 | `payment_entity` | string | Which payer entity paid — matched against `payer_entities` input |
@@ -41,8 +41,8 @@ names the frontend should read to populate the AP tab.
 | `withholding` | string | GA loan-out withholding amount as plain number string; empty if N/A |
 | `w9` | `"Yes"` \| `"No"` | |
 | `business_license` | `"Yes"` \| `"No"` | |
-| `aicp_code` | number \| null | Integer 1–25; `null` if none assigned |
-| `qualified` | `"YES"` \| `"NO-GA"` \| `"NO-OOS"` | |
+| `aicp_code` | null | **v001: always null.** User fills in manually. |
+| `qualified` | string | **v001: always empty string.** User fills in manually. |
 | `notes` | string | Reviewer notes; empty string in normal cases |
 | `website_address` | string | Vendor website if printed on invoice |
 | `labor` | boolean | `true` = labor/personal services; `false` = goods/equipment/facilities. **Not written to AP tab** — used downstream to route rows to Payroll Roster and other tabs |
