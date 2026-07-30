@@ -309,6 +309,7 @@ def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices
     try:
         return json.loads(raw)
     except Exception:
+        print(f"[_call_gpt] JSON parse failed. Raw response (first 500 chars): {raw[:500]!r}", flush=True)
         m = re.search(r"\[.*\]", raw, re.DOTALL)
         if m:
             try:
@@ -2605,7 +2606,7 @@ async def extract_ga_ap(
 
     client        = _client()
     system_prompt = _load_ga_ap_prompt(entities, work_state)
-    user_text     = "Extract all invoice line items from these document pages."
+    user_text     = "Extract invoice data from these document pages."
 
     rows, issues, file_summaries = [], [], []
 
@@ -2835,7 +2836,7 @@ async def build_ga_workbook(
     pdf_files     = sorted(files, key=lambda f: (f.filename or "").lower())
     client        = _client()
     system_prompt = _load_ga_ap_prompt(entities, work_state)
-    user_text     = "Extract all invoice line items from these document pages."
+    user_text     = "Extract invoice data from these document pages."
 
     rows: list[dict] = []
     issues: list[str] = []
