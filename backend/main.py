@@ -34,6 +34,10 @@ Endpoints
                                      prodco_address, agency_name, work_state, payer_entities
                                      (JSON array of {role,name,address})
                                      returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /build-ga-workbook          → multipart: files[]=<pdf>, template=<xlsx>, prodco_name,
+                                     prodco_address, agency_name, work_state, payer_entities,
+                                     project_title
+                                     returns populated GA State Submission .xlsx download
 
 Environment variables
   OPENAI_API_KEY     (required for invoices + image-based fringe) your OpenAI key
@@ -49,11 +53,14 @@ import base64
 import asyncio
 import functools
 
+import openpyxl
+from datetime import datetime as _dt
+
 import fitz  # PyMuPDF
 import pdfplumber
 from openai import OpenAI
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -2634,6 +2641,237 @@ async def extract_ga_ap(
         })
 
     return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── GA workbook writer ────────────────────────────────────────────────────────
+
+# Column numbers for the GA AP tab (1-indexed, matching the template layout).
+# Row 1 = metadata/labels  Row 2 = headers  Row 3+ = data
+_GA_AP_COL = {
+    "seq":             1,   # A  — generated (1, 2, 3…)
+    "check_number":    2,   # B
+    "invoice_number":  3,   # C
+    "invoice_date":    4,   # D  — datetime
+    "po_number":       5,   # E
+    "vendor_name":     6,   # F
+    # 7 = FF1 (G)  — skipped until FF codes phase
+    # 8 = FF2 (H)  — skipped
+    "source_code":     9,   # I  — constant "AP"
+    "je_number":      10,   # J
+    "description":    11,   # K
+    "last_name":      12,   # L
+    "first_name":     13,   # M
+    "home_state":     14,   # N
+    "episode":        15,   # O
+    "nights":         16,   # P
+    "address":        17,   # Q
+    "city":           18,   # R
+    "state":          19,   # S
+    "zip":            20,   # T
+    "org_cur":        21,   # U  — constant "US"
+    "amount":         22,   # V  — numeric
+    "non_qualified":  23,   # W  — numeric
+    "qualified_fml":  24,   # X  — formula =VN-WN
+    "payment_method": 25,   # Y
+    "proof_of_pay":   26,   # Z
+    "received_inv":   27,   # AA
+    "loan_out":       28,   # AB
+    "loan_out_name":  29,   # AC
+    "sales_tax":      30,   # AD
+    "active_tax_acct":31,   # AE
+    "withholding":    32,   # AF
+    "w9":             33,   # AG
+    "biz_license":    34,   # AH
+    # 35 = AICP Code (AI)           — skipped
+    # 36 = AICP Description (AJ)    — skipped
+    # 37 = Qualified (AK)           — skipped
+    "notes":          38,   # AL
+    "website":        39,   # AM
+}
+
+
+def _write_ga_ap_rows(ws, rows: list[dict]) -> int:
+    """Write extracted GA AP rows into an openpyxl worksheet starting at row 3.
+
+    Keeps rows 1-2 (metadata and headers) untouched.  Overwrites data cells
+    from row 3 onward and blanks any leftover cells below the new data.
+    Returns the number of rows written.
+    """
+    DATA_START = 3
+    prev_max   = ws.max_row
+
+    def _num(v):
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _date(v):
+        if not v:
+            return None
+        if isinstance(v, (_dt,)):
+            return v
+        s = str(v).strip()
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+            try:
+                return _dt.strptime(s, fmt)
+            except ValueError:
+                continue
+        return s  # leave as string if unparseable
+
+    def _txt(v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
+
+    for i, row in enumerate(rows):
+        r = DATA_START + i
+        c = ws.cell  # shorthand
+
+        # Blank all columns in this row first so template remnants don't bleed
+        # through in skipped columns (FF1, FF2, AICP, Qualified, Ces Review cols).
+        for col in range(1, ws.max_column + 1):
+            cell = ws.cell(row=r, column=col)
+            if not isinstance(cell, openpyxl.cell.cell.MergedCell):
+                cell.value = None
+
+        c(row=r, column=_GA_AP_COL["seq"]).value            = i + 1
+        c(row=r, column=_GA_AP_COL["check_number"]).value   = _txt(row.get("check_number"))
+        c(row=r, column=_GA_AP_COL["invoice_number"]).value = _txt(row.get("invoice_number"))
+        c(row=r, column=_GA_AP_COL["invoice_date"]).value   = _date(row.get("invoice_date"))
+        c(row=r, column=_GA_AP_COL["po_number"]).value      = _txt(row.get("po_number"))
+        c(row=r, column=_GA_AP_COL["vendor_name"]).value    = _txt(row.get("vendor_name"))
+        c(row=r, column=_GA_AP_COL["source_code"]).value    = "AP"
+        c(row=r, column=_GA_AP_COL["je_number"]).value      = _txt(row.get("je_number"))
+        c(row=r, column=_GA_AP_COL["description"]).value    = _txt(row.get("distribution_description"))
+        c(row=r, column=_GA_AP_COL["last_name"]).value      = _txt(row.get("last_name"))
+        c(row=r, column=_GA_AP_COL["first_name"]).value     = _txt(row.get("first_name"))
+        c(row=r, column=_GA_AP_COL["home_state"]).value     = _txt(row.get("home_state"))
+        c(row=r, column=_GA_AP_COL["episode"]).value        = _txt(row.get("episode"))
+        c(row=r, column=_GA_AP_COL["nights"]).value         = row.get("nights")
+        c(row=r, column=_GA_AP_COL["address"]).value        = _txt(row.get("address"))
+        c(row=r, column=_GA_AP_COL["city"]).value           = _txt(row.get("city"))
+        c(row=r, column=_GA_AP_COL["state"]).value          = _txt(row.get("state"))
+        c(row=r, column=_GA_AP_COL["zip"]).value            = _txt(row.get("zip"))
+        c(row=r, column=_GA_AP_COL["org_cur"]).value        = "US"
+        c(row=r, column=_GA_AP_COL["amount"]).value         = _num(row.get("amount"))
+        c(row=r, column=_GA_AP_COL["non_qualified"]).value  = _num(row.get("non_qualified", 0))
+        c(row=r, column=_GA_AP_COL["qualified_fml"]).value  = f"=V{r}-W{r}"
+        c(row=r, column=_GA_AP_COL["payment_method"]).value = _txt(row.get("payment_method"))
+        c(row=r, column=_GA_AP_COL["proof_of_pay"]).value   = _txt(row.get("proof_of_payment"))
+        c(row=r, column=_GA_AP_COL["received_inv"]).value   = _txt(row.get("received_invoice"))
+        c(row=r, column=_GA_AP_COL["loan_out"]).value       = _txt(row.get("loan_out"))
+        c(row=r, column=_GA_AP_COL["loan_out_name"]).value  = _txt(row.get("loan_out_individual_name"))
+        c(row=r, column=_GA_AP_COL["sales_tax"]).value      = _txt(row.get("sales_tax_on_invoice"))
+        c(row=r, column=_GA_AP_COL["active_tax_acct"]).value = _txt(row.get("active_sales_tax_account"))
+        c(row=r, column=_GA_AP_COL["withholding"]).value    = _txt(row.get("withholding"))
+        c(row=r, column=_GA_AP_COL["w9"]).value             = _txt(row.get("w9"))
+        c(row=r, column=_GA_AP_COL["biz_license"]).value    = _txt(row.get("business_license"))
+        c(row=r, column=_GA_AP_COL["notes"]).value          = _txt(row.get("notes"))
+        c(row=r, column=_GA_AP_COL["website"]).value        = _txt(row.get("website_address"))
+
+    # Blank any leftover rows from the original template data.
+    # Skip merged-cell slaves — openpyxl raises AttributeError if you try to
+    # assign .value on a MergedCell (the non-top-left cells of a merged region).
+    last_new = DATA_START + len(rows) - 1
+    for r in range(last_new + 1, prev_max + 1):
+        for col in range(1, ws.max_column + 1):
+            cell = ws.cell(row=r, column=col)
+            if not isinstance(cell, openpyxl.cell.cell.MergedCell):
+                cell.value = None
+
+    return len(rows)
+
+
+@app.post("/build-ga-workbook")
+async def build_ga_workbook(
+    files:          list[UploadFile] = File(...),
+    template:       UploadFile       = File(...),
+    prodco_name:    str              = Form(""),
+    prodco_address: str              = Form(""),
+    agency_name:    str              = Form(""),
+    work_state:     str              = Form("GA"),
+    payer_entities: str              = Form("[]"),
+    project_title:  str              = Form(""),
+    x_app_secret:   str              = Header(default=""),
+):
+    """Extract GA AP rows from uploaded PDFs and write them into the uploaded
+    GA template XLSX.  Returns a populated .xlsx file for download.
+
+    Form fields mirror /extract-ga-ap; additionally requires:
+      template      — the blank (or prior) GA state submission .xlsx
+      project_title — used to name the download file (optional)
+    """
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    try:
+        entities = json.loads(payer_entities)
+        if not isinstance(entities, list):
+            entities = []
+    except Exception:
+        entities = []
+    if not entities:
+        if prodco_name.strip():
+            entities.append({"role": "prodco", "name": prodco_name.strip(), "address": prodco_address.strip()})
+        if agency_name.strip():
+            entities.append({"role": "agency", "name": agency_name.strip(), "address": ""})
+
+    # ── Extract rows from PDFs ────────────────────────────────────────────────
+    pdf_files     = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _client()
+    system_prompt = _load_ga_ap_prompt(entities, work_state)
+    user_text     = "Extract all invoice line items from these document pages."
+
+    rows: list[dict] = []
+    issues: list[str] = []
+
+    for uf in pdf_files:
+        data = await uf.read()
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+        if not raw_list:
+            issues.append(f"{uf.filename}: no data extracted — review manually")
+        for raw in raw_list:
+            try:
+                rows.append(normalize_ga_ap_row(raw))
+            except Exception as e:
+                issues.append(f"{uf.filename}: row normalization error: {e}")
+
+    # ── Write rows into the template ──────────────────────────────────────────
+    tmpl_bytes = await template.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(tmpl_bytes))
+    except Exception as e:
+        raise HTTPException(400, f"Could not open template: {e}")
+
+    if "AP" not in wb.sheetnames:
+        raise HTTPException(400, "Template is missing an 'AP' sheet.")
+
+    n_written = _write_ga_ap_rows(wb["AP"], rows)
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+
+    title = (project_title.strip() or "GA Submission").replace("/", "-").replace("\\", "-")
+    fname = f"{title} - State Submission.xlsx"
+
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "X-Rows-Written":      str(n_written),
+            "X-Issues":            str(len(issues)),
+        },
+    )
 
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
