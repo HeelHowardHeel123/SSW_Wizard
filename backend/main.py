@@ -30,6 +30,10 @@ Endpoints
                                      returns {"rows": [...], "issues": [...]}
   POST /extract-petty-cash         → multipart: files[]=<pdf>, prodco_name, work_state
                                      returns {"rows": [...], "issues": [...]}
+  POST /extract-ga-ap              → multipart: files[]=<pdf> (one per call), prodco_name,
+                                     prodco_address, agency_name, work_state, payer_entities
+                                     (JSON array of {role,name,address})
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
 
 Environment variables
   OPENAI_API_KEY     (required for invoices + image-based fringe) your OpenAI key
@@ -79,6 +83,7 @@ _RESIDENCY_DOCS_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(_
 _DIVERSITY_FORM_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diversity_form_prompt.txt")
 _CALL_SHEET_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "call_sheet_prompt.txt")
 _PETTY_CASH_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "petty_cash_extraction_prompt.txt")
+_GA_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_ap_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -226,6 +231,24 @@ def _load_petty_cash_prompt(prodco_name: str, work_state: str = "IL") -> str:
         .replace("{prodco_name}", name_label)
         .replace("{work_state}", state_label)
     )
+
+
+def _load_ga_ap_prompt(payer_entities: list, work_state: str = "GA") -> str:
+    with open(_GA_AP_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    lines = []
+    for e in payer_entities:
+        role = str(e.get("role", "")).upper()
+        name = str(e.get("name", "")).strip()
+        addr = str(e.get("address", "")).strip()
+        if not name:
+            continue
+        line = f"  {role}: {name}"
+        if addr:
+            line += f" ({addr})"
+        lines.append(line)
+    entities_block = "\n".join(lines) if lines else "  (none provided)"
+    return template.replace("{payer_entities_block}", entities_block)
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -2446,6 +2469,169 @@ async def send_run_summary_endpoint(
         runs=runs_dicts,
     )
     return {"ok": True}
+
+
+# ── GA AP extractor ──────────────────────────────────────────────────────────
+
+_GA_AP_FF1_VALID  = {"HT","BX","CR","AF","GX","HF","FA1","FA2","PD1","PD2","LO","NQ",""}
+_GA_AP_FF2_VALID  = {"GS","GL","DL","NQ",""}
+_GA_AP_QUAL_VALID = {"YES","NO-GA","NO-OOS"}
+
+
+def normalize_date_iso(val: str) -> str:
+    """Return YYYY-MM-DD. Accepts YYYY-MM-DD, M/D/YY, M/D/YYYY, MM/DD/YY, MM/DD/YYYY."""
+    if not val:
+        return ""
+    s = str(val).strip()
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', s)
+    if m:
+        return s
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', s)
+    if m:
+        mo, dy, yr = m.group(1), m.group(2), m.group(3)
+        if len(yr) == 2:
+            yr = ("20" if int(yr) <= 50 else "19") + yr
+        return f"{yr}-{mo.zfill(2)}-{dy.zfill(2)}"
+    return s
+
+
+def normalize_ga_ap_row(raw: dict) -> dict:
+    ff1 = str(raw.get("ff1", "")).strip().upper()
+    if ff1 not in _GA_AP_FF1_VALID:
+        ff1 = ""
+
+    ff2 = str(raw.get("ff2", "")).strip().upper()
+    if ff2 not in _GA_AP_FF2_VALID:
+        ff2 = ""
+
+    qual = str(raw.get("qualified", "")).strip().upper()
+    if qual not in _GA_AP_QUAL_VALID:
+        qual = "NO-GA"
+
+    aicp = raw.get("aicp_code")
+    try:
+        aicp = int(aicp)
+        if not 1 <= aicp <= 25:
+            aicp = None
+    except (TypeError, ValueError):
+        aicp = None
+
+    nights = raw.get("nights")
+    try:
+        nights = int(nights) if nights is not None else None
+    except (TypeError, ValueError):
+        nights = None
+
+    def yn(val):
+        return "Yes" if str(val or "").strip().lower() in ("yes", "true", "1") else "No"
+
+    return {
+        "check_number":             str(raw.get("check_number", "")).strip(),
+        "invoice_number":           str(raw.get("invoice_number", "")).strip(),
+        "invoice_date":             normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "po_number":                str(raw.get("po_number", "")).strip(),
+        "vendor_name":              clean_name(raw.get("vendor_name", "")),
+        "payee_type":               "person" if str(raw.get("payee_type","")).strip().lower() == "person" else "company",
+        "ff1":                      ff1,
+        "ff2":                      ff2,
+        "je_number":                str(raw.get("je_number", "")).strip(),
+        "distribution_description": str(raw.get("distribution_description", "")).strip(),
+        "last_name":                str(raw.get("last_name", "")).strip(),
+        "first_name":               str(raw.get("first_name", "")).strip(),
+        "home_state":               clean_state(raw.get("home_state", "")),
+        "episode":                  str(raw.get("episode", "")).strip(),
+        "nights":                   nights,
+        "address":                  clean_address(raw.get("address", "")),
+        "city":                     clean_name(raw.get("city", "")),
+        "state":                    clean_state(raw.get("state", "")),
+        "zip":                      clean_zip(raw.get("zip", "")),
+        "amount":                   normalize_amount(raw.get("amount", 0)),
+        "non_qualified":            normalize_amount(raw.get("non_qualified", 0)),
+        "payment_method":           str(raw.get("payment_method", "")).strip(),
+        "proof_of_payment":         yn(raw.get("proof_of_payment")),
+        "payment_entity":           str(raw.get("payment_entity", "")).strip(),
+        "received_invoice":         yn(raw.get("received_invoice")),
+        "loan_out":                 yn(raw.get("loan_out")),
+        "loan_out_individual_name": str(raw.get("loan_out_individual_name", "")).strip(),
+        "sales_tax_on_invoice":     yn(raw.get("sales_tax_on_invoice")),
+        "active_sales_tax_account": yn(raw.get("active_sales_tax_account")),
+        "withholding":              str(raw.get("withholding", "")).strip(),
+        "w9":                       yn(raw.get("w9")),
+        "business_license":         yn(raw.get("business_license")),
+        "aicp_code":                aicp,
+        "qualified":                qual,
+        "notes":                    str(raw.get("notes", "")).strip(),
+        "website_address":          str(raw.get("website_address", "")).strip(),
+    }
+
+
+@app.post("/extract-ga-ap")
+async def extract_ga_ap(
+    files:           list[UploadFile] = File(...),
+    prodco_name:     str              = Form(""),
+    prodco_address:  str              = Form(""),
+    agency_name:     str              = Form(""),
+    work_state:      str              = Form("GA"),
+    payer_entities:  str              = Form("[]"),
+    x_app_secret:    str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    try:
+        entities = json.loads(payer_entities)
+        if not isinstance(entities, list):
+            entities = []
+    except Exception:
+        entities = []
+
+    # Fall back to scalar fields if payer_entities was not provided
+    if not entities:
+        if prodco_name.strip():
+            entities.append({"role": "prodco", "name": prodco_name.strip(), "address": prodco_address.strip()})
+        if agency_name.strip():
+            entities.append({"role": "agency", "name": agency_name.strip(), "address": ""})
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_ga_ap_prompt(entities, work_state)
+    user_text     = "Extract all invoice line items from these document pages."
+
+    rows, issues, file_summaries = [], [], []
+
+    for uf in files:
+        data = await uf.read()
+        errs: list[str] = []
+
+        try:
+            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
+        except Exception as e:
+            errs.append(str(e))
+            issues.append(f"{uf.filename}: {e}")
+            raw_list = []
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no GA AP data extracted — review manually")
+            issues.append(f"{uf.filename}: no GA AP data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_ga_ap_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{uf.filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        vendor_label = file_rows[0]["vendor_name"] if file_rows else "unknown"
+        file_summaries.append({
+            "file":   uf.filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
 
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
