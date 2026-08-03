@@ -49,6 +49,8 @@ import os
 import re
 import io
 import json
+import time
+import random
 import base64
 import asyncio
 import functools
@@ -58,7 +60,7 @@ from datetime import datetime as _dt
 
 import fitz  # PyMuPDF
 import pdfplumber
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -287,24 +289,50 @@ def _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=None, max_pages=N
     return images
 
 
+# ── Rate-limit retry helper ──────────────────────────────────────────────────
+
+_RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)\s*s", re.IGNORECASE)
+
+def _rate_limit_wait_seconds(exc, attempt):
+    """Parse the provider's suggested wait time out of a 429 error message
+    (e.g. "Please try again in 5.988s"); fall back to exponential backoff
+    with jitter if the message doesn't contain one."""
+    m = _RETRY_AFTER_RE.search(str(exc))
+    if m:
+        try:
+            return float(m.group(1)) + 0.5   # small buffer past the suggested wait
+        except ValueError:
+            pass
+    return min(30.0, float(2 ** attempt)) + random.uniform(0, 1)
+
+
 # ── GPT-4o vision call ────────────────────────────────────────────────────────
 
-def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices from these document pages.", max_tokens=4096):
+def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices from these document pages.", max_tokens=4096, max_retries=5):
     content = [{"type": "text", "text": user_text}]
     for img in images_b64:
         content.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"},
         })
-    resp = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ],
-        temperature=0,
-        max_tokens=max_tokens,
-    )
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0,
+                max_tokens=max_tokens,
+            )
+            break
+        except RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
     raw = resp.choices[0].message.content.strip()
     try:
         return json.loads(raw)
@@ -385,7 +413,9 @@ def _extract_petty_cash_from_file(filename, data, system_prompt, client, user_te
 
 # ── Claude vision call ───────────────────────────────────────────────────────
 
-def _call_claude(images_b64, system_prompt, client, user_text="Extract data from these document pages."):
+def _call_claude(images_b64, system_prompt, client, user_text="Extract data from these document pages.", max_retries=5):
+    import anthropic
+
     content = []
     for img in images_b64:
         content.append({
@@ -393,12 +423,21 @@ def _call_claude(images_b64, system_prompt, client, user_text="Extract data from
             "source": {"type": "base64", "media_type": "image/png", "data": img},
         })
     content.append({"type": "text", "text": user_text})
-    resp = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=2000,
-        system=system_prompt,
-        messages=[{"role": "user", "content": content}],
-    )
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.messages.create(
+                model="claude-sonnet-5",
+                max_tokens=2000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": content}],
+            )
+            break
+        except anthropic.RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
     text_block = next((b for b in resp.content if b.type == "text"), None)
     if not text_block:
         return []
