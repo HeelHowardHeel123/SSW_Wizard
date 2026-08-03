@@ -1053,20 +1053,37 @@ async def extract_invoices(
     names = [n.strip() for n in prodco_names.split(",") if n.strip()]
     system_prompt = _load_prompt(names)
 
-    invoices, issues = [], []
+    loaded = []
     for uf in files:
         data = await uf.read()
-        try:
-            raw = _extract_from_file(uf.filename, data, system_prompt, client)
-        except Exception as e:
-            issues.append(f"{uf.filename}: {e}")
-            raw = []
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client),
+                )
+                return filename, raw, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    invoices, issues = [], []
+    for filename, raw, err in extraction_results:
+        if err:
+            issues.append(f"{filename}: {err}")
         if not raw:
             invoices.append(normalize_invoice({
-                "vendor_name": os.path.splitext(uf.filename)[0],
+                "vendor_name": os.path.splitext(filename)[0],
                 "notes": "Invoice could not be read - please review manually",
             }))
-            issues.append(f"{uf.filename}: no invoice data extracted")
+            issues.append(f"{filename}: no invoice data extracted")
             continue
         for inv in raw:
             invoices.append(normalize_invoice(inv))
@@ -1319,35 +1336,51 @@ async def extract_crew_freelance(
     system_prompt = _load_crew_freelance_prompt(names, addrs)
     user_text     = "Extract crew freelance invoice data from these document pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no crew freelance data extracted — review manually")
-            issues.append(f"{uf.filename}: no crew freelance data extracted")
+            issues.append(f"{filename}: no crew freelance data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_crew_freelance_row(raw, uf.filename))
+                    file_rows.append(normalize_crew_freelance_row(raw, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         worker_label = file_rows[0]["worker"] if file_rows else "unknown"
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  worker_label,
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1452,35 +1485,51 @@ async def extract_talent_freelance(
     system_prompt = _load_talent_freelance_prompt(names)
     user_text     = "Extract talent freelance invoice data from these document pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no talent freelance data extracted — review manually")
-            issues.append(f"{uf.filename}: no talent freelance data extracted")
+            issues.append(f"{filename}: no talent freelance data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.extend(normalize_talent_freelance_invoice(raw, uf.filename))
+                    file_rows.extend(normalize_talent_freelance_invoice(raw, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         talent_label = file_rows[0]["talentName"] if file_rows else "unknown"
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "talent":   talent_label,
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1529,38 +1578,54 @@ async def extract_hours_letters(
     system_prompt = _load_hours_letter_prompt()
     user_text     = "Extract crew hours and billable amounts from this hours confirmation letter."
 
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
     rows, issues, file_summaries = [], [], []
     sources: list[tuple[str, list[dict]]] = []   # (filename, file_rows) for labeling
 
-    for uf in files:
-        data = await uf.read()
+    for filename, raw_list, err in extraction_results:
         errs: list[str] = []
-
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no hours letter data extracted — review manually")
-            issues.append(f"{uf.filename}: no hours letter data extracted")
+            issues.append(f"{filename}: no hours letter data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_hours_letter_row(raw, uf.filename))
+                    file_rows.append(normalize_hours_letter_row(raw, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         if file_rows:
-            sources.append((uf.filename, file_rows))
+            sources.append((filename, file_rows))
         company_label = file_rows[0]["company"] if file_rows and file_rows[0]["company"] else "unknown"
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  company_label,
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1603,23 +1668,39 @@ async def extract_billings(
     system_prompt = _load_billing_prompt(vendor_name, vendor_type, names)
     user_text     = "Extract billing invoice data from these document pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no billing data extracted — review manually")
-            issues.append(f"{uf.filename}: no billing data extracted")
+            issues.append(f"{filename}: no billing data extracted")
         else:
             for raw in raw_list:
                 try:
@@ -1632,15 +1713,15 @@ async def extract_billings(
                         vendor_state=vendor_state,
                         vendor_zip=vendor_zip,
                         work_state=work_state,
-                        filename=uf.filename,
+                        filename=filename,
                     ))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  vendor_name or "unknown",
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1667,35 +1748,51 @@ async def extract_agency_subvendors(
     system_prompt = _load_agency_subvendors_prompt(agency_name, agency_address)
     user_text     = "Extract invoice data from these document pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no agency sub-vendor data extracted — review manually")
-            issues.append(f"{uf.filename}: no agency sub-vendor data extracted")
+            issues.append(f"{filename}: no agency sub-vendor data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_agency_subvendor_row(raw, agency_name, uf.filename))
+                    file_rows.append(normalize_agency_subvendor_row(raw, agency_name, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         vendor_label = file_rows[0]["vendorName"] if file_rows else "unknown"
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  vendor_label,
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1724,35 +1821,51 @@ async def extract_prodco_subvendors(
     system_prompt = _load_prodco_subvendors_prompt(prodco_name, prodco_address, sub_prodco_name, sub_prodco_address)
     user_text     = "Extract invoice data from these document pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no prodco sub-vendor data extracted — review manually")
-            issues.append(f"{uf.filename}: no prodco sub-vendor data extracted")
+            issues.append(f"{filename}: no prodco sub-vendor data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_prodco_subvendor_row(raw, prodco_name, uf.filename))
+                    file_rows.append(normalize_prodco_subvendor_row(raw, prodco_name, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         vendor_label = file_rows[0]["vendorName"] if file_rows else "unknown"
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  vendor_label,
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1783,41 +1896,61 @@ async def extract_petty_cash(
         "then check which receipts are present in the PDF."
     )
 
-    rows, issues, file_summaries = [], [], []
-    custodian_env_max: dict[str, int] = {}
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
         file_mb = len(data) / (1024 * 1024)
         if file_mb > 40:
             msg = (
                 f"File too large to process ({file_mb:.0f} MB) -- "
                 "compress to under 40 MB and resubmit"
             )
-            errs.append(msg)
-            issues.append(f"{uf.filename}: {msg}")
+            return filename, [], msg, True
+
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None, False
+            except Exception as e:
+                return filename, [], str(e), False
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+    custodian_env_max: dict[str, int] = {}
+
+    for filename, raw_list, err, too_large in extraction_results:
+        errs: list[str] = []
+
+        if too_large:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
             file_summaries.append({
-                "filename": uf.filename,
+                "filename": filename,
                 "company":  "unknown",
                 "rows":     0,
                 "issues":   errs,
             })
             continue
 
-        try:
-            raw_list = _extract_petty_cash_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         env_totals: dict[int, float] = {}
         if not raw_list:
             errs.append("no petty cash data extracted - review manually")
-            issues.append(f"{uf.filename}: no petty cash data extracted")
+            issues.append(f"{filename}: no petty cash data extracted")
         else:
             # Collect per-envelope totals from raw rows before normalization
             for raw in raw_list:
@@ -1831,10 +1964,10 @@ async def extract_petty_cash(
                     env_totals[en] = et
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_petty_cash_row(raw, work_state, uf.filename))
+                    file_rows.append(normalize_petty_cash_row(raw, work_state, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         if file_rows:
             custodian = file_rows[0]["custodian_name"]
@@ -1870,7 +2003,7 @@ async def extract_petty_cash(
         rows.extend(file_rows)
         custodian_label = file_rows[0]["custodian_name"] if file_rows else "unknown"
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  custodian_label,
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1896,35 +2029,51 @@ async def extract_agency_hours(
     system_prompt = _load_agency_hours_prompt(agency_name)
     user_text     = "Extract crew hours data from these agency hours letter pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no agency hours data extracted — review manually")
-            issues.append(f"{uf.filename}: no agency hours data extracted")
+            issues.append(f"{filename}: no agency hours data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_agency_hours_row(raw, agency_name, uf.filename))
+                    file_rows.append(normalize_agency_hours_row(raw, agency_name, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         agency_label = agency_name or (file_rows[0]["agencyName"] if file_rows else "unknown")
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  agency_label,
             "rows":     len(file_rows),
             "issues":   errs,
@@ -1952,34 +2101,50 @@ async def extract_retainer_billings(
     system_prompt = _load_billing_prompt(agency_name, "agency", names)
     user_text     = "Extract retainer billing invoice data from these document pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no retainer billing data extracted — review manually")
-            issues.append(f"{uf.filename}: no retainer billing data extracted")
+            issues.append(f"{filename}: no retainer billing data extracted")
         else:
             for raw in raw_list:
                 try:
-                    file_rows.append(normalize_retainer_billing_row(raw, agency_name, uf.filename))
+                    file_rows.append(normalize_retainer_billing_row(raw, agency_name, filename))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         file_summaries.append({
-            "filename": uf.filename,
+            "filename": filename,
             "company":  agency_name or "unknown",
             "rows":     len(file_rows),
             "issues":   errs,
@@ -2608,35 +2773,51 @@ async def extract_ga_ap(
     system_prompt = _load_ga_ap_prompt(entities, work_state)
     user_text     = "Extract invoice data from these document pages."
 
-    rows, issues, file_summaries = [], [], []
-
+    loaded = []
     for uf in files:
         data = await uf.read()
-        errs: list[str] = []
+        loaded.append((uf.filename, data))
 
-        try:
-            raw_list = _extract_from_file(uf.filename, data, system_prompt, client, user_text=user_text)
-        except Exception as e:
-            errs.append(str(e))
-            issues.append(f"{uf.filename}: {e}")
-            raw_list = []
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
 
         file_rows: list[dict] = []
         if not raw_list:
             errs.append("no GA AP data extracted — review manually")
-            issues.append(f"{uf.filename}: no GA AP data extracted")
+            issues.append(f"{filename}: no GA AP data extracted")
         else:
             for raw in raw_list:
                 try:
                     file_rows.append(normalize_ga_ap_row(raw))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
-                    issues.append(f"{uf.filename}: row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
 
         rows.extend(file_rows)
         vendor_label = file_rows[0]["vendor_name"] if file_rows else "unknown"
         file_summaries.append({
-            "file":   uf.filename,
+            "file":   filename,
             "rows":   len(file_rows),
             "issues": errs,
         })
