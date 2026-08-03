@@ -9,13 +9,13 @@ Every PDF may contain multiple document types: a vendor invoice, a purchase orde
 Find the vendor invoice(s) first. Extract all data primarily from the invoice.
 Then use any other documents in the PDF (PO, W9, contract, etc.) to fill in fields that are blank or unclear on the invoice.
 For example: if the invoice has no vendor address, check the W9. If the invoice has no PO number, check the PO document.
-Never skip a PDF. Always return at least one row if any invoice, receipt, or payment document exists.
+Never skip a PDF. Always return at least one row if any invoice, receipt, purchase order, or payment document exists — even if it was voided, cancelled, refunded, or has a $0.00 total. A PO must be accounted for in the output whether or not money changed hands. Do not omit a row just because there is nothing to pay.
 
 FIELDS (return exactly these key names):
 1.  vendor_name — the business or person who issued the invoice. Never the production company. Use the name exactly as it appears on the invoice. Required.
 2.  invoice_number — invoice/reference number exactly as shown. If no formal number, use a short label: "Receipt", "Loc Agreement", or "Invoice". Required.
 3.  invoice_date — in MM/DD/YYYY format. On vendor invoices the date often appears near the top of the page without a label — just a standalone date like "1/8/24" or "January 8, 2024". Use it. Convert two-digit years to four digits (e.g., "1/8/24" → "01/08/2024"). Empty string only if no date appears anywhere on the invoice itself.
-4.  invoice_amount — total as a plain number, no $ or commas (e.g. 1088.54). Use final balance due for hotel folios. Required.
+4.  invoice_amount — total as a plain number, no $ or commas (e.g. 1088.54). Use final balance due for hotel folios. Required. Use 0 for a voided/cancelled PO, or for an order that was fully refunded/returned with no net amount owed — do not skip the row just because the amount is zero.
 5.  description — choose the best category: Hotel, Equipment Rental, Vehicle Rental, Crew Meal, Location Fee, Permit, Production Services, Casting, Airfare, Car Service, Props, Stage/Equip Rental, Post Production — or best concise fit. Empty string if unclear.
 6.  po_number — PO number if visible on any document in the PDF. Empty string if not found.
 7.  pymt_method — payment method if visible on any document. Use the closest match from this exact list: Check, P-Card, Credit Card, Cash, EFT/WIRE, Payroll Company, Internal, Zero Balance. Empty string if not visible.
@@ -37,7 +37,7 @@ FIELDS (return exactly these key names):
     "unsigned"     — W-9 is present but no signature is visible
     "undated"      — W-9 is present and signed but no date is visible
     "signed_dated" — W-9 is present, signed, and dated (w9_date will also be populated)
-16. notes — empty string in normal cases. Populate ONLY if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice. One sentence max.
+16. notes — empty string in normal cases. Populate if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice. Also populate for a $0.00 row: state why in a few words, e.g. "Voided PO — no charge" or "Fully refunded — no amount owed". One sentence max.
 
 Return ONLY a valid JSON array using exactly these key names per object:
 vendor_name, invoice_number, invoice_date, invoice_amount, description, po_number, pymt_method, pymt_number, address, city, state, zip, pop, w9_date, w9_status, notes
