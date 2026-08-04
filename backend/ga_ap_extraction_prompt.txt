@@ -29,7 +29,12 @@ FIELDS — return exactly these key names:
 4.  po_number — the PO number from the PO document itself if one is included in this PDF (authoritative, even if it conflicts with what the vendor's invoice states). If no PO document is present, use the PO number as stated on the invoice instead. Empty string if not found anywhere.
 5.  vendor_name — the business or individual who issued the invoice. Never the payer. Required.
 6.  payee_type — exactly "person" if the vendor is an individual (freelancer, crew member, loan-out individual's name); "company" if it is a business entity. Required.
-7.  ff1 — leave blank. Always return empty string.
+7.  ff1 — one of these four codes when clearly applicable, otherwise leave blank (empty string):
+    "HT" — Lodging: hotels, private residences, condos, parking, and other related lodging costs.
+    "AF" — Airfare: includes airfare, baggage fees, airport greeters, and other related flight costs.
+    "CR" — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz). Do NOT use CR for a rideshare or chauffeur car service (e.g. Uber, Blacklane) -- those get no code, leave blank.
+    "LO" — Payments to Loan Outs through Accounts Payable: use when loan_out is "Yes" and this is a genuine AP payment for services (not an expense reimbursement).
+    There are other FF1 categories beyond these four, but they are out of scope for now -- always leave ff1 blank rather than guessing at any code other than HT, AF, CR, or LO.
 8.  ff2 — leave blank. Always return empty string.
 9.  je_number — journal entry number if present. Empty string if not found.
 10. distribution_description — short description following the rules below. Required.
