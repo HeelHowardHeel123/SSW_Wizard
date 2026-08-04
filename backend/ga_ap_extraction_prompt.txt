@@ -22,7 +22,7 @@ ONE ROW PER INVOICE NUMBER.
 FIELDS — return exactly these key names:
 
 1.  check_number — payment or check number. Empty string if not found.
-2.  invoice_number — invoice or reference number as shown. If no formal invoice number exists, use the Transaction Number, Receipt Number, or Tracking Number instead -- never leave this blank if any such identifying number appears anywhere in the document. Empty string only if none of these are present at all.
+2.  invoice_number — invoice or reference number as shown. If no formal invoice number exists, use the Transaction Number, Receipt Number, or Tracking Number instead. If the document has no identifying number of any kind, use the literal label "Receipt" -- never leave this field blank.
 3.  invoice_date — in YYYY-MM-DD format. Convert all date formats to ISO. Empty string if not found.
 4.  po_number — PO number visible on any document in the PDF. Empty string if not found.
 5.  vendor_name — the business or individual who issued the invoice. Never the payer. Required.
