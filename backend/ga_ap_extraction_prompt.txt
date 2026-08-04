@@ -69,7 +69,31 @@ FIELDS — return exactly these key names:
 30. withholding — Georgia loan-out withholding amount, if shown on the invoice or accompanying documents. Plain number. Empty string if not applicable.
 31. w9 — "Yes" if a W-9 form is present in this PDF. "No" otherwise.
 32. business_license — "Yes" if a business license is present in this PDF. "No" otherwise.
-33. aicp_code — leave null. Always return null.
+33. aicp_code — the AICP category number that best matches this invoice, using this list:
+    1  — Lodging (Hotels, Condos, etc.)
+    2  — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz) for a crew/cast member.
+    3  — Transportation/Truck Rentals/Gasoline/Car Services: everything else in ground transportation, including a rideshare or chauffeur car service (e.g. Uber, Blacklane), truck rentals, and gasoline purchases.
+    4  — Airfare Purchase.
+    5  — Catering/Crafty.
+    6  — Construction Hardware/Lumber/Supplies.
+    7  — Office/Production Equipment Rentals and Purchases.
+    8  — Camera: Package/Rentals/Expendables.
+    9  — Grip/Electric: Package/Rentals/Expendables.
+    10 — Sound: Package/Rentals/Walkies/Expendables.
+    11 — Set Dressing/Props: Rentals/Purchases/Expendables.
+    12 — Wardrobe: Rentals/Purchases/Dry Cleaning/Laundry.
+    13 — Makeup/Hair/Special Effects Purchases.
+    14 — Location Fees/Permits.
+    15 — Facility Rental: Office.
+    16 — Facility Rental: Stage/Warehouse.
+    17 — Post Editing in Georgia: only when the invoice is for post-production/editing services AND the vendor's address is in Georgia (state is GA).
+    18 — Original Music Scored.
+    19 — Other: the catch-all for an invoice that clearly doesn't fit any other category on this list -- use this instead of leaving aicp_code null whenever you can tell what the invoice is for but it just isn't covered above (e.g. a plain freelance crew labor invoice, since categories 22-24 below are out of scope).
+    20 — Off-Duty Government Personnel (Police/Fire): only when the invoice explicitly states the security personnel are off-duty police/fire.
+    21 — Security Personnel: the default for a general security services invoice when off-duty government status is not explicitly stated.
+    25 — Per Diem Payments Cast & Crew: a flat daily allowance paid directly to a cast or crew member, not tied to hours/wages.
+    Categories 22, 23, and 24 (Georgia Crew Hires, Georgia Cast Hires, Georgia Extras Hires) are out of scope for now -- never assign them.
+    Leave aicp_code null only when the invoice is genuinely too unclear/unreadable to tell what it's for at all -- prefer 19 (Other) over null whenever you can identify the invoice's purpose.
 34. qualified — leave blank. Always return empty string.
 35. labor — true if this invoice is primarily for human labor or personal services: crew member invoices, freelance individuals, loan-out corporations, casting fees, staffing agencies, talent agencies. false for goods, equipment rentals, facilities, catering, transportation, and all other non-labor vendor invoices. This field is not written to the submission workbook but is used downstream for tab routing.
 36. notes — any concern a reviewer should know: ambiguous amounts, low-confidence judgment calls, conflicting data, unreadable pages. Empty string in normal cases. Also populate for a $0.00 row: state why in a few words, e.g. "Voided PO -- no charge" or "Fully refunded -- no amount owed". Use only plain ASCII — no em dashes, no special Unicode.
