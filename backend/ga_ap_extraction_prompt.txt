@@ -15,13 +15,14 @@ ONE ROW PER INVOICE NUMBER.
 - Use the invoice grand total as the amount — the final dollar figure at the bottom of the invoice, including all taxes and fees.
 - If the invoice shows "Total: $X / Paid: $Y / Amount Due: $Z", use X (the Total), not Z (Amount Due).
 - If a PDF contains multiple invoice numbers, emit one row per invoice number.
+- If a PDF bundles multiple distinct receipts, shipments, or transactions onto a single cover form or PO (e.g. several FedEx packages, each with its own tracking number, billed together) -- treat each one as its own item and emit one row per item. Do not combine them into a single row just because they share one PO or cover sheet.
 - Credit memos and refund invoices get their own row with a negative amount.
 - Do not break a single invoice into multiple rows by line item or GL category.
 
 FIELDS — return exactly these key names:
 
 1.  check_number — payment or check number. Empty string if not found.
-2.  invoice_number — invoice or reference number as shown. Empty string if not found.
+2.  invoice_number — invoice or reference number as shown. If no formal invoice number exists, use the Transaction Number, Receipt Number, or Tracking Number instead -- never leave this blank if any such identifying number appears anywhere in the document. Empty string only if none of these are present at all.
 3.  invoice_date — in YYYY-MM-DD format. Convert all date formats to ISO. Empty string if not found.
 4.  po_number — PO number visible on any document in the PDF. Empty string if not found.
 5.  vendor_name — the business or individual who issued the invoice. Never the payer. Required.
@@ -69,6 +70,9 @@ If the invoice clearly covers two categories of roughly equal value, combine wit
 
 If three or more categories are present, pick the single largest by dollar amount and use that alone.
 
+POSITION / JOB TITLE — used as "(POSITION)" in the Airfare, Car Rental, and Hotel formats below:
+Use the crew member's job title or role exactly as stated on the invoice or accompanying PO in this same PDF (e.g., "Food Styling", "Grip", "PA"), formatted in Title Case regardless of how it appears in the source document (convert ALL CAPS or any other styling to Title Case -- e.g. source "ASST ART DIRECTOR" becomes "Asst Art Director"). If no position or role is stated anywhere in this PDF, use the literal placeholder text "(POSITION)" -- do not guess or infer a role from outside knowledge (a call sheet is not part of this extraction yet).
+
 AIRFARE:
   One-way:    "Airfare for [First Last] (POSITION): One Way [ORG]-[DST] (M/D/YY)"
   Round trip: "Airfare for [First Last] (POSITION): Round Trip [ORG]-[DST]-[RTN] (M/D/YY - M/D/YY)"
@@ -101,6 +105,7 @@ GROUND RULES:
 - Money as plain numbers (53430.48), no $, no commas, no strings.
 - Dates as ISO YYYY-MM-DD.
 - Yes/No fields use exactly "Yes" or "No".
+- Format extracted names, vendor names, and position/job titles in Title Case (e.g. "Asst Art Director", "Sam Schneider"), even when the source document uses ALL CAPS or another styling. Do not copy the source's capitalization verbatim.
 - Multi-page PDFs may contain multiple invoice numbers — emit one row per invoice number.
 - Credit memos and refund invoices get their own row with a negative amount.
 
