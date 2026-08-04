@@ -10,7 +10,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
 
 [
   {
-    "po_number":      "purchase order number if present, else \"\"",
+    "po_number":      "purchase order number -- if a PO document is included in this PDF, use the number exactly as it appears on the PO itself, even if the vendor's invoice states a different PO number (the PO is authoritative; the invoice is written by the vendor and can mistranscribe it). Only use the invoice's stated PO number when no PO document is present. Else \"\"",
     "vendor_name":    "the company or person being paid (the payee/vendor)",
     "description":    "short description of goods/services, else \"\"",
     "address":        "vendor street address, else \"\"",

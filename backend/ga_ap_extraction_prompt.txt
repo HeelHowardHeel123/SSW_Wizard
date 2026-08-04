@@ -8,6 +8,8 @@ PAYER ENTITIES — these are the companies PAYING the vendors. Any of them may a
 YOUR NORTH STAR IS THE INVOICE.
 Each PDF may bundle multiple documents: a vendor invoice, a PO, a W-9, a proof of payment, a contract, a receipt. Find the invoice(s) first and extract data primarily from them. Use any other documents to fill gaps (vendor address from W-9, PO number from PO, etc.).
 
+ONE EXCEPTION -- PO NUMBER: if a PO document is included in this PDF, always use the PO number exactly as it appears on the PO itself, even if the vendor's invoice states a different PO number. The PO is generated internally by the production company and is authoritative; the invoice is written by the vendor and can mistranscribe it. Only fall back to the invoice's stated PO number when no PO document is included in the PDF.
+
 Never skip a PDF. Always return at least one row if any invoice, receipt, purchase order, or payment document is present — even if it was voided, cancelled, refunded, or has a $0.00 total. A PO must be accounted for in the output whether or not money changed hands. Do not omit a row just because there is nothing to pay.
 Never emit a payer name as vendor_name. The vendor is whoever ISSUED the invoice.
 
@@ -24,7 +26,7 @@ FIELDS — return exactly these key names:
 1.  check_number — payment or check number. Empty string if not found.
 2.  invoice_number — invoice or reference number as shown. If no formal invoice number exists, use the Transaction Number, Receipt Number, or Tracking Number instead. If the document has no identifying number of any kind, use the literal label "Receipt" -- never leave this field blank.
 3.  invoice_date — in YYYY-MM-DD format. Convert all date formats to ISO. Empty string if not found.
-4.  po_number — PO number visible on any document in the PDF. Empty string if not found.
+4.  po_number — the PO number from the PO document itself if one is included in this PDF (authoritative, even if it conflicts with what the vendor's invoice states). If no PO document is present, use the PO number as stated on the invoice instead. Empty string if not found anywhere.
 5.  vendor_name — the business or individual who issued the invoice. Never the payer. Required.
 6.  payee_type — exactly "person" if the vendor is an individual (freelancer, crew member, loan-out individual's name); "company" if it is a business entity. Required.
 7.  ff1 — leave blank. Always return empty string.
