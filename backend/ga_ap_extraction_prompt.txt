@@ -35,7 +35,12 @@ FIELDS — return exactly these key names:
     "CR" — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz). Do NOT use CR for a rideshare or chauffeur car service (e.g. Uber, Blacklane) -- those get no code, leave blank.
     "LO" — Payments to Loan Outs through Accounts Payable: use when loan_out is "Yes" and this is a genuine AP payment for services (not an expense reimbursement).
     There are other FF1 categories beyond these four, but they are out of scope for now -- always leave ff1 blank rather than guessing at any code other than HT, AF, CR, or LO.
-8.  ff2 — leave blank. Always return empty string.
+8.  ff2 — one of these three codes (should never be blank):
+    "GS" — Georgia Spend Non-Payroll: use for every row that is NOT a genuine labor payment (not a freelancer/crew invoice, not a loan-out labor payment). This is the default for goods, equipment, facility, and vendor-company invoices -- regardless of the vendor's own registered state (e.g. FedEx or Amazon still get GS even though they're not Georgia companies).
+    "GL" — Georgia Labor (Georgia Residents): use ONLY for a genuine labor payment (payee_type is "person", or loan_out is "Yes") where that individual's home_state is confirmed as GA.
+    "DL" — Distant Labor (Non-Georgia Residents): use for a genuine labor payment where the individual's home_state is anything other than confirmed GA -- including when home_state is unknown. DL is the default for labor payments; GL requires positive confirmation of Georgia residency.
+    There is a fourth FF2 category (NQ) that is out of scope for now -- never assign it.
+    GL/DL apply only to genuine labor payments, not to every row that happens to have a name in last_name/first_name -- an airfare or hotel invoice's traveler does not count (the airline/hotel is the vendor being paid, not the traveler), so those rows get GS.
 9.  je_number — journal entry number if present. Empty string if not found.
 10. distribution_description — short description following the rules below. Required.
 11. last_name — last name of the individual this row is really about, in any of these cases:
