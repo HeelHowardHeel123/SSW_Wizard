@@ -31,9 +31,13 @@ FIELDS — return exactly these key names:
 8.  ff2 — leave blank. Always return empty string.
 9.  je_number — journal entry number if present. Empty string if not found.
 10. distribution_description — short description following the rules below. Required.
-11. last_name — last name of individual. Populate ONLY when payee_type is "person". Leave blank for companies.
-12. first_name — first name of individual. Same rule as last_name.
-13. home_state — 2-letter state code for the individual's home state. Only for persons; derive from address or W-9 if visible. Empty string if unknown.
+11. last_name — last name of the individual this row is really about, in any of these cases:
+    - payee_type is "person" (an individual freelancer or crew member billing directly) -- their last name.
+    - This is an airfare or hotel/lodging invoice -- the last name of the crew member the flight or room was for, regardless of payee_type (the vendor is the airline or hotel, but this field names the traveler).
+    - loan_out is "Yes" -- the last name of the individual behind the loan-out corporation (the same person as loan_out_individual_name).
+    Leave blank only when none of the above apply (a standard company vendor invoice with no associated individual, e.g. equipment rental, catering, a location fee).
+12. first_name — first name of the same individual as last_name, following the identical rule. Leave blank whenever last_name is blank.
+13. home_state — 2-letter state code for that same individual's home state (not the vendor's business state, unless they happen to be the same). Derive from their address or an included W-9 if visible. Empty string if unknown or not visible anywhere in the document.
 14. episode — episode number. Leave blank for commercials.
 15. nights — integer number of hotel nights for lodging invoices (hotel, condo, short-term rental). null for all other invoices.
 16. address — vendor street address (number and street only, no city/state/zip). Check invoice first, then W-9. Empty string if not found.
@@ -46,8 +50,8 @@ FIELDS — return exactly these key names:
 23. proof_of_payment — "Yes" if the PDF contains a bank statement, wire confirmation, ACH remittance, AP register, or any document confirming payment was made. "No" otherwise.
 24. payment_entity — which payer entity paid this invoice. Match the invoice's Bill-To block against the payer entities list above. Use the exact name from the list. If no match found, use the raw Bill-To name from the invoice.
 25. received_invoice — "Yes" if an actual vendor invoice is present in the PDF. "No" if only a receipt, PO, or proof-of-payment was found with no invoice.
-26. loan_out — "Yes" if the vendor is a loan-out corporation (a personal LLC or corp set up by an individual to receive payments). "No" otherwise.
-27. loan_out_individual_name — if loan_out is "Yes", the natural person behind the corporation (e.g., "Robert Hauer" for "Hauer Films LLC"). Empty string otherwise.
+26. loan_out — "Yes" if the vendor is a loan-out corporation (a personal LLC or corp set up by an individual to receive payments). A strong signal: an included W-9 where Line 1 (Name of individual) shows a person's name and Line 2 (Business name, if different) shows the company name -- that person is the one behind the loan-out. "No" otherwise.
+27. loan_out_individual_name — if loan_out is "Yes", the natural person behind the corporation (e.g., "Robert Hauer" for "Hauer Films LLC") -- this is the same person whose name goes in last_name/first_name. Empty string otherwise.
 28. sales_tax_on_invoice — "Yes" if sales tax is charged on the invoice. "No" if not.
 29. active_sales_tax_account — "Yes" if the vendor has a visible Georgia active sales tax account number on the invoice or accompanying documents. "No" otherwise.
 30. withholding — Georgia loan-out withholding amount, if shown on the invoice or accompanying documents. Plain number. Empty string if not applicable.
