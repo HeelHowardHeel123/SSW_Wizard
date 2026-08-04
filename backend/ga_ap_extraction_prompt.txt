@@ -8,7 +8,7 @@ PAYER ENTITIES — these are the companies PAYING the vendors. Any of them may a
 YOUR NORTH STAR IS THE INVOICE.
 Each PDF may bundle multiple documents: a vendor invoice, a PO, a W-9, a proof of payment, a contract, a receipt. Find the invoice(s) first and extract data primarily from them. Use any other documents to fill gaps (vendor address from W-9, PO number from PO, etc.).
 
-Never skip a PDF. Always return at least one row if any invoice, receipt, or payment document is present.
+Never skip a PDF. Always return at least one row if any invoice, receipt, purchase order, or payment document is present — even if it was voided, cancelled, refunded, or has a $0.00 total. A PO must be accounted for in the output whether or not money changed hands. Do not omit a row just because there is nothing to pay.
 Never emit a payer name as vendor_name. The vendor is whoever ISSUED the invoice.
 
 ONE ROW PER INVOICE NUMBER.
@@ -39,7 +39,7 @@ FIELDS — return exactly these key names:
 17. city — vendor city. Empty string if not found.
 18. state — vendor state as 2-letter code. Empty string if not found.
 19. zip — vendor zip code (5 digits). Empty string if not found.
-20. amount — invoice grand total as a plain number, no $ or commas (e.g. 53430.48). Include all taxes and fees. Use the Total, not Amount Due. Required.
+20. amount — invoice grand total as a plain number, no $ or commas (e.g. 53430.48). Include all taxes and fees. Use the Total, not Amount Due. Required. Use 0 for a voided/cancelled PO, or an order that was fully refunded/returned with no net amount owed — do not skip the row just because the amount is zero.
 21. non_qualified — always return 0. The user determines non-qualified amounts manually.
 22. payment_method — exactly one of: Check, ACH, Wire, Credit Card, P-Card. Empty string if not visible.
 23. proof_of_payment — "Yes" if the PDF contains a bank statement, wire confirmation, ACH remittance, AP register, or any document confirming payment was made. "No" otherwise.
@@ -55,7 +55,7 @@ FIELDS — return exactly these key names:
 33. aicp_code — leave null. Always return null.
 34. qualified — leave blank. Always return empty string.
 35. labor — true if this invoice is primarily for human labor or personal services: crew member invoices, freelance individuals, loan-out corporations, casting fees, staffing agencies, talent agencies. false for goods, equipment rentals, facilities, catering, transportation, and all other non-labor vendor invoices. This field is not written to the submission workbook but is used downstream for tab routing.
-36. notes — any concern a reviewer should know: ambiguous amounts, low-confidence judgment calls, conflicting data, unreadable pages. Empty string in normal cases. Use only plain ASCII — no em dashes, no special Unicode.
+36. notes — any concern a reviewer should know: ambiguous amounts, low-confidence judgment calls, conflicting data, unreadable pages. Empty string in normal cases. Also populate for a $0.00 row: state why in a few words, e.g. "Voided PO -- no charge" or "Fully refunded -- no amount owed". Use only plain ASCII — no em dashes, no special Unicode.
 37. website_address — vendor website if printed on the invoice. Empty string if not found.
 
 DESCRIPTION RULES (field 10 — distribution_description):

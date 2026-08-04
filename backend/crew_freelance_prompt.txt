@@ -41,4 +41,5 @@ Rules:
 - Monetary fields must be numbers only — no $ signs or commas.
 - invoiceDate format: MM/DD/YYYY.
 - If a page is not an invoice (cover sheet, blank page, etc.), ignore it.
+- Never skip an invoice just because it was voided, cancelled, or fully refunded/returned with no net amount owed. Still return a row for it with wages and invoiceTotal set to 0. Every invoice must be accounted for in the output whether or not money changed hands.
 - Output the JSON array and nothing else.

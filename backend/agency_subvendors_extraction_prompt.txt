@@ -5,12 +5,13 @@ This is the company being billed. It appears as "Bill To" or the recipient on ea
 
 INSTRUCTIONS:
 A PDF may include invoices, W-9s, contracts, bank statements, wire confirmations, ACH remittance pages, or other documents — find each invoice and return one JSON object per invoice.
+Never skip an invoice just because it was voided, cancelled, or fully refunded/returned with no net amount owed. Still return a row for it with invoice_amount 0. Every invoice must be accounted for in the output whether or not money changed hands.
 
 FIELDS (return exactly these key names):
 1.  vendor_name — the company or person who issued this invoice (the seller / service provider). Required.
 2.  invoice_number — invoice/reference number exactly as shown. Required.
 3.  invoice_date — in MM/DD/YYYY format. Empty string if not found.
-4.  invoice_amount — total amount due as a plain number, no $ or commas (e.g. 35000.00). Required.
+4.  invoice_amount — total amount due as a plain number, no $ or commas (e.g. 35000.00). Required. Use 0 for a voided/cancelled invoice, or one that was fully refunded/returned with no net amount owed.
 5.  description — the broad service category (e.g., "Production Services", "Post Production", "Animation", "Music"). Empty string if unclear.
 6.  job_number — job number or production number from the invoice. Empty string if not found.
 7.  client_billing_number — agency client billing number or client PO number if shown on the invoice. Empty string if not found.
@@ -28,6 +29,6 @@ FIELDS (return exactly these key names):
     "unsigned"     — W-9 is present but no signature is visible
     "undated"      — W-9 is present and signed but no date is visible
     "signed_dated" — W-9 is present, signed, and dated (w9_date will also be populated)
-18. notes — empty string in normal cases. Populate only if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice.
+18. notes — empty string in normal cases. Populate if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice. Also populate for a $0.00 row: state why in a few words, e.g. "Voided invoice -- no charge" or "Fully refunded -- no amount owed".
 
 Return ONLY a valid JSON array. No markdown. No explanation. No code fences. JSON array only.

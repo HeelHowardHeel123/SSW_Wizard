@@ -8,11 +8,12 @@ These companies are being billed. They appear as "Bill To" on invoices. They are
 
 INSTRUCTIONS:
 A PDF may include invoices, W-9s, contracts, bank statements, wire confirmations, ACH remittance pages, or other documents — find each invoice and return one JSON object per invoice.
+Never skip an invoice just because it was voided, cancelled, or fully refunded/returned with no net amount owed. Still return a row for it with invoice_amount 0. Every invoice must be accounted for in the output whether or not money changed hands.
 
 FIELDS (return exactly these key names):
 1. invoice_number — invoice/reference number exactly as shown. Required.
 2. invoice_date — in MM/DD/YYYY format. Empty string if not found.
-3. invoice_amount — total amount due as a plain number, no $ or commas (e.g. 35000.00). Required.
+3. invoice_amount — total amount due as a plain number, no $ or commas (e.g. 35000.00). Required. Use 0 for a voided/cancelled invoice, or one that was fully refunded/returned with no net amount owed.
 4. project_fee — if a line item is explicitly and specifically labeled "Project Fee" (or a clear variant like "Prod Fee"), its amount as a plain number. null if no line item is explicitly labeled as a project fee.
 5. description — the broad service category (e.g., "Production Services", "Post Production", "Animation", "Music"). Empty string if unclear.
 6. details — the single most descriptive line item name from the invoice (e.g., "Advance Billing", "Project Fee", "Expenses", "Final Billing"). Empty string if no meaningful line item label is present.
@@ -25,6 +26,6 @@ FIELDS (return exactly these key names):
 13. city — vendor's CITY NAME ONLY. Do NOT include state, country, or any other text. Example: "Chicago". Empty string if not found.
 14. state — vendor's state as 2-letter code ONLY (e.g. "IL"). Empty string if not found.
 15. zip — vendor's zip code (5 digits). Empty string if not found.
-16. notes — empty string in normal cases. Populate only if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice.
+16. notes — empty string in normal cases. Populate if you have a genuine concern: ambiguous amounts, unreadable pages, conflicting invoice totals, or a document that appears to be something other than a formal invoice. Also populate for a $0.00 row: state why in a few words, e.g. "Voided invoice -- no charge" or "Fully refunded -- no amount owed".
 
 Return ONLY a valid JSON array. No markdown. No explanation. No code fences. JSON array only.

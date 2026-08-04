@@ -29,6 +29,7 @@ Return ONLY a JSON array (no prose, no markdown fences). Each object uses these 
 Rules:
 - The vendor is who is being PAID, not the ProdCo paying them.
 - Use the grand total / amount due for invoice_amount. Numbers only (no $ or commas).
+- Never skip an invoice or PO just because it was voided, cancelled, or fully refunded/returned with no net amount owed. Still return a row for it with invoice_amount 0, and note why in the notes field (e.g. "Voided PO -- no charge"). Every invoice/PO must be accounted for in the output whether or not money changed hands.
 - If a field is genuinely absent, use an empty string "".
 - If a page is not an invoice, ignore it.
 - Output the JSON array and nothing else.
