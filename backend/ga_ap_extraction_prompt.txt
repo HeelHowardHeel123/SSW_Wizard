@@ -32,15 +32,15 @@ FIELDS — return exactly these key names:
 7.  ff1 — one of these four codes when clearly applicable, otherwise leave blank (empty string):
     "HT" — Lodging: hotels, private residences, condos, parking, and other related lodging costs.
     "AF" — Airfare: includes airfare, baggage fees, airport greeters, and other related flight costs.
-    "CR" — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz). Do NOT use CR for a rideshare or chauffeur car service (e.g. Uber, Blacklane) -- those get no code, leave blank.
+    "CR" — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz), rented FOR a specific named crew/cast member. Requires that person's real name to be stated somewhere in the PDF -- if the rental is for equipment/cargo hauling with no named individual (e.g. an "art truck rental" reservation), this is NOT CR; leave ff1 blank and use the default description instead. Do NOT use CR for a rideshare or chauffeur car service (e.g. Uber, Blacklane) -- those get no code, leave blank.
     "LO" — Payments to Loan Outs through Accounts Payable: use when loan_out is "Yes" and this is a genuine AP payment for services (not an expense reimbursement).
     There are other FF1 categories beyond these four, but they are out of scope for now -- always leave ff1 blank rather than guessing at any code other than HT, AF, CR, or LO.
-8.  ff2 — one of these three codes (should never be blank):
-    "GS" — Georgia Spend Non-Payroll: use for every row that is NOT a genuine labor payment (not a freelancer/crew invoice, not a loan-out labor payment). This is the default for goods, equipment, facility, and vendor-company invoices -- regardless of the vendor's own registered state (e.g. FedEx or Amazon still get GS even though they're not Georgia companies).
-    "GL" — Georgia Labor (Georgia Residents): use ONLY for a genuine labor payment (payee_type is "person", or loan_out is "Yes") where that individual's home_state is confirmed as GA.
-    "DL" — Distant Labor (Non-Georgia Residents): use for a genuine labor payment where the individual's home_state is anything other than confirmed GA -- including when home_state is unknown. DL is the default for labor payments; GL requires positive confirmation of Georgia residency.
+8.  ff2 — determine using this exact step-by-step procedure (should never be blank):
+    Step 1: Is this a genuine labor payment? (payee_type is "person", or loan_out is "Yes"). Note an airfare or hotel invoice's traveler does NOT count as a labor payment on its own (the airline/hotel is the vendor being paid, not the traveler).
+    Step 2: If NO -> ff2 = "GS" (Georgia Spend Non-Payroll). This covers every non-labor row: goods, equipment, facility, and vendor-company invoices -- regardless of the vendor's own registered state (e.g. FedEx or Amazon still get GS even though they're not Georgia companies).
+    Step 3: If YES -> compare against the home_state value you determined for this same individual (field 13). If home_state is EXACTLY "GA" -> ff2 = "GL". For every other case, including when home_state is blank/unknown -> ff2 = "DL".
+    Do this comparison explicitly every time -- do not default to DL out of habit. If you wrote "GA" in home_state for this row, ff2 must be "GL", never "DL".
     There is a fourth FF2 category (NQ) that is out of scope for now -- never assign it.
-    GL/DL apply only to genuine labor payments, not to every row that happens to have a name in last_name/first_name -- an airfare or hotel invoice's traveler does not count (the airline/hotel is the vendor being paid, not the traveler), so those rows get GS.
 9.  je_number — journal entry number if present. Empty string if not found.
 10. distribution_description — short description following the rules below. Required.
 11. last_name — last name of the individual this row is really about, in any of these cases:
@@ -71,8 +71,8 @@ FIELDS — return exactly these key names:
 32. business_license — "Yes" if a business license is present in this PDF. "No" otherwise.
 33. aicp_code — the AICP category number that best matches this invoice, using this list:
     1  — Lodging (Hotels, Condos, etc.)
-    2  — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz) for a crew/cast member.
-    3  — Transportation/Truck Rentals/Gasoline/Car Services: everything else in ground transportation, including a rideshare or chauffeur car service (e.g. Uber, Blacklane), truck rentals, and gasoline purchases.
+    2  — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz) rented FOR a specific named crew/cast member -- that person's real name must be stated somewhere in the PDF. Never invent a name to justify this code.
+    3  — Transportation/Truck Rentals/Gasoline/Car Services: everything else in ground transportation, including a rideshare or chauffeur car service (e.g. Uber, Blacklane), truck/cargo rentals with no named individual (e.g. an "art truck rental" reservation for hauling equipment), and gasoline purchases.
     4  — Airfare Purchase.
     5  — Catering/Crafty.
     6  — Construction Hardware/Lumber/Supplies.
@@ -81,7 +81,7 @@ FIELDS — return exactly these key names:
     9  — Grip/Electric: Package/Rentals/Expendables.
     10 — Sound: Package/Rentals/Walkies/Expendables.
     11 — Set Dressing/Props: Rentals/Purchases/Expendables.
-    12 — Wardrobe: Rentals/Purchases/Dry Cleaning/Laundry.
+    12 — Wardrobe: Rentals/Purchases/Dry Cleaning/Laundry. Includes clothing/apparel purchases for the production from any retailer (e.g. NFL Shop, Fanatics, a department store) -- use 12 consistently for these, not 19.
     13 — Makeup/Hair/Special Effects Purchases.
     14 — Location Fees/Permits.
     15 — Facility Rental: Office.
@@ -112,6 +112,8 @@ If three or more categories are present, pick the single largest by dollar amoun
 
 POSITION / JOB TITLE — used as "(POSITION)" in the Airfare, Car Rental, and Hotel formats below:
 Use the crew member's job title or role exactly as stated on the invoice or accompanying PO in this same PDF (e.g., "Food Styling", "Grip", "PA"), formatted in Title Case regardless of how it appears in the source document (convert ALL CAPS or any other styling to Title Case -- e.g. source "ASST ART DIRECTOR" becomes "Asst Art Director"). If no position or role is stated anywhere in this PDF, use the literal placeholder text "(POSITION)" -- do not guess or infer a role from outside knowledge (a call sheet is not part of this extraction yet).
+
+[First Last] IS NOT A PLACEHOLDER -- it must be a real person's name found somewhere in this PDF. Never invent, guess, or infer a name to fill this slot. If a rental/booking has no named individual anywhere in the document (e.g. an equipment/cargo truck rental reservation with no passenger named), do NOT use the Airfare/Car Rental/Hotel format at all -- fall back to the DEFAULT description rule instead (a short 1-2 word category description), and leave ff1/aicp_code blank or set to the non-passenger transportation code as appropriate rather than fabricating a traveler.
 
 AIRFARE:
   One-way:    "Airfare for [First Last] (POSITION): One Way [ORG]-[DST] (M/D/YY)"
