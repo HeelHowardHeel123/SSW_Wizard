@@ -34,6 +34,10 @@ Endpoints
                                      prodco_address, agency_name, work_state, payer_entities
                                      (JSON array of {role,name,address})
                                      returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /match-ap-positions         → JSON: {ap_names: [...], crew: [{name,positions[],dates[]}]}
+                                     (crew comes from /extract-call-sheet). GPT matches each
+                                     ap_name against the crew list and returns its position.
+                                     returns {"mapping": {"First Last": "(Gaffer)"}, "issues": [...]}
   POST /build-ga-workbook          → multipart: files[]=<pdf>, template=<xlsx>, prodco_name,
                                      prodco_address, agency_name, work_state, payer_entities,
                                      project_title
@@ -345,6 +349,35 @@ def _call_gpt(images_b64, system_prompt, client, user_text="Extract all invoices
             except Exception:
                 return []
     return []
+
+
+def _call_gpt_text_json(user_prompt, client, max_tokens=2048, max_retries=5):
+    """Text-only GPT call (no images) that expects a single JSON object back."""
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": user_prompt}],
+                temperature=0,
+                max_tokens=max_tokens,
+            )
+            break
+        except RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
+    raw = resp.choices[0].message.content.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                return {}
+    return {}
 
 
 def _extract_petty_cash_from_file(filename, data, system_prompt, client, user_text=""):
@@ -2862,6 +2895,93 @@ async def extract_ga_ap(
         })
 
     return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── GA AP call sheet position matching ───────────────────────────────────────
+# Call sheet extraction stays on /extract-call-sheet (Claude, unchanged). This
+# endpoint only does the matching step, on OpenAI, per the Claude-extracts /
+# OpenAI-matches split: extraction is the hard visual-parsing task, matching a
+# name against an already-extracted list is the easy one.
+
+class _CrewEntryIn(BaseModel):
+    name:      str       = ""
+    positions: list[str] = []
+    dates:     list[str] = []
+
+class _MatchApPositionsRequest(BaseModel):
+    ap_names: list[str]         = []
+    crew:     list[_CrewEntryIn] = []
+
+
+@app.post("/match-ap-positions")
+async def match_ap_positions(
+    payload:      _MatchApPositionsRequest,
+    x_app_secret: str = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    if not payload.ap_names or not payload.crew:
+        return {"mapping": {}, "issues": []}
+
+    client = _client()
+
+    ap_list = "\n".join(f"  {i+1}. {n}" for i, n in enumerate(payload.ap_names))
+    crew_lines = []
+    for c in payload.crew:
+        if not c.name:
+            continue
+        pos = ", ".join(c.positions) if c.positions else "(none listed)"
+        dates = ", ".join(c.dates) if c.dates else "(none listed)"
+        crew_lines.append(f"  - {c.name} — positions: {pos} — dates worked: {dates}")
+    crew_list = "\n".join(crew_lines)
+
+    user_prompt = (
+        "You match crew member names from a production AP (accounts payable) spreadsheet "
+        "against a call sheet's crew roster, and return each matched person's position.\n\n"
+        f"AP NAMES — find a position for each of these:\n{ap_list}\n\n"
+        f"CALL SHEET CREW:\n{crew_list}\n\n"
+        "For each AP name, find the best matching person on the call sheet using fuzzy matching:\n"
+        "- Names may differ by nickname (\"Joe\" matches \"Joseph\", \"Dave\" matches \"David\"), "
+        "middle name inclusion, or minor spelling differences.\n"
+        "- If a person has multiple positions listed and they are all the same, use that position. "
+        "If they genuinely differ across dates, use the position tied to the most dates worked, but "
+        "still add a note to \"issues\" flagging that person for manual review.\n"
+        "- If no reasonable match exists on the call sheet for an AP name, omit that name from the "
+        "mapping entirely and add a note to \"issues\" instead of guessing.\n\n"
+        "FORMAT:\n"
+        "- Return each matched position in Title Case, wrapped in parentheses, e.g. \"(Gaffer)\", "
+        "\"(Key Grip)\", \"(2nd Props)\".\n"
+        "- Return ONLY valid JSON, no markdown, no explanation:\n"
+        "{\"mapping\": {\"AP Name As Given\": \"(Position)\"}, \"issues\": [\"free text notes\"]}"
+    )
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            functools.partial(_call_gpt_text_json, user_prompt, client),
+        )
+    except Exception as e:
+        return {"mapping": {}, "issues": [f"Position matching failed: {e}"]}
+
+    mapping = result.get("mapping") if isinstance(result, dict) else None
+    if not isinstance(mapping, dict):
+        mapping = {}
+    issues = result.get("issues") if isinstance(result, dict) else None
+    if not isinstance(issues, list):
+        issues = []
+
+    # Defensive normalization: ensure every position is paren-wrapped even if
+    # the model forgot, so the frontend never has to guess.
+    fixed_mapping = {}
+    for name, pos in mapping.items():
+        pos = str(pos or "").strip()
+        if pos and not (pos.startswith("(") and pos.endswith(")")):
+            pos = f"({pos})"
+        fixed_mapping[name] = pos
+
+    return {"mapping": fixed_mapping, "issues": issues}
 
 
 # ── GA workbook writer ────────────────────────────────────────────────────────
