@@ -34,6 +34,12 @@ Endpoints
                                      prodco_address, agency_name, work_state, payer_entities
                                      (JSON array of {role,name,address})
                                      returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-ga-petty-cash      → multipart: files[]=<pdf>, prodco_name, work_state
+                                     reuses the IL petty cash engine (chunking, envelope-total
+                                     reconciliation); GA-specific prompt/fields (FF1/FF2/AICP,
+                                     dual proof-of-payment). Never auto-disqualifies a line --
+                                     flags possible-DNQ candidates via notes only.
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
   POST /match-ap-positions         → JSON: {ap_names: [...], crew: [{name,positions[],dates[]}]}
                                      (crew comes from /extract-call-sheet). GPT matches each
                                      ap_name against the crew list and returns its position.
@@ -97,6 +103,7 @@ _DIVERSITY_FORM_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(_
 _CALL_SHEET_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "call_sheet_prompt.txt")
 _PETTY_CASH_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "petty_cash_extraction_prompt.txt")
 _GA_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_ap_extraction_prompt.txt")
+_GA_PETTY_CASH_PROMPT_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_petty_cash_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -239,6 +246,18 @@ def _load_petty_cash_prompt(prodco_name: str, work_state: str = "IL") -> str:
         template = f.read()
     name_label  = prodco_name.strip() or "the production company"
     state_label = work_state.strip().upper() or "IL"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_ga_petty_cash_prompt(prodco_name: str, work_state: str = "GA") -> str:
+    with open(_GA_PETTY_CASH_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "GA"
     return (
         template
         .replace("{prodco_name}", name_label)
@@ -2084,6 +2103,149 @@ async def extract_petty_cash(
     return {"rows": rows, "issues": issues, "files": file_summaries}
 
 
+# ── GA Petty Cash extractor ───────────────────────────────────────────────────
+# Reuses the IL petty cash engine (_extract_petty_cash_from_file: chunking,
+# envelope-total reconciliation) unchanged -- the document structure (a
+# custodian's cover sheet + receipts) is state-agnostic. Only the prompt and
+# the normalized output fields differ (GA's FF1/FF2/AICP tax codes, dual
+# proof-of-payment fields, etc.).
+
+@app.post("/extract-ga-petty-cash")
+async def extract_ga_petty_cash(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("GA"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_ga_petty_cash_prompt(prodco_name, work_state)
+    user_text     = (
+        "Extract all petty cash line items from this custodian's packet. "
+        "Read the cover sheet first for the canonical ordered list, "
+        "then check which receipts are present in the PDF."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        file_mb = len(data) / (1024 * 1024)
+        if file_mb > 40:
+            msg = (
+                f"File too large to process ({file_mb:.0f} MB) -- "
+                "compress to under 40 MB and resubmit"
+            )
+            return filename, [], msg, True
+
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None, False
+            except Exception as e:
+                return filename, [], str(e), False
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+    custodian_env_max: dict[str, int] = {}
+
+    for filename, raw_list, err, too_large in extraction_results:
+        errs: list[str] = []
+
+        if too_large:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({
+                "filename": filename,
+                "company":  "unknown",
+                "rows":     0,
+                "issues":   errs,
+            })
+            continue
+
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        env_totals: dict[int, float] = {}
+        if not raw_list:
+            errs.append("no petty cash data extracted - review manually")
+            issues.append(f"{filename}: no petty cash data extracted")
+        else:
+            # Collect per-envelope totals from raw rows before normalization
+            for raw in raw_list:
+                en = raw.get("env_number", 1)
+                try:
+                    en = max(1, int(en))
+                except (TypeError, ValueError):
+                    en = 1
+                et = normalize_amount(raw.get("envelope_total", 0))
+                if et and en not in env_totals:
+                    env_totals[en] = et
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_ga_petty_cash_row(raw, work_state, filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        if file_rows:
+            custodian = file_rows[0]["custodian_name"]
+            env_offset = custodian_env_max.get(custodian, 0)
+            if env_offset > 0:
+                for r in file_rows:
+                    r["env_number"] = r["env_number"] + env_offset
+                env_totals = {k + env_offset: v for k, v in env_totals.items()}
+            new_max = max(r["env_number"] for r in file_rows)
+            custodian_env_max[custodian] = max(custodian_env_max.get(custodian, 0), new_max)
+
+        if file_rows and env_totals:
+            env_groups: dict[int, list] = {}
+            for r in file_rows:
+                env_groups.setdefault(r["env_number"], []).append(r)
+            for env_num, group_rows in env_groups.items():
+                et = env_totals.get(env_num, 0.0)
+                if not et:
+                    continue
+                extracted_total = round(sum(r["amount"] for r in group_rows), 2)
+                if abs(extracted_total - et) > 0.01:
+                    diff = round(extracted_total - et, 2)
+                    mismatch_note = (
+                        f"Envelope total ${et:,.2f} | "
+                        f"Extracted total ${extracted_total:,.2f} | "
+                        f"Difference ${diff:,.2f}"
+                    )
+                    existing = group_rows[0]["notes"]
+                    group_rows[0]["notes"] = (
+                        f"{mismatch_note} | {existing}" if existing else mismatch_note
+                    )
+
+        rows.extend(file_rows)
+        custodian_label = file_rows[0]["custodian_name"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": filename,
+            "company":  custodian_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
 # ── Agency Hours extractor ───────────────────────────────────────────────────
 
 @app.post("/extract-agency-hours")
@@ -2885,6 +3047,116 @@ def normalize_ga_ap_row(raw: dict) -> dict:
         "website_address":          str(raw.get("website_address", "")).strip(),
         # Not written to AP tab — used downstream for tab routing (Payroll Roster, GL, etc.)
         "labor":                    bool(raw.get("labor", False)),
+    }
+
+
+def normalize_ga_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
+    def yn(val):
+        s = str(val or "").strip().lower()
+        return "Yes" if s in ("yes", "true", "1") else "No"
+
+    def split_custodian(name: str):
+        name = name.strip()
+        if "," in name:
+            last, _, first = name.partition(",")
+            return last.strip(), first.strip()
+        parts = name.split()
+        if len(parts) >= 2:
+            return parts[0], " ".join(parts[1:])
+        return name, ""
+
+    ff1 = str(raw.get("ff1", "")).strip().upper()
+    if ff1 not in _GA_AP_FF1_VALID:
+        ff1 = ""
+
+    ff2 = str(raw.get("ff2", "")).strip().upper()
+    if ff2 not in _GA_AP_FF2_VALID:
+        ff2 = "GS"
+
+    aicp = raw.get("aicp_code")
+    try:
+        aicp = int(aicp)
+        if not 1 <= aicp <= 25:
+            aicp = None
+    except (TypeError, ValueError):
+        aicp = None
+
+    custodian_name = clean_name(raw.get("custodian_name", ""))
+    last_name, first_name = split_custodian(custodian_name)
+
+    nights = raw.get("nights")
+    try:
+        nights = int(nights) if nights is not None else None
+    except (TypeError, ValueError):
+        nights = None
+
+    env_num = raw.get("env_number", 1)
+    try:
+        env_num = max(1, int(env_num))
+    except (TypeError, ValueError):
+        env_num = 1
+
+    line_num = raw.get("line_number", 0)
+    try:
+        line_num = max(0, int(line_num))
+    except (TypeError, ValueError):
+        line_num = 0
+
+    received = str(raw.get("received_invoice", "NO")).strip().upper()
+    if received not in ("YES", "NO"):
+        received = "NO"
+
+    proof_vendor = str(raw.get("proof_of_payment_vendor", "NO")).strip().upper()
+    if proof_vendor not in ("YES", "NO"):
+        proof_vendor = "NO"
+
+    # Uses the literal "MISSING" value (not "No") to match the production's
+    # own established convention for this field -- see the real Coke 012
+    # example workbook, where "MISSING" + a "Missing PC sign out sheet" note
+    # is used whenever the custodian's own cover sheet is unsigned/absent.
+    proof_remit = str(raw.get("proof_of_pc_remittance_crew", "MISSING")).strip().upper()
+    if proof_remit not in ("YES", "MISSING"):
+        proof_remit = "MISSING"
+
+    return {
+        "custodian_name":              custodian_name,
+        "env_number":                  env_num,
+        "line_number":                 line_num,
+        "vendor_name":                 clean_name(raw.get("vendor_name", "")),
+        "invoice_number":              str(raw.get("invoice_number", "")).strip() or "Receipt",
+        "invoice_date":                normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "amount":                      normalize_amount(raw.get("amount", 0)),
+        "distribution_description":    str(raw.get("distribution_description", "")).strip(),
+        "ff1":                         ff1,
+        "ff2":                         ff2,
+        "je_number":                   str(raw.get("je_number", "")).strip(),
+        "check_number":                str(raw.get("check_number", "")).strip(),
+        "po_number":                   str(raw.get("po_number", "")).strip(),
+        "last_name":                   last_name,
+        "first_name":                  first_name,
+        "home_state":                  clean_state(raw.get("home_state", "")),
+        "episode":                     str(raw.get("episode", "")).strip(),
+        "nights":                      nights,
+        "address":                     clean_address(raw.get("address", "")),
+        "city":                        clean_name(raw.get("city", "")),
+        "state":                       clean_state(raw.get("state", "")),
+        "zip":                         clean_zip(raw.get("zip", "")),
+        "proof_of_payment_vendor":     proof_vendor,
+        "proof_of_pc_remittance_crew": proof_remit,
+        "received_invoice":            received,
+        "sales_tax_on_invoice":        yn(raw.get("sales_tax_on_invoice")),
+        "active_sales_tax_account":    yn(raw.get("active_sales_tax_account")),
+        "withholding":                 str(raw.get("withholding", "")).strip(),
+        "w9":                          yn(raw.get("w9")),
+        "business_license":            yn(raw.get("business_license")),
+        "aicp_code":                   aicp,
+        # Always blank/zero at extraction time -- the automation never
+        # disqualifies a line itself, it only flags candidates via notes.
+        "qualified":                   "",
+        "non_qualified":               0,
+        "notes":                       str(raw.get("notes", "")).strip(),
+        "website_address":             str(raw.get("website_address", "")).strip(),
+        "sourceFile":                  filename,
     }
 
 
