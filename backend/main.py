@@ -2449,16 +2449,19 @@ def _call_claude_call_sheet(images_b64: list, system_prompt: str, client) -> lis
     )
     text_block = next((b for b in resp.content if b.type == "text"), None)
     if not text_block:
+        print(f"[_call_claude_call_sheet] No text block in Claude's response. stop_reason={resp.stop_reason!r}", flush=True)
         return []
     raw = text_block.text.strip()
     try:
         return json.loads(raw)
     except Exception:
+        print(f"[_call_claude_call_sheet] JSON parse failed. Raw response (first 1000 chars): {raw[:1000]!r}", flush=True)
         m = re.search(r'\[.*\]', raw, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group())
             except Exception:
+                print(f"[_call_claude_call_sheet] Fallback array-extraction also failed on: {m.group()[:1000]!r}", flush=True)
                 return []
     return []
 
@@ -2530,7 +2533,10 @@ async def extract_call_sheet(
     async def process_file(filename, data):
         async with sem:
             try:
-                images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_dim=1800)
+                # Call sheets pack small multi-column text (crew/client/agency/talent
+                # tables side by side) -- denser than residency/diversity docs, so this
+                # needs at least their resolution (2.0/2000), with a bit more headroom.
+                images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=2400)
             except Exception as e:
                 return filename, [], [f"{filename}: {e}"]
 
