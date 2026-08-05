@@ -2420,6 +2420,66 @@ async def match_names(
 
 # ── Call sheet extractor ──────────────────────────────────────────────────────
 
+def _repair_truncated_json(raw: str):
+    """Best-effort recovery for a JSON value that got cut off mid-stream
+    (e.g. the response hit max_tokens before finishing). Scans for the last
+    point where a complete object/array had just closed at any nesting
+    depth, drops everything after that point (the final incomplete
+    element), and closes out whatever brackets were still open. Returns the
+    parsed value, or None if nothing could be salvaged.
+
+    E.g. for a large call sheet where Claude's crew list for day 1 alone
+    exceeds max_tokens, this recovers every complete person entry already
+    written instead of discarding the entire response over one truncated
+    trailing entry.
+    """
+    start = None
+    for ch in ("[", "{"):
+        idx = raw.find(ch)
+        if idx != -1 and (start is None or idx < start):
+            start = idx
+    if start is None:
+        return None
+    raw = raw[start:]
+
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    last_clean_end = None
+    last_clean_stack = None
+
+    for i, ch in enumerate(raw):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if not stack:
+                break
+            stack.pop()
+            last_clean_end = i + 1
+            last_clean_stack = list(stack)
+
+    if last_clean_end is None:
+        return None
+
+    closers = {"[": "]", "{": "}"}
+    candidate = raw[:last_clean_end] + "".join(closers[c] for c in reversed(last_clean_stack))
+    candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
+    try:
+        return json.loads(candidate)
+    except Exception:
+        return None
+
+
 def _call_claude_call_sheet(images_b64: list, system_prompt: str, client) -> list:
     """Send a batch of call sheet page images to Claude.
 
@@ -2455,15 +2515,21 @@ def _call_claude_call_sheet(images_b64: list, system_prompt: str, client) -> lis
     try:
         return json.loads(raw)
     except Exception:
-        print(f"[_call_claude_call_sheet] JSON parse failed. Raw response (first 1000 chars): {raw[:1000]!r}", flush=True)
+        print(f"[_call_claude_call_sheet] JSON parse failed (stop_reason={resp.stop_reason!r}). "
+              f"Raw response (first 1000 chars): {raw[:1000]!r}", flush=True)
         m = re.search(r'\[.*\]', raw, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group())
             except Exception:
-                print(f"[_call_claude_call_sheet] Fallback array-extraction also failed on: {m.group()[:1000]!r}", flush=True)
-                return []
-    return []
+                pass
+        repaired = _repair_truncated_json(raw)
+        if repaired is not None:
+            print(f"[_call_claude_call_sheet] Recovered partial data from a truncated response "
+                  f"instead of discarding everything ({len(repaired)} page object(s)).", flush=True)
+            return repaired
+        print("[_call_claude_call_sheet] Could not recover any usable data from this response.", flush=True)
+        return []
 
 
 def _normalize_cs_date(val: str) -> str:
