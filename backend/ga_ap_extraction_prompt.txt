@@ -29,12 +29,15 @@ FIELDS — return exactly these key names:
 4.  po_number — the PO number from the PO document itself if one is included in this PDF (authoritative, even if it conflicts with what the vendor's invoice states). If no PO document is present, use the PO number as stated on the invoice instead. Empty string if not found anywhere.
 5.  vendor_name — the business or individual who issued the invoice. Never the payer. Required.
 6.  payee_type — exactly "person" if the vendor is an individual (freelancer, crew member, loan-out individual's name); "company" if it is a business entity. Required.
-7.  ff1 — one of these four codes when clearly applicable, otherwise leave blank (empty string):
+7.  ff1 — one of these codes when clearly applicable, otherwise leave blank (empty string):
     "HT" — Lodging: hotels, private residences, condos, parking, and other related lodging costs.
     "AF" — Airfare: includes airfare, baggage fees, airport greeters, and other related flight costs.
     "CR" — Car Rental: an actual rental car from a rental company (e.g. Enterprise, Hertz), rented FOR a specific named crew/cast member. Requires that person's real name to be stated somewhere in the PDF -- if the rental is for equipment/cargo hauling with no named individual (e.g. an "art truck rental" reservation), this is NOT CR; leave ff1 blank and use the default description instead. Do NOT use CR for a rideshare or chauffeur car service (e.g. Uber, Blacklane) -- those get no code, leave blank.
     "LO" — Payments to Loan Outs through Accounts Payable: use when loan_out is "Yes" and this is a genuine AP payment for services (not an expense reimbursement).
-    There are other FF1 categories beyond these four, but they are out of scope for now -- always leave ff1 blank rather than guessing at any code other than HT, AF, CR, or LO.
+    "BX" — Georgia Extra Hires: payment to a background extra. The invoice will typically say "Extra" or "Background" somewhere on it. This is mainly a Talent-tab category and will rarely show up on the AP tab, but use it here if it clearly applies.
+    "PD1" — Per Diem Payments Above the Line: a flat daily allowance (aicp_code 25) paid directly to an above-the-line individual -- Director, Executive Producer, Producer, or OCP Talent. Only use this when this PDF (or an accompanying document) explicitly identifies the recipient as one of those roles.
+    "PD2" — Per Diem Payments Below the Line: a flat daily allowance (aicp_code 25) paid to anyone else. This is the DEFAULT per diem code -- Line Producers count as below-the-line (PD2), not PD1, despite the "Producer" title. Use PD2 for every per diem row unless you can confirm from this PDF that the recipient is above the line as defined above.
+    There are other FF1 categories beyond these -- FA1/FA2 (film-only, do not apply to commercial work) and GX are out of scope for now; always leave ff1 blank rather than guessing at any code other than HT, AF, CR, LO, BX, PD1, or PD2.
 8.  ff2 — determine using this exact step-by-step procedure (should never be blank):
     Step 1: Is this a genuine labor payment? (payee_type is "person", or loan_out is "Yes"). Note an airfare or hotel invoice's traveler does NOT count as a labor payment on its own (the airline/hotel is the vendor being paid, not the traveler).
     Step 2: If NO -> ff2 = "GS" (Georgia Spend Non-Payroll). This covers every non-labor row: goods, equipment, facility, and vendor-company invoices -- regardless of the vendor's own registered state (e.g. FedEx or Amazon still get GS even though they're not Georgia companies).
@@ -91,7 +94,7 @@ FIELDS — return exactly these key names:
     19 — Other: the catch-all for an invoice that clearly doesn't fit any other category on this list -- use this instead of leaving aicp_code null whenever you can tell what the invoice is for but it just isn't covered above (e.g. a plain freelance crew labor invoice, since categories 22-24 below are out of scope).
     20 — Off-Duty Government Personnel (Police/Fire): only when the invoice explicitly states the security personnel are off-duty police/fire.
     21 — Security Personnel: the default for a general security services invoice when off-duty government status is not explicitly stated.
-    25 — Per Diem Payments Cast & Crew: a flat daily allowance paid directly to a cast or crew member, not tied to hours/wages.
+    25 — Per Diem Payments Cast & Crew: a flat daily allowance paid directly to a cast or crew member, not tied to hours/wages. Pair this with ff1 = "PD2" by default, or "PD1" only if this PDF confirms the recipient is above the line (see ff1 above).
     Categories 22, 23, and 24 (Georgia Crew Hires, Georgia Cast Hires, Georgia Extras Hires) are out of scope for now -- never assign them.
     Leave aicp_code null only when the invoice is genuinely too unclear/unreadable to tell what it's for at all -- prefer 19 (Other) over null whenever you can identify the invoice's purpose.
 34. qualified — leave blank. Always return empty string.

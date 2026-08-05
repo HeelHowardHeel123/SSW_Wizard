@@ -3042,13 +3042,19 @@ async def match_ap_positions(
         "for as many AP names as plausibly refer to them.\n"
         "- If a person has multiple positions listed and they are all the same, use that position. "
         "If they genuinely differ across dates, use the position tied to the most dates worked.\n"
+        "- The position you return must always be a SINGLE job title, never more than one combined "
+        "together. Sometimes a single call sheet entry already combines two roles for one day with "
+        "a separator (e.g. \"2nd Grip/Grip\", \"Set Dresser, Leadman\") because that person double-"
+        "hatted that day -- if the position you'd otherwise return contains a \"/\", \",\", \"&\", or "
+        "\"and\" joining two roles, pick just the FIRST role listed and drop the rest. Never let a "
+        "\"/\", \",\", or \"&\" appear anywhere in the position you return.\n"
         "- If no reasonable match exists on the call sheet for an AP name, set call_sheet_match to "
         "null and leave position empty -- do not guess.\n\n"
         "For EACH AP name, independently: scan the ENTIRE call sheet crew list from top to bottom "
         "(do not stop early just because a similarly-named person elsewhere already matched a "
         "different AP name -- re-scan the full list every time), pick the single best candidate "
-        "(or none), write one short sentence of reasoning, and give the position in Title Case "
-        "with NO parentheses (e.g. \"Gaffer\", \"Key Grip\", \"2nd Props\").\n\n"
+        "(or none), write one short sentence of reasoning, and give the single position in Title "
+        "Case with NO parentheses and no combined roles (e.g. \"Gaffer\", \"Key Grip\", \"2nd Props\").\n\n"
         "Return ONLY valid JSON, no markdown, no explanation, in exactly this shape:\n"
         "{\"matches\": [{\"ap_name\": \"AP Name As Given\", \"call_sheet_match\": \"Crew Name As "
         "Listed\" or null, \"reasoning\": \"short sentence\", \"position\": \"Title Case Position "
@@ -3082,6 +3088,12 @@ async def match_ap_positions(
             continue
         seen_names.add(ap_name)
         pos = str(m.get("position") or "").strip()
+        # Defensive: the model was told to never combine roles, but if it
+        # still returns e.g. "2nd Grip/Grip" or "Set Dresser, Leadman",
+        # keep only the first-listed role rather than passing the combo
+        # through -- downstream (PD1/PD2 promotion, description overwrite)
+        # expects a single clean title.
+        pos = re.split(r"\s*(?:/|,|&|\band\b)\s*", pos, maxsplit=1, flags=re.IGNORECASE)[0].strip()
         call_sheet_match = m.get("call_sheet_match")
         if pos and call_sheet_match:
             if not (pos.startswith("(") and pos.endswith(")")):
