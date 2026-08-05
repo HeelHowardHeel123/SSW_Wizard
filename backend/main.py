@@ -884,6 +884,76 @@ def normalize_prodco_subvendor_row(raw: dict, prodco_name: str, filename: str) -
     }
 
 
+# ── Petty cash multi-part-file custodian backfill (shared: IL + GA) ──────────
+# A large custodian packet is sometimes split across multiple PDF files by
+# page count (e.g. "Alantra, Wilson - Petty Cash (1 of 3).pdf", "(2 of 3)",
+# "(3 of 3)"). Only the first part's cover sheet may show a real custodian
+# name -- later parts' own cover/continuation pages sometimes have a broken
+# or placeholder Employee Name field, which can make the model either return
+# nothing for that file, or (worse) latch onto unrelated nearby text (e.g. a
+# job code) as a fake name. Since each file is extracted independently with
+# no memory of the others, this can't be fixed at extraction time -- it's
+# fixed here, after the fact, using the filename itself as a reliable
+# grouping signal.
+
+_PETTY_CASH_PACKET_KEY_RE = re.compile(r"^(.*?)\s*-\s*petty\s*cash\b", re.IGNORECASE)
+
+
+def _petty_cash_packet_key(filename: str) -> str:
+    """Extract the '<Name/Dept>' prefix before ' - Petty Cash' in a filename
+    (e.g. 'alantra wilson' from 'Alantra, Wilson - Petty Cash (1 of 3).pdf').
+    Used only to GROUP multi-part files belonging to the same packet -- never
+    to fabricate a last/first split, since filenames aren't reliably in any
+    particular name order."""
+    base = os.path.splitext(filename)[0]
+    m = _PETTY_CASH_PACKET_KEY_RE.match(base)
+    key = m.group(1) if m else base
+    return re.sub(r"[^a-z0-9]+", " ", key.lower()).strip()
+
+
+def _custodian_name_trustworthy(name: str, packet_key: str) -> bool:
+    """A custodian_name is trustworthy if it shares at least one word with
+    the filename's packet key -- catches both blank/placeholder values
+    ("0", "N/A") and wrong guesses (e.g. a job code like "Sxmas") that share
+    no overlap with the real name/department in the filename."""
+    name_words = set(re.findall(r"[a-z0-9]+", (name or "").lower()))
+    key_words = set(packet_key.split())
+    if not name_words or not key_words:
+        return False
+    return bool(name_words & key_words)
+
+
+def _backfill_petty_cash_custodian_names(file_records: list[dict]) -> None:
+    """Mutates file_records' rows in place. Groups files by the name/dept
+    parsed from their filename and, whenever one file in a group has a
+    trustworthy custodian_name, backfills it into sibling files whose own
+    extracted name is blank or clearly wrong. Must run BEFORE envelope-number
+    offset bucketing, since that bucketing is keyed by custodian_name."""
+    groups: dict[str, list[dict]] = {}
+    for rec in file_records:
+        if not rec["file_rows"]:
+            continue
+        key = _petty_cash_packet_key(rec["filename"])
+        groups.setdefault(key, []).append(rec)
+
+    for key, recs in groups.items():
+        if len(recs) < 2:
+            continue
+        canonical = None
+        for rec in recs:
+            name = rec["file_rows"][0].get("custodian_name", "")
+            if _custodian_name_trustworthy(name, key):
+                canonical = name
+                break
+        if not canonical:
+            continue
+        for rec in recs:
+            name = rec["file_rows"][0].get("custodian_name", "")
+            if not _custodian_name_trustworthy(name, key):
+                for r in rec["file_rows"]:
+                    r["custodian_name"] = canonical
+
+
 def normalize_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
     method = normalize_pymt_method(str(raw.get("pymt_method", "")).strip()) or "Cash"
 
@@ -2018,6 +2088,7 @@ async def extract_petty_cash(
 
     rows, issues, file_summaries = [], [], []
     custodian_env_max: dict[str, int] = {}
+    file_records: list[dict] = []
 
     for filename, raw_list, err, too_large in extraction_results:
         errs: list[str] = []
@@ -2059,6 +2130,25 @@ async def extract_petty_cash(
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
+
+        file_records.append({
+            "filename":   filename,
+            "file_rows":  file_rows,
+            "env_totals": env_totals,
+            "errs":       errs,
+        })
+
+    # Multi-part packets (e.g. "(1 of 3)", "(2 of 3)") sometimes have a
+    # broken/placeholder custodian name on later parts' own cover sheet --
+    # backfill from a sibling part that read it correctly BEFORE bucketing
+    # envelope numbers below, since that bucketing is keyed by custodian_name.
+    _backfill_petty_cash_custodian_names(file_records)
+
+    for rec in file_records:
+        filename   = rec["filename"]
+        file_rows  = rec["file_rows"]
+        env_totals = rec["env_totals"]
+        errs       = rec["errs"]
 
         if file_rows:
             custodian = file_rows[0]["custodian_name"]
@@ -2161,6 +2251,7 @@ async def extract_ga_petty_cash(
 
     rows, issues, file_summaries = [], [], []
     custodian_env_max: dict[str, int] = {}
+    file_records: list[dict] = []
 
     for filename, raw_list, err, too_large in extraction_results:
         errs: list[str] = []
@@ -2202,6 +2293,25 @@ async def extract_ga_petty_cash(
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
+
+        file_records.append({
+            "filename":   filename,
+            "file_rows":  file_rows,
+            "env_totals": env_totals,
+            "errs":       errs,
+        })
+
+    # Multi-part packets (e.g. "(1 of 3)", "(2 of 3)") sometimes have a
+    # broken/placeholder custodian name on later parts' own cover sheet --
+    # backfill from a sibling part that read it correctly BEFORE bucketing
+    # envelope numbers below, since that bucketing is keyed by custodian_name.
+    _backfill_petty_cash_custodian_names(file_records)
+
+    for rec in file_records:
+        filename   = rec["filename"]
+        file_rows  = rec["file_rows"]
+        env_totals = rec["env_totals"]
+        errs       = rec["errs"]
 
         if file_rows:
             custodian = file_rows[0]["custodian_name"]
