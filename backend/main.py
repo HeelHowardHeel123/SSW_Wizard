@@ -2503,7 +2503,11 @@ def _call_claude_call_sheet(images_b64: list, system_prompt: str, client) -> lis
     })
     resp = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=4096,
+        # 4096 was not enough for a real multi-day call sheet with 60+ crew
+        # per day -- confirmed via a standalone repro script that the YUMB
+        # 008 call sheet (3 days, 190 total crew) needs ~8900 output tokens
+        # to finish without truncating. 16000 leaves comfortable headroom.
+        max_tokens=16000,
         system=system_prompt,
         messages=[{"role": "user", "content": content}],
     )
