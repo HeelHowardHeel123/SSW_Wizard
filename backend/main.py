@@ -3012,62 +3012,90 @@ async def match_ap_positions(
         crew_lines.append(f"  - {c.name} — positions: {pos} — dates worked: {dates}")
     crew_list = "\n".join(crew_lines)
 
+    # NOTE: this prompt deliberately forces the model to write out a per-name
+    # verdict (candidate + one-line reasoning) for EVERY AP name before we
+    # derive the mapping, instead of asking it to jump straight to a compact
+    # {ap_name: position} JSON object. Asking for the compact form directly
+    # was empirically shown (via a standalone debug script hitting this same
+    # prompt/model) to silently skip correct fuzzy/exact matches once the
+    # list got past the first several names -- the model has no scratch
+    # space to actually check "did I already consider this crew member for
+    # a different AP name" and appears to guess/pattern-complete instead.
+    # Forcing an explicit reasoning field per name, mirroring how the model
+    # behaves when asked to reason about just a few names in isolation,
+    # fixed every one of the 3 real-match failures we reproduced.
     user_prompt = (
         "You match crew member names from a production AP (accounts payable) spreadsheet "
         "against a call sheet's crew roster, and return each matched person's position.\n\n"
-        f"AP NAMES — find a position for each of these {len(payload.ap_names)} names. Evaluate every "
-        f"single one independently: do not skip any, and do not assume a crew member can only be "
-        f"matched to one AP name.\n{ap_list}\n\n"
+        f"AP NAMES — you must produce exactly one entry in \"matches\" for EVERY one of these "
+        f"{len(payload.ap_names)} names, in this same order, with no omissions.\n{ap_list}\n\n"
         f"CALL SHEET CREW:\n{crew_list}\n\n"
         "MATCHING RULES:\n"
         "- Use fuzzy matching: nicknames (\"Joe\"/\"Joseph\", \"Dave\"/\"David\", \"Sam\"/\"Samuel\"), "
         "spacing/capitalization differences (\"Deschutter\" matches \"De Schutter\"), middle names, "
         "and minor spelling differences all count as the same person.\n"
         "- IMPORTANT: more than one AP name can legitimately match the SAME crew member -- this "
-        "happens whenever different invoices spelled the same real person's name differently. For "
-        "example, if the AP names include both \"Sam Wilson\" and \"Samuel Wilson\", and the call "
-        "sheet has one crew entry \"Sam Wilson\", BOTH AP names should map to that same person's "
-        "position. Matching one does not use it up or make it unavailable for the other -- including "
-        "when one of the two is an exact, verbatim match to the crew entry.\n"
+        "happens whenever different invoices spelled the same real person's name differently. "
+        "Matching a crew member to one AP name does NOT use them up or make them unavailable for "
+        "a different AP name -- even when one of the two is an exact, verbatim match to the crew "
+        "entry and the other is a fuzzy variant. A single crew member can be the correct answer "
+        "for as many AP names as plausibly refer to them.\n"
         "- If a person has multiple positions listed and they are all the same, use that position. "
-        "If they genuinely differ across dates, use the position tied to the most dates worked, but "
-        "still add a note to \"issues\" flagging that person for manual review.\n"
-        "- If no reasonable match exists on the call sheet for an AP name, omit that name from the "
-        "mapping entirely and add a note to \"issues\" instead of guessing.\n\n"
-        "Before finalizing your answer, go through the AP names ONE AT A TIME and check each one "
-        "against the full crew list independently -- do not stop searching once you've found a match "
-        "for a similarly-named person elsewhere in the list.\n\n"
-        "FORMAT:\n"
-        "- Return each matched position in Title Case, wrapped in parentheses, e.g. \"(Gaffer)\", "
-        "\"(Key Grip)\", \"(2nd Props)\".\n"
-        "- Return ONLY valid JSON, no markdown, no explanation:\n"
-        "{\"mapping\": {\"AP Name As Given\": \"(Position)\"}, \"issues\": [\"free text notes\"]}"
+        "If they genuinely differ across dates, use the position tied to the most dates worked.\n"
+        "- If no reasonable match exists on the call sheet for an AP name, set call_sheet_match to "
+        "null and leave position empty -- do not guess.\n\n"
+        "For EACH AP name, independently: scan the ENTIRE call sheet crew list from top to bottom "
+        "(do not stop early just because a similarly-named person elsewhere already matched a "
+        "different AP name -- re-scan the full list every time), pick the single best candidate "
+        "(or none), write one short sentence of reasoning, and give the position in Title Case "
+        "with NO parentheses (e.g. \"Gaffer\", \"Key Grip\", \"2nd Props\").\n\n"
+        "Return ONLY valid JSON, no markdown, no explanation, in exactly this shape:\n"
+        "{\"matches\": [{\"ap_name\": \"AP Name As Given\", \"call_sheet_match\": \"Crew Name As "
+        "Listed\" or null, \"reasoning\": \"short sentence\", \"position\": \"Title Case Position "
+        "or empty string\"}]}"
     )
 
     loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(
             None,
-            functools.partial(_call_gpt_text_json, user_prompt, client),
+            functools.partial(_call_gpt_text_json, user_prompt, client, max_tokens=6000),
         )
     except Exception as e:
         return {"mapping": {}, "issues": [f"Position matching failed: {e}"]}
 
-    mapping = result.get("mapping") if isinstance(result, dict) else None
-    if not isinstance(mapping, dict):
-        mapping = {}
-    issues = result.get("issues") if isinstance(result, dict) else None
-    if not isinstance(issues, list):
-        issues = []
+    matches = result.get("matches") if isinstance(result, dict) else None
+    if not isinstance(matches, list):
+        matches = []
 
-    # Defensive normalization: ensure every position is paren-wrapped even if
-    # the model forgot, so the frontend never has to guess.
+    # Derive the mapping/issues from the per-name verdicts. A name only
+    # lands in the mapping if the model gave it both a call_sheet_match and
+    # a non-empty position; everything else becomes an issue note.
     fixed_mapping = {}
-    for name, pos in mapping.items():
-        pos = str(pos or "").strip()
-        if pos and not (pos.startswith("(") and pos.endswith(")")):
-            pos = f"({pos})"
-        fixed_mapping[name] = pos
+    issues = []
+    seen_names = set()
+    for m in matches:
+        if not isinstance(m, dict):
+            continue
+        ap_name = str(m.get("ap_name") or "").strip()
+        if not ap_name:
+            continue
+        seen_names.add(ap_name)
+        pos = str(m.get("position") or "").strip()
+        call_sheet_match = m.get("call_sheet_match")
+        if pos and call_sheet_match:
+            if not (pos.startswith("(") and pos.endswith(")")):
+                pos = f"({pos})"
+            fixed_mapping[ap_name] = pos
+        else:
+            issues.append(f"{ap_name}: No match found on call sheet.")
+
+    # Belt-and-suspenders: if the model dropped an AP name entirely instead
+    # of giving it a null-match verdict, still surface it instead of letting
+    # it silently vanish.
+    for n in payload.ap_names:
+        if n not in seen_names:
+            issues.append(f"{n}: No match found on call sheet.")
 
     return {"mapping": fixed_mapping, "issues": issues}
 
