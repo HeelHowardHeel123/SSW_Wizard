@@ -40,6 +40,16 @@ Endpoints
                                      dual proof-of-payment). Never auto-disqualifies a line --
                                      flags possible-DNQ candidates via notes only.
                                      returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-ga-prodcc          → multipart: files[]=<pdf>, prodco_name, work_state
+                                     production credit card reimbursements -- crew member pays,
+                                     then gets repaid (vs. petty cash: production pays up front).
+                                     Same extraction engine as GA petty cash; row shape adds
+                                     payment_method (detected per receipt, never hardcoded) and
+                                     leaves env_number blank instead of defaulting to 1, since
+                                     most ProdCC packets have no envelope structure. The wizard
+                                     appends these rows onto the same "Petty Cash" tab, below the
+                                     petty cash rows.
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
   POST /match-ap-positions         → JSON: {ap_names: [...], crew: [{name,positions[],dates[]}]}
                                      (crew comes from /extract-call-sheet). GPT matches each
                                      ap_name against the crew list and returns its position.
@@ -104,6 +114,7 @@ _CALL_SHEET_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(_
 _PETTY_CASH_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "petty_cash_extraction_prompt.txt")
 _GA_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_ap_extraction_prompt.txt")
 _GA_PETTY_CASH_PROMPT_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_petty_cash_extraction_prompt.txt")
+_GA_PRODCC_PROMPT_PATH          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_prodcc_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -255,6 +266,18 @@ def _load_petty_cash_prompt(prodco_name: str, work_state: str = "IL") -> str:
 
 def _load_ga_petty_cash_prompt(prodco_name: str, work_state: str = "GA") -> str:
     with open(_GA_PETTY_CASH_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "GA"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_ga_prodcc_prompt(prodco_name: str, work_state: str = "GA") -> str:
+    with open(_GA_PRODCC_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
     name_label  = prodco_name.strip() or "the production company"
     state_label = work_state.strip().upper() or "GA"
@@ -1099,6 +1122,22 @@ def _petty_cash_packet_key(filename: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", key.lower()).strip()
 
 
+_PRODCC_PACKET_KEY_RE = re.compile(r"^(.*?)\s*-\s*cc\s*reimb\b", re.IGNORECASE)
+
+def _prodcc_packet_key(filename: str) -> str:
+    """ProdCC equivalent of _petty_cash_packet_key -- groups multi-part files
+    by everything before ' - CC Reimb' (e.g. 'PO 2528-29 - Elliot Shaffner'
+    from 'PO 2528-29 - Elliot Shaffner - CC Reimb.pdf'). A leading PO number
+    ends up folded into the key too, which is harmless: it's still shared by
+    every part of the same person's packet, and the word-overlap check in
+    _custodian_name_trustworthy only needs the name words to match, not the
+    PO number."""
+    base = os.path.splitext(filename)[0]
+    m = _PRODCC_PACKET_KEY_RE.match(base)
+    key = m.group(1) if m else base
+    return re.sub(r"[^a-z0-9]+", " ", key.lower()).strip()
+
+
 def _custodian_name_trustworthy(name: str, packet_key: str) -> bool:
     """A custodian_name is trustworthy if it shares at least one word with
     the filename's packet key -- catches both blank/placeholder values
@@ -1128,7 +1167,10 @@ def _split_custodian_name(name: str) -> tuple[str, str]:
     return name, ""
 
 
-def _backfill_petty_cash_custodian_names(file_records: list[dict]) -> None:
+def _backfill_petty_cash_custodian_names(
+    file_records: list[dict],
+    packet_key_fn=_petty_cash_packet_key,
+) -> None:
     """Mutates file_records' rows in place. Groups files by the name/dept
     parsed from their filename and, whenever one file in a group has a
     trustworthy custodian_name, backfills it into sibling files whose own
@@ -1153,7 +1195,7 @@ def _backfill_petty_cash_custodian_names(file_records: list[dict]) -> None:
     for rec in file_records:
         if not rec["file_rows"]:
             continue
-        key = _petty_cash_packet_key(rec["filename"])
+        key = packet_key_fn(rec["filename"])
         groups.setdefault(key, []).append(rec)
 
     for key, recs in groups.items():
@@ -2629,6 +2671,143 @@ async def extract_ga_petty_cash(
     return {"rows": rows, "issues": issues, "files": file_summaries}
 
 
+@app.post("/extract-ga-prodcc")
+async def extract_ga_prodcc(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("GA"),
+    x_app_secret: str              = Header(default=""),
+):
+    """ProdCC (production credit card reimbursement) extractor. Reuses the
+    same GPT-4o-first/Claude-fallback pipeline as GA petty cash -- the packet
+    structures are close enough (cover sheet + receipts) that the extraction
+    mechanics don't need to differ, only the prompt and row shape do. Does
+    NOT do petty cash's envelope-total reconciliation/multi-envelope offset
+    bucketing: ProdCC packets essentially never carry an envelope number at
+    all (see normalize_ga_prodcc_row), so that logic wouldn't have anything
+    to key off of."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_ga_prodcc_prompt(prodco_name, work_state)
+    user_text     = (
+        "Extract all ProdCC reimbursement line items from this crew member's packet. "
+        "Look for a PO cover sheet and/or a summary log first -- if either is present, "
+        "use it as the canonical ordered list of line items; if neither is present, "
+        "extract one row per receipt found in the PDF."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        file_mb = len(data) / (1024 * 1024)
+        if file_mb > 40:
+            msg = (
+                f"File too large to process ({file_mb:.0f} MB) -- "
+                "compress to under 40 MB and resubmit"
+            )
+            return filename, [], msg, True
+
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                # Same GPT-4o intermittent-refusal behavior seen on petty
+                # cash -- retry with Claude before giving up on the file.
+                if not raw_list:
+                    print(f"[extract_ga_prodcc] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                    try:
+                        anthropic_client = _anthropic_client()
+                        raw_list = await loop.run_in_executor(
+                            None,
+                            functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
+                        )
+                        _tag_claude_fallback_rows(raw_list)
+                    except Exception as e:
+                        print(f"[extract_ga_prodcc] {filename}: Claude fallback also failed: {e}", flush=True)
+                return filename, raw_list, None, False
+            except Exception as e:
+                return filename, [], str(e), False
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+    file_records: list[dict] = []
+
+    for filename, raw_list, err, too_large in extraction_results:
+        errs: list[str] = []
+
+        if too_large:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({
+                "filename": filename,
+                "company":  "unknown",
+                "rows":     0,
+                "issues":   errs,
+            })
+            continue
+
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no ProdCC data extracted - review manually")
+            issues.append(f"{filename}: no ProdCC data extracted")
+            try:
+                file_rows.append(normalize_ga_prodcc_row(
+                    _petty_cash_unreadable_file_row(filename), work_state, filename,
+                ))
+            except Exception as e:
+                issues.append(f"{filename}: placeholder row error: {e}")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_ga_prodcc_row(raw, work_state, filename))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        file_records.append({
+            "filename":  filename,
+            "file_rows": file_rows,
+            "errs":      errs,
+        })
+
+    # Same multi-part-packet custodian name backfill as petty cash, keyed
+    # off the ProdCC filename convention ('... - CC Reimb.pdf') instead.
+    _backfill_petty_cash_custodian_names(file_records, packet_key_fn=_prodcc_packet_key)
+
+    for rec in file_records:
+        filename  = rec["filename"]
+        file_rows = rec["file_rows"]
+        errs      = rec["errs"]
+
+        rows.extend(file_rows)
+        custodian_label = file_rows[0]["custodian_name"] if file_rows else "unknown"
+        file_summaries.append({
+            "filename": filename,
+            "company":  custodian_label,
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
 # ── Agency Hours extractor ───────────────────────────────────────────────────
 
 @app.post("/extract-agency-hours")
@@ -3514,6 +3693,118 @@ def normalize_ga_petty_cash_row(raw: dict, work_state: str, filename: str) -> di
         "city":                        clean_name(raw.get("city", "")),
         "state":                       clean_state(raw.get("state", "")),
         "zip":                         clean_zip(raw.get("zip", "")),
+        "proof_of_payment_vendor":     proof_vendor,
+        "proof_of_pc_remittance_crew": proof_remit,
+        "received_invoice":            received,
+        "sales_tax_on_invoice":        yn(raw.get("sales_tax_on_invoice")),
+        "active_sales_tax_account":    yn(raw.get("active_sales_tax_account")),
+        "withholding":                 str(raw.get("withholding", "")).strip(),
+        "w9":                          yn(raw.get("w9")),
+        "business_license":            yn(raw.get("business_license")),
+        "aicp_code":                   aicp,
+        # Always blank/zero at extraction time -- the automation never
+        # disqualifies a line itself, it only flags candidates via notes.
+        "qualified":                   "",
+        "non_qualified":               0,
+        "notes":                       str(raw.get("notes", "")).strip(),
+        "website_address":             str(raw.get("website_address", "")).strip(),
+        "sourceFile":                  filename,
+    }
+
+
+def normalize_ga_prodcc_row(raw: dict, work_state: str, filename: str) -> dict:
+    """ProdCC row normalizer -- same shape as normalize_ga_petty_cash_row
+    plus one new field (payment_method), with two differences reflecting how
+    little ProdCC packets resemble petty cash cover sheets structurally:
+
+    - env_number is left as None (blank) when the model didn't find one,
+      instead of defaulting to 1 -- most ProdCC packets have no envelope
+      concept at all, unlike petty cash where every packet has one.
+    - payment_method is detected per receipt by the model rather than
+      hardcoded, since ProdCC receipts are usually but not always card."""
+    def yn(val):
+        s = str(val or "").strip().lower()
+        return "Yes" if s in ("yes", "true", "1") else "No"
+
+    ff1 = str(raw.get("ff1", "")).strip().upper()
+    if ff1 not in _GA_AP_FF1_VALID:
+        ff1 = ""
+
+    ff2 = str(raw.get("ff2", "")).strip().upper()
+    if ff2 not in _GA_AP_FF2_VALID:
+        ff2 = "GS"
+
+    aicp = raw.get("aicp_code")
+    try:
+        aicp = int(aicp)
+        if not 1 <= aicp <= 25:
+            aicp = None
+    except (TypeError, ValueError):
+        aicp = None
+
+    custodian_name = clean_name(raw.get("custodian_name", ""))
+    last_name, first_name = _split_custodian_name(custodian_name)
+
+    nights = raw.get("nights")
+    try:
+        nights = int(nights) if nights is not None else None
+    except (TypeError, ValueError):
+        nights = None
+
+    env_num = raw.get("env_number")
+    try:
+        env_num = None if env_num is None or str(env_num).strip() == "" else int(env_num)
+        if env_num is not None and env_num < 1:
+            env_num = None
+    except (TypeError, ValueError):
+        env_num = None
+
+    line_num = raw.get("line_number", 0)
+    try:
+        line_num = max(0, int(line_num))
+    except (TypeError, ValueError):
+        line_num = 0
+
+    received = str(raw.get("received_invoice", "NO")).strip().upper()
+    if received not in ("YES", "NO"):
+        received = "NO"
+
+    proof_vendor = str(raw.get("proof_of_payment_vendor", "NO")).strip().upper()
+    if proof_vendor not in ("YES", "NO"):
+        proof_vendor = "NO"
+
+    proof_remit = str(raw.get("proof_of_pc_remittance_crew", "MISSING")).strip().upper()
+    if proof_remit not in ("YES", "MISSING"):
+        proof_remit = "MISSING"
+
+    payment_method = str(raw.get("payment_method", "")).strip().upper()
+    if payment_method not in ("CREDIT CARD", "CASH"):
+        payment_method = ""
+
+    return {
+        "custodian_name":              custodian_name,
+        "env_number":                  env_num,
+        "line_number":                 line_num,
+        "vendor_name":                 clean_name(raw.get("vendor_name", "")),
+        "invoice_number":              str(raw.get("invoice_number", "")).strip() or "Receipt",
+        "invoice_date":                normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "amount":                      normalize_amount(raw.get("amount", 0)),
+        "distribution_description":    str(raw.get("distribution_description", "")).strip(),
+        "ff1":                         ff1,
+        "ff2":                         ff2,
+        "je_number":                   str(raw.get("je_number", "")).strip(),
+        "check_number":                str(raw.get("check_number", "")).strip(),
+        "po_number":                   str(raw.get("po_number", "")).strip(),
+        "last_name":                   last_name,
+        "first_name":                  first_name,
+        "home_state":                  clean_state(raw.get("home_state", "")),
+        "episode":                     str(raw.get("episode", "")).strip(),
+        "nights":                      nights,
+        "address":                     clean_address(raw.get("address", "")),
+        "city":                        clean_name(raw.get("city", "")),
+        "state":                       clean_state(raw.get("state", "")),
+        "zip":                         clean_zip(raw.get("zip", "")),
+        "payment_method":              payment_method,
         "proof_of_payment_vendor":     proof_vendor,
         "proof_of_pc_remittance_crew": proof_remit,
         "received_invoice":            received,
