@@ -1140,7 +1140,15 @@ def _backfill_petty_cash_custodian_names(file_records: list[dict]) -> None:
     fields). Those were split out of custodian_name back when the row was
     normalized, which is BEFORE this backfill runs, so they'd otherwise stay
     frozen at whatever they were computed from originally (usually blank)
-    even after custodian_name itself gets corrected here."""
+    even after custodian_name itself gets corrected here.
+
+    Finally, as a last resort, any row whose custodian_name is STILL blank
+    after the above (no trustworthy sibling found, or no siblings at all)
+    gets the source filename instead -- so the row is always traceable to
+    where it came from rather than silently blank with no way to tell which
+    file it belongs to. Deliberately does not attempt to split a filename
+    into last_name/first_name (that would produce garbage); those stay
+    blank, only custodian_name gets the fallback."""
     groups: dict[str, list[dict]] = {}
     for rec in file_records:
         if not rec["file_rows"]:
@@ -1169,6 +1177,12 @@ def _backfill_petty_cash_custodian_names(file_records: list[dict]) -> None:
                         r["last_name"] = canonical_last
                     if "first_name" in r:
                         r["first_name"] = canonical_first
+
+    for rec in file_records:
+        label = os.path.splitext(rec["filename"])[0]
+        for r in rec["file_rows"]:
+            if not str(r.get("custodian_name", "")).strip():
+                r["custodian_name"] = label
 
 
 def normalize_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
