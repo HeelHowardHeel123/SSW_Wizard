@@ -472,7 +472,7 @@ def _extract_petty_cash_from_file(filename, data, system_prompt, client, user_te
 # fallback retries any file that comes back empty using Claude instead,
 # before giving up on it entirely.
 
-def _call_claude_petty_cash(images_b64, system_prompt, client, user_text, max_tokens=32000, max_retries=5):
+def _call_claude_petty_cash(images_b64, system_prompt, client, user_text, max_tokens=20000, max_retries=5):
     """Streaming Claude vision call for the petty cash fallback path.
     Streaming is required (not optional) once max_tokens is set this high --
     the Anthropic SDK refuses a non-streaming call outright above its own
@@ -522,19 +522,23 @@ def _call_claude_petty_cash(images_b64, system_prompt, client, user_text, max_to
 def _extract_petty_cash_from_file_claude(filename, data, system_prompt, client, user_text=""):
     """Claude fallback mirror of _extract_petty_cash_from_file -- same
     chunking (2 summary pages prepended to 30-page receipt chunks), same
-    dedup-by-(env_number, line_number) merge, but a much larger streaming
-    max_tokens budget (32000) since that's what it took to get a complete
-    envelope out of Claude in testing. If Claude itself runs out of tokens
-    partway through a chunk, the rows it did produce before running out are
-    kept (via _repair_truncated_json) rather than thrown away, and the last
-    of those rows gets a note flagging that later lines on that chunk may be
-    missing -- so a reviewer knows to check the source file instead of
-    assuming a partial result is the complete one."""
+    dedup-by-(env_number, line_number) merge, but a larger streaming
+    max_tokens budget (20000) than GPT's 16384. Kept below 32000 on purpose:
+    a full-size call at that budget can take long enough streaming out that
+    it risks the whole request timing out client-side before Claude even
+    finishes -- which throws away everything, vs. a lower budget that
+    reliably finishes in time even if it occasionally truncates a large
+    envelope. If Claude itself runs out of tokens partway through a chunk,
+    the rows it did produce before running out are kept (via
+    _repair_truncated_json) rather than thrown away, and the last of those
+    rows gets a note flagging that later lines on that chunk may be missing
+    -- so a reviewer knows to check the source file instead of assuming a
+    partial result is the complete one."""
     images = _file_to_images_b64(filename, data, dpi_scale=1.5)
     if not images:
         return []
 
-    MAX_TOKENS    = 32000
+    MAX_TOKENS    = 20000
     SUMMARY_PAGES = 2
     CHUNK_SIZE    = 30
 
