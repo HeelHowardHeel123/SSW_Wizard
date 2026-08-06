@@ -529,34 +529,57 @@ def _extract_petty_cash_from_file_claude(filename, data, system_prompt, client, 
     finishes -- which throws away everything, vs. a lower budget that
     reliably finishes in time even if it occasionally truncates a large
     envelope. If Claude itself runs out of tokens partway through a chunk,
-    the rows it did produce before running out are kept (via
-    _repair_truncated_json) rather than thrown away, and the last of those
-    rows gets a note flagging that later lines on that chunk may be missing
-    -- so a reviewer knows to check the source file instead of assuming a
+    it's asked to continue from exactly where it left off (up to
+    MAX_CONTINUATIONS times) rather than accepting a partial result
+    immediately -- only if it's STILL truncated after those retries does the
+    last recovered row get a note flagging that later lines may be missing,
+    so a reviewer knows to check the source file instead of assuming a
     partial result is the complete one."""
     images = _file_to_images_b64(filename, data, dpi_scale=1.5)
     if not images:
         return []
 
-    MAX_TOKENS    = 20000
-    SUMMARY_PAGES = 2
-    CHUNK_SIZE    = 30
+    MAX_TOKENS        = 20000
+    SUMMARY_PAGES     = 2
+    CHUNK_SIZE        = 30
+    MAX_CONTINUATIONS = 3
 
     summary_imgs = images[:SUMMARY_PAGES]
     receipt_imgs = images[SUMMARY_PAGES:]
 
     def run_chunk(chunk_imgs, chunk_text):
-        parsed, stop_reason = _call_claude_petty_cash(
-            chunk_imgs, system_prompt, client, chunk_text, max_tokens=MAX_TOKENS,
-        )
-        if not isinstance(parsed, list):
-            parsed = []
-        if stop_reason == "max_tokens" and parsed:
-            note = ("Claude fallback ran out of tokens -- later line items on this "
-                    "envelope may be missing, verify against the source PDF.")
-            existing = parsed[-1].get("notes", "")
-            parsed[-1]["notes"] = f"{existing}; {note}" if existing else note
-        return parsed
+        all_rows: list[dict] = []
+        current_text = chunk_text
+        for attempt in range(MAX_CONTINUATIONS + 1):
+            parsed, stop_reason = _call_claude_petty_cash(
+                chunk_imgs, system_prompt, client, current_text, max_tokens=MAX_TOKENS,
+            )
+            if not isinstance(parsed, list):
+                parsed = []
+            all_rows.extend(parsed)
+            if stop_reason != "max_tokens" or not parsed:
+                return all_rows
+            # Ran out of tokens but produced rows -- send the same images
+            # again, telling Claude exactly what it already returned so it
+            # continues instead of restarting or repeating itself.
+            covered = sorted({
+                r.get("line_number", 0) for r in all_rows if isinstance(r, dict)
+            })
+            current_text = (
+                chunk_text
+                + f" You already returned {len(all_rows)} line item(s) in a previous response, "
+                f"covering line numbers {covered}. Continue from the next line number onward "
+                f"for the REMAINING items in this batch of pages -- do not repeat any line "
+                f"number you already returned."
+            )
+        # Exhausted all continuation attempts and the last one was still
+        # truncated -- keep what we have, but flag it.
+        if all_rows:
+            note = ("Claude fallback ran out of tokens after retrying -- later line items on "
+                    "this envelope may still be missing, verify against the source PDF.")
+            existing = all_rows[-1].get("notes", "")
+            all_rows[-1]["notes"] = f"{existing}; {note}" if existing else note
+        return all_rows
 
     if len(receipt_imgs) <= CHUNK_SIZE:
         return run_chunk(summary_imgs + receipt_imgs, user_text)
@@ -595,6 +618,37 @@ def _extract_petty_cash_from_file_claude(filename, data, system_prompt, client, 
         results_by_key.values(),
         key=lambda r: (r.get("env_number", 1), r.get("line_number", 0)),
     )
+
+
+def _tag_claude_fallback_rows(raw_list: list) -> None:
+    """Mutates raw_list in place: flags every row that came from the Claude
+    fallback so a reviewer can tell OpenAI declined this file and Claude
+    filled in instead. Worth flagging because OpenAI is the default/cheaper
+    choice everywhere except Residency -- a workbook full of these notes is
+    itself a signal something is going wrong upstream and worth a look."""
+    for row in raw_list:
+        if not isinstance(row, dict):
+            continue
+        existing = str(row.get("notes", "")).strip()
+        flag = "Extracted by Claude (GPT declined)"
+        row["notes"] = f"{existing}; {flag}" if existing else flag
+
+
+def _petty_cash_unreadable_file_row(filename: str) -> dict:
+    """Synthetic raw row used when a petty cash file comes back completely
+    empty from both GPT-4o and the Claude fallback. Ensures the file still
+    shows up in the output workbook -- as one loud, obviously-wrong row --
+    instead of silently vanishing with 0 rows, so a reviewer is forced to
+    notice it and go check the source PDF rather than assuming the file had
+    nothing in it."""
+    return {
+        "custodian_name":   "",
+        "vendor_name":      "UNREADABLE FILE - REVIEW MANUALLY",
+        "notes":            (f"Could not extract any data from {filename} -- both OpenAI and "
+                              "Claude failed on this file. Review the source PDF manually."),
+        "received_invoice": "NO",
+        "amount":           0,
+    }
 
 
 # ── Claude vision call ───────────────────────────────────────────────────────
@@ -2226,6 +2280,7 @@ async def extract_petty_cash(
                             None,
                             functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
                         )
+                        _tag_claude_fallback_rows(raw_list)
                     except Exception as e:
                         print(f"[extract_petty_cash] {filename}: Claude fallback also failed: {e}", flush=True)
                 return filename, raw_list, None, False
@@ -2261,6 +2316,12 @@ async def extract_petty_cash(
         if not raw_list:
             errs.append("no petty cash data extracted - review manually")
             issues.append(f"{filename}: no petty cash data extracted")
+            try:
+                file_rows.append(normalize_petty_cash_row(
+                    _petty_cash_unreadable_file_row(filename), work_state, filename,
+                ))
+            except Exception as e:
+                issues.append(f"{filename}: placeholder row error: {e}")
         else:
             # Collect per-envelope totals from raw rows before normalization
             for raw in raw_list:
@@ -2403,6 +2464,7 @@ async def extract_ga_petty_cash(
                             None,
                             functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
                         )
+                        _tag_claude_fallback_rows(raw_list)
                     except Exception as e:
                         print(f"[extract_ga_petty_cash] {filename}: Claude fallback also failed: {e}", flush=True)
                 return filename, raw_list, None, False
@@ -2438,6 +2500,12 @@ async def extract_ga_petty_cash(
         if not raw_list:
             errs.append("no petty cash data extracted - review manually")
             issues.append(f"{filename}: no petty cash data extracted")
+            try:
+                file_rows.append(normalize_ga_petty_cash_row(
+                    _petty_cash_unreadable_file_row(filename), work_state, filename,
+                ))
+            except Exception as e:
+                issues.append(f"{filename}: placeholder row error: {e}")
         else:
             # Collect per-envelope totals from raw rows before normalization
             for raw in raw_list:
