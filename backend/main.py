@@ -463,6 +463,136 @@ def _extract_petty_cash_from_file(filename, data, system_prompt, client, user_te
     )
 
 
+# ── Petty cash: Claude fallback ───────────────────────────────────────────────
+# GPT-4o has been observed to flatly decline a petty cash file for reasons
+# that don't reproduce consistently and don't correspond to any real content
+# problem (confirmed via a standalone debug script hitting the same prompt
+# and images directly) -- the file extracts cleanly once a different model
+# processes it. Rather than chase GPT-4o's exact refusal condition, this
+# fallback retries any file that comes back empty using Claude instead,
+# before giving up on it entirely.
+
+def _call_claude_petty_cash(images_b64, system_prompt, client, user_text, max_tokens=32000, max_retries=5):
+    """Streaming Claude vision call for the petty cash fallback path.
+    Streaming is required (not optional) once max_tokens is set this high --
+    the Anthropic SDK refuses a non-streaming call outright above its own
+    long-request threshold. Returns (parsed_rows_or_None, stop_reason)."""
+    import anthropic
+
+    content = []
+    for img in images_b64:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": img},
+        })
+    content.append({"type": "text", "text": user_text})
+
+    for attempt in range(max_retries + 1):
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-5",
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": content}],
+            ) as stream:
+                for _ in stream.text_stream:
+                    pass
+                resp = stream.get_final_message()
+            break
+        except anthropic.RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
+    text_block = next((b for b in resp.content if b.type == "text"), None)
+    raw = text_block.text.strip() if text_block else ""
+
+    try:
+        return json.loads(raw), resp.stop_reason
+    except Exception:
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group()), resp.stop_reason
+            except Exception:
+                pass
+        return _repair_truncated_json(raw), resp.stop_reason
+
+
+def _extract_petty_cash_from_file_claude(filename, data, system_prompt, client, user_text=""):
+    """Claude fallback mirror of _extract_petty_cash_from_file -- same
+    chunking (2 summary pages prepended to 30-page receipt chunks), same
+    dedup-by-(env_number, line_number) merge, but a much larger streaming
+    max_tokens budget (32000) since that's what it took to get a complete
+    envelope out of Claude in testing. If Claude itself runs out of tokens
+    partway through a chunk, the rows it did produce before running out are
+    kept (via _repair_truncated_json) rather than thrown away, and the last
+    of those rows gets a note flagging that later lines on that chunk may be
+    missing -- so a reviewer knows to check the source file instead of
+    assuming a partial result is the complete one."""
+    images = _file_to_images_b64(filename, data, dpi_scale=1.5)
+    if not images:
+        return []
+
+    MAX_TOKENS    = 32000
+    SUMMARY_PAGES = 2
+    CHUNK_SIZE    = 30
+
+    summary_imgs = images[:SUMMARY_PAGES]
+    receipt_imgs = images[SUMMARY_PAGES:]
+
+    def run_chunk(chunk_imgs, chunk_text):
+        parsed, stop_reason = _call_claude_petty_cash(
+            chunk_imgs, system_prompt, client, chunk_text, max_tokens=MAX_TOKENS,
+        )
+        if not isinstance(parsed, list):
+            parsed = []
+        if stop_reason == "max_tokens" and parsed:
+            note = ("Claude fallback ran out of tokens -- later line items on this "
+                    "envelope may be missing, verify against the source PDF.")
+            existing = parsed[-1].get("notes", "")
+            parsed[-1]["notes"] = f"{existing}; {note}" if existing else note
+        return parsed
+
+    if len(receipt_imgs) <= CHUNK_SIZE:
+        return run_chunk(summary_imgs + receipt_imgs, user_text)
+
+    results_by_key: dict[tuple, dict] = {}
+    for i in range(0, len(receipt_imgs), CHUNK_SIZE):
+        chunk = summary_imgs + receipt_imgs[i : i + CHUNK_SIZE]
+        if i == 0:
+            current_user_text = (
+                user_text
+                + " NOTE: You are seeing only the first batch of receipt pages. "
+                "Return ALL lines from the summary page -- "
+                "lines whose receipts appear in these pages (received_invoice=YES) AND "
+                "lines whose receipts are NOT in these pages (received_invoice=NO, "
+                "use vendor name and amount from the summary). "
+                "Do not skip any summary line."
+            )
+        else:
+            current_user_text = (
+                user_text
+                + " NOTE: You are seeing a later batch of receipt pages. "
+                "Return rows ONLY for receipts physically visible on these pages. "
+                "Do not re-return rows already covered by earlier batches."
+            )
+        for row in run_chunk(chunk, current_user_text):
+            key = (row.get("env_number", 1), row.get("line_number", 0))
+            ri  = str(row.get("received_invoice", "NO")).strip().upper()
+            existing = results_by_key.get(key)
+            if existing is None or (
+                ri == "YES"
+                and str(existing.get("received_invoice", "NO")).strip().upper() != "YES"
+            ):
+                results_by_key[key] = row
+
+    return sorted(
+        results_by_key.values(),
+        key=lambda r: (r.get("env_number", 1), r.get("line_number", 0)),
+    )
+
+
 # ── Claude vision call ───────────────────────────────────────────────────────
 
 def _call_claude(images_b64, system_prompt, client, user_text="Extract data from these document pages.", max_retries=5):
@@ -2080,6 +2210,20 @@ async def extract_petty_cash(
                     None,
                     functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
                 )
+                # GPT-4o has been observed to come back empty on a file for
+                # reasons that don't correspond to any real content problem
+                # (confirmed via direct testing) -- retry with Claude before
+                # giving up on the file entirely.
+                if not raw_list:
+                    print(f"[extract_petty_cash] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                    try:
+                        anthropic_client = _anthropic_client()
+                        raw_list = await loop.run_in_executor(
+                            None,
+                            functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
+                        )
+                    except Exception as e:
+                        print(f"[extract_petty_cash] {filename}: Claude fallback also failed: {e}", flush=True)
                 return filename, raw_list, None, False
             except Exception as e:
                 return filename, [], str(e), False
@@ -2243,6 +2387,20 @@ async def extract_ga_petty_cash(
                     None,
                     functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
                 )
+                # GPT-4o has been observed to come back empty on a file for
+                # reasons that don't correspond to any real content problem
+                # (confirmed via direct testing) -- retry with Claude before
+                # giving up on the file entirely.
+                if not raw_list:
+                    print(f"[extract_ga_petty_cash] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                    try:
+                        anthropic_client = _anthropic_client()
+                        raw_list = await loop.run_in_executor(
+                            None,
+                            functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
+                        )
+                    except Exception as e:
+                        print(f"[extract_ga_petty_cash] {filename}: Claude fallback also failed: {e}", flush=True)
                 return filename, raw_list, None, False
             except Exception as e:
                 return filename, [], str(e), False
