@@ -28,7 +28,7 @@ FIELDS (return exactly these key names):
 5.  invoice_number - a receipt/reference number if one is genuinely printed on the receipt (rare). Otherwise use the literal value "Receipt" -- never leave this blank.
 6.  invoice_date - in YYYY-MM-DD format. Look first on the individual receipt; supplement from the cover sheet if the receipt is missing or the date is unclear. Empty string only if no date is visible anywhere.
 7.  amount - always read from the physical receipt first. Only use the cover sheet amount when no receipt is present. Plain number, no $ or commas. Use a negative number for returns or credits.
-8.  distribution_description - choose the best short category fit: Crew Meals, Crafty, Parking, Production Supplies, Fuel, Wardrobe Purchase, Wardrobe Return, Location Fee, Set Dressing, Props, Car Service, Liquor, Tips, Tickets - or the closest concise fit if none apply.
+8.  distribution_description - short description following the DESCRIPTION RULES below. Required.
 9.  ff1 - one of these codes when clearly applicable, otherwise leave blank (empty string):
     "HT" - Lodging: hotels, private residences, condos, parking, and other related lodging costs.
     "AF" - Airfare: includes airfare, baggage fees, airport greeters, and other related flight costs.
@@ -97,6 +97,48 @@ FIELDS (return exactly these key names):
     Only flag when something genuinely looks off -- most petty cash lines need no note at all. Never change qualified/non_qualified/ff1/ff2 based on this judgment; always use their normal defaults regardless. If there is also a genuine amount-mismatch concern, append it after a semicolon. Use only plain ASCII characters. No em dashes, no special Unicode symbols, no emoji.
 33. website_address - vendor website if printed on the receipt. Empty string if not found.
 34. envelope_total - the subtotal for THIS envelope only (the "TOTAL (THIS ENVELOPE)" line or equivalent). Plain number, no $ or commas. Include on EVERY row for that envelope. If the PDF has multiple envelopes, each envelope's rows carry that envelope's own subtotal - do NOT use the grand total across all envelopes. Use 0 if no total is visible.
+
+DESCRIPTION RULES (field 8 — distribution_description):
+
+DEFAULT RULE:
+Use 1-2 words describing the primary purpose of the receipt -- what the vendor provides, not the line items.
+Examples: "Crew Meals", "Crafty", "Parking", "Production Supplies", "Fuel", "Wardrobe Purchase", "Wardrobe Return", "Location Fee", "Set Dressing", "Props", "Car Service", "Liquor", "Tips", "Tickets" -- or the closest concise fit if none of these apply.
+
+If the receipt clearly covers two categories of roughly equal value, combine with "&":
+  Example: "Crafty & Production Supplies"
+
+If three or more categories are present, pick the single largest by dollar amount and use that alone.
+
+POSITION / JOB TITLE -- used as "(POSITION)" in the Airfare, Car Rental, and Hotel formats below:
+Use the crew member's job title or role exactly as stated on the receipt or cover sheet in this same PDF, formatted in Title Case regardless of how it appears in the source document (convert ALL CAPS or any other styling to Title Case -- e.g. source "ASST ART DIRECTOR" becomes "Asst Art Director"). If no position or role is stated anywhere in this PDF, use the literal placeholder text "(POSITION)" -- do not guess or infer a role from outside knowledge.
+
+[First Last] IS NOT A PLACEHOLDER -- it must be a real person's name found somewhere in this PDF. Never invent, guess, or infer a name to fill this slot. If a rental/booking has no named individual anywhere in the document, do NOT use the Airfare/Car Rental/Hotel format at all -- fall back to the DEFAULT description rule instead, and leave ff1/aicp_code blank or set to the non-passenger transportation code as appropriate rather than fabricating a traveler. This is rare on petty cash (most lines are ordinary goods/services purchases) but can happen if a crew member was reimbursed out of pocket for their own flight, hotel, or rental car.
+
+AIRFARE:
+  One-way:    "Airfare for [First Last] (POSITION): One Way [ORG]-[DST] (M/D/YY)"
+  Round trip: "Airfare for [First Last] (POSITION): Round Trip [ORG]-[DST]-[RTN] (M/D/YY - M/D/YY)"
+
+  Where ORG = departure airport code, DST = destination code, RTN = return airport code.
+  If the return airport is the same as departure, repeat it: LAX-ATL-LAX.
+  If the return airport differs from departure: LAX-ATL-BUR.
+  One-way flights have a single date; round trips have a date range.
+
+  Examples:
+    "Airfare for Sam Schneider (POSITION): Round Trip LAX-ATL-LAX (1/11/26 - 1/17/26)"
+    "Airfare for John Smith (POSITION): One Way LAX-ATL (1/11/26)"
+
+CAR RENTAL:
+  "Car Rental for [First Last] (POSITION) (M/D/YY - M/D/YY)"
+  Example: "Car Rental for John Smith (POSITION) (1/11/26 - 1/17/26)"
+
+HOTEL / LODGING:
+  "Room Accommodation for [First Last] (POSITION): M/D/YY - M/D/YY"
+  Example: "Room Accommodation for John Smith (POSITION): 1/11/26 - 1/17/26"
+
+LOCATION AGREEMENT:
+  "Location for [purpose]" -- use the purpose of the location (shoot, parking, basecamp, etc.)
+  If the purpose cannot be determined: "Location Agreement"
+  Examples: "Location for Shoot", "Location for Parking/Basecamp", "Location Agreement"
 
 Return ONLY a valid JSON array using exactly these key names per object:
 custodian_name, env_number, line_number, vendor_name, invoice_number, invoice_date, amount, distribution_description,
