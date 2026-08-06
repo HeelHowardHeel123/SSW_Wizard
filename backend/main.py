@@ -1111,12 +1111,36 @@ def _custodian_name_trustworthy(name: str, packet_key: str) -> bool:
     return bool(name_words & key_words)
 
 
+def _split_custodian_name(name: str) -> tuple[str, str]:
+    """Shared LAST/FIRST split used both at normalization time (GA petty
+    cash rows carry separate last_name/first_name fields) and again here
+    whenever the backfill below patches custodian_name -- so the split
+    fields stay in sync with whatever name actually ends up on the row,
+    instead of being permanently locked to whatever custodian_name was at
+    the moment the row was first normalized."""
+    name = name.strip()
+    if "," in name:
+        last, _, first = name.partition(",")
+        return last.strip(), first.strip()
+    parts = name.split()
+    if len(parts) >= 2:
+        return parts[0], " ".join(parts[1:])
+    return name, ""
+
+
 def _backfill_petty_cash_custodian_names(file_records: list[dict]) -> None:
     """Mutates file_records' rows in place. Groups files by the name/dept
     parsed from their filename and, whenever one file in a group has a
     trustworthy custodian_name, backfills it into sibling files whose own
     extracted name is blank or clearly wrong. Must run BEFORE envelope-number
-    offset bucketing, since that bucketing is keyed by custodian_name."""
+    offset bucketing, since that bucketing is keyed by custodian_name.
+
+    Also re-derives last_name/first_name from the backfilled name on any row
+    that has those keys (GA rows only -- IL rows have no separate split
+    fields). Those were split out of custodian_name back when the row was
+    normalized, which is BEFORE this backfill runs, so they'd otherwise stay
+    frozen at whatever they were computed from originally (usually blank)
+    even after custodian_name itself gets corrected here."""
     groups: dict[str, list[dict]] = {}
     for rec in file_records:
         if not rec["file_rows"]:
@@ -1135,11 +1159,16 @@ def _backfill_petty_cash_custodian_names(file_records: list[dict]) -> None:
                 break
         if not canonical:
             continue
+        canonical_last, canonical_first = _split_custodian_name(canonical)
         for rec in recs:
             name = rec["file_rows"][0].get("custodian_name", "")
             if not _custodian_name_trustworthy(name, key):
                 for r in rec["file_rows"]:
                     r["custodian_name"] = canonical
+                    if "last_name" in r:
+                        r["last_name"] = canonical_last
+                    if "first_name" in r:
+                        r["first_name"] = canonical_first
 
 
 def normalize_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
@@ -3395,16 +3424,6 @@ def normalize_ga_petty_cash_row(raw: dict, work_state: str, filename: str) -> di
         s = str(val or "").strip().lower()
         return "Yes" if s in ("yes", "true", "1") else "No"
 
-    def split_custodian(name: str):
-        name = name.strip()
-        if "," in name:
-            last, _, first = name.partition(",")
-            return last.strip(), first.strip()
-        parts = name.split()
-        if len(parts) >= 2:
-            return parts[0], " ".join(parts[1:])
-        return name, ""
-
     ff1 = str(raw.get("ff1", "")).strip().upper()
     if ff1 not in _GA_AP_FF1_VALID:
         ff1 = ""
@@ -3422,7 +3441,7 @@ def normalize_ga_petty_cash_row(raw: dict, work_state: str, filename: str) -> di
         aicp = None
 
     custodian_name = clean_name(raw.get("custodian_name", ""))
-    last_name, first_name = split_custodian(custodian_name)
+    last_name, first_name = _split_custodian_name(custodian_name)
 
     nights = raw.get("nights")
     try:
