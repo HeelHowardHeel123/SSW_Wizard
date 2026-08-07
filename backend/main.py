@@ -335,6 +335,92 @@ def _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=None, max_pages=N
     return images
 
 
+def _compress_oversized_pdf_pages(
+    data: bytes,
+    max_dim: int = 2200,
+    jpeg_quality: int = 85,
+    min_image_bytes: int = 1_500_000,
+) -> tuple[bytes, bool]:
+    """Rescue pass for oversized petty cash/ProdCC PDFs. Confirmed on a real
+    file: some phone/scanner apps embed full-resolution, essentially
+    uncompressed photos per page, inflating a 25-page packet to 67 MB with
+    no extra content -- the raw byte size is a poor proxy for actual
+    processing cost, since page count and rendered-image size are what
+    actually matter downstream.
+
+    Walks the PDF page by page; any page whose embedded image data exceeds
+    min_image_bytes gets replaced with a single downsized/recompressed JPEG
+    rendering (capped at max_dim px on the long edge, matching the
+    resolution ceiling extraction already renders at). Pages under that
+    threshold are copied through byte-for-byte untouched -- this is a
+    rescue mechanism for outlier pages, not a blanket recompression, so a
+    normal typed cover sheet page never gets touched.
+
+    Returns (new_pdf_bytes, changed); changed is False when no page needed
+    touching, in which case the original bytes are returned unmodified."""
+    src = fitz.open(stream=data, filetype="pdf")
+    out = fitz.open()
+    changed = False
+
+    for page in src:
+        img_bytes = 0
+        for img in page.get_images(full=True):
+            try:
+                img_bytes += len(src.extract_image(img[0])["image"])
+            except Exception:
+                pass
+
+        if img_bytes < min_image_bytes:
+            out.insert_pdf(src, from_page=page.number, to_page=page.number)
+            continue
+
+        changed = True
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        if pix.width > max_dim or pix.height > max_dim:
+            factor = min(max_dim / pix.width, max_dim / pix.height)
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.5 * factor, 1.5 * factor))
+        jpeg_bytes = pix.tobytes("jpeg", jpg_quality=jpeg_quality)
+        new_page = out.new_page(width=pix.width, height=pix.height)
+        new_page.insert_image(new_page.rect, stream=jpeg_bytes)
+
+    if not changed:
+        src.close()
+        out.close()
+        return data, False
+
+    result = out.tobytes(deflate=True, garbage=4)
+    src.close()
+    out.close()
+    return result, True
+
+
+def _check_and_compress_pdf_size(filename: str, data: bytes, max_mb: float = 50) -> tuple[bytes, str]:
+    """Petty-cash-family size gate. Tries _compress_oversized_pdf_pages
+    before rejecting an oversized file outright -- see that function's
+    docstring for why raw byte size alone is the wrong thing to gate on.
+    Returns (possibly-compressed data, error message or empty string)."""
+    file_mb = len(data) / (1024 * 1024)
+    if file_mb <= max_mb:
+        return data, ""
+
+    try:
+        data, changed = _compress_oversized_pdf_pages(data)
+    except Exception as e:
+        print(f"[_check_and_compress_pdf_size] {filename}: compression attempt failed: {e}", flush=True)
+        changed = False
+
+    file_mb = len(data) / (1024 * 1024)
+    if changed:
+        print(f"[_check_and_compress_pdf_size] {filename}: compressed oversized pages, now {file_mb:.0f} MB", flush=True)
+
+    if file_mb > max_mb:
+        return data, (
+            f"File too large to process ({file_mb:.0f} MB even after compressing oversized pages) -- "
+            f"compress to under {max_mb:.0f} MB and resubmit"
+        )
+    return data, ""
+
+
 # ── Rate-limit retry helper ──────────────────────────────────────────────────
 
 _RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)\s*s", re.IGNORECASE)
@@ -2523,13 +2609,11 @@ async def extract_ga_petty_cash(
     sem  = asyncio.Semaphore(5)
 
     async def _extract_one(filename, data):
-        file_mb = len(data) / (1024 * 1024)
-        if file_mb > 40:
-            msg = (
-                f"File too large to process ({file_mb:.0f} MB) -- "
-                "compress to under 40 MB and resubmit"
-            )
-            return filename, [], msg, True
+        data, size_err = await loop.run_in_executor(
+            None, functools.partial(_check_and_compress_pdf_size, filename, data),
+        )
+        if size_err:
+            return filename, [], size_err, True
 
         async with sem:
             try:
@@ -2709,13 +2793,11 @@ async def extract_ga_prodcc(
     sem  = asyncio.Semaphore(5)
 
     async def _extract_one(filename, data):
-        file_mb = len(data) / (1024 * 1024)
-        if file_mb > 40:
-            msg = (
-                f"File too large to process ({file_mb:.0f} MB) -- "
-                "compress to under 40 MB and resubmit"
-            )
-            return filename, [], msg, True
+        data, size_err = await loop.run_in_executor(
+            None, functools.partial(_check_and_compress_pdf_size, filename, data),
+        )
+        if size_err:
+            return filename, [], size_err, True
 
         async with sem:
             try:
