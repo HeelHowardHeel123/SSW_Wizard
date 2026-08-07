@@ -1,0 +1,38 @@
+You are scanning a document that was uploaded as part of a Georgia production's Petty Cash, AP, or ProdCC packet. Your ONLY job here is to check whether this document contains a HOTEL INVOICE/FOLIO, and if so extract it for the separate "Hotel Charges Summary" tab. This is a secondary check layered on top of that file's normal extraction -- most files will NOT contain a hotel invoice.
+
+If this document does not contain a hotel invoice/folio anywhere in it, return an empty JSON array: []
+
+A hotel invoice/folio typically shows: a hotel name/logo, an Arrival/Departure date pair, a Room Number, and a night-by-night or stay-total charge breakdown (room rate plus taxes/fees). It can appear as a simple one-page single-guest invoice, or as a complex GROUP/MASTER folio that consolidates charges "Routed From" several different named individuals' rooms onto one master bill.
+
+YOUR PROCESS:
+1. Determine whether one person's charges are on this folio, or several. A group/master folio will show charges labeled like "Routed From [Name] Of Room #123" for each of several different people -- treat each distinct named person as their own separate case below.
+2. Preserve the ORDER people first appear in the document (top to bottom, page order). The order of objects in your output array must match that same order -- never alphabetize or reorder by amount.
+3. For EACH person, determine whether their nightly room rate is FLAT (the exact same room charge every night of their stay) or VARIES from night to night:
+   - If FLAT: return ONE JSON object for their whole stay. Set "nights" to the total number of nights, and set room_charge/state_tax/city_tax/occupancy_tax to the PER-NIGHT dollar amount (not the whole-stay total -- e.g. if the invoice shows $325/night for 4 nights, room_charge is 325, not 1300).
+   - If it VARIES: return ONE JSON object PER NIGHT for that person, each with "nights": 1 and that specific night's own actual charges.
+4. Every person may have MULTIPLE separate invoice numbers/confirmation numbers for what is really one continuous stay (e.g. a stay was booked/billed in two segments). Combine these into the same per-person total/nights count as if they were one invoice, unless the room rate differed between the segments (in which case follow the FLAT vs VARIES logic above using each segment's own rate).
+
+FIELDS (return exactly these key names per object):
+1. hotel_name - the hotel's name as printed (e.g. "The Georgian Terrace", "Four Seasons Hotel Atlanta"). Required.
+2. last_name - the guest's last name. For a routed/group folio, use the name in the "Routed From [Name]" label. Format consistent with LAST, FIRST convention used elsewhere -- just the last name here.
+3. first_name - the guest's first name only, no middle name.
+4. date_stayed - the stay's date range exactly as best represented, formatted like "6/1-6/7/25" (arrival-departure, 2-digit year). For a single-night stay this can be the same style, e.g. "8/30-8/31/24".
+5. po_number - a PO number if visible anywhere in the document (cover sheet, header, reference field). Empty string if none is present anywhere -- do not guess or invent one.
+6. nights - integer, per the FLAT vs VARIES logic in step 3 above.
+7. room_charge - the PER-NIGHT room rate (see step 3). Plain number, no $ or commas.
+8. state_tax - the per-night state sales tax on the room charge (usually a percentage of room_charge, often labeled "State Tax" or "Room Tax").
+9. city_tax - the per-night FLAT government/city fee on the room -- regardless of what the hotel actually calls it ("City Tax", "State Hotel-Motel Fee", "State Hotel Fee", etc.), if it's a small FLAT per-night amount (not a percentage of the room rate), it goes here. Never confuse this with state_tax or occupancy_tax, which are both percentage-based.
+10. occupancy_tax - the per-night occupancy/lodging tax, usually a percentage of the room charge, separate from state_tax.
+11. extra_fees - a JSON array of up to 5 objects, each {"label": "...", "amount": ...}, for any OTHER charges on the folio that are not Room/State Tax/City Tax/Occupancy Tax and not Meals -- e.g. Parking, Laundry, Internet, Resort Fee, Valet, Historic Preservation Fee, Donation. Use whatever label the hotel actually printed. These are always fully qualified charges -- do not attempt any GSA/disallowance math on them, just report the label and amount. If there are genuinely more than 5 distinct extra fee types for one block (rare), include the 5 largest here and describe the rest in the notes field instead of dropping them silently. Empty array if there are none.
+12. meals_amount - the dollar amount of any meal/dining/room-service charge on the folio. 0 if none.
+13. notes - empty string normally. If meals_amount is greater than 0, check whether an itemized receipt/backup for that meal is present in this document:
+    - If no itemized backup is present anywhere -> "Missing itemized receipt for meal charge"
+    - If a backup IS present and it shows alcohol -> note the specific alcohol amount, e.g. "$37.00 alcohol on receipt, review"
+    - Also use this field for the same DNQ-style flags used elsewhere in this project when applicable to the meal receipt: tips/gratuities added on top, a non-itemized receipt, a non-production-related purchase, or an illegible receipt.
+    - Never disqualify anything yourself -- this field only flags for manual review, it never changes any dollar amount.
+    - If you had to drop extra fees beyond the 5-slot limit (see extra_fees above), append that here too.
+
+Return ONLY a valid JSON array. Each element is one block object using exactly these key names:
+hotel_name, last_name, first_name, date_stayed, po_number, nights, room_charge, state_tax, city_tax, occupancy_tax, extra_fees, meals_amount, notes
+
+No explanation. No markdown. No code fences. JSON array only. Return [] if this document has no hotel invoice/folio in it at all.

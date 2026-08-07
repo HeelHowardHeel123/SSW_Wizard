@@ -33,13 +33,15 @@ Endpoints
   POST /extract-ga-ap              → multipart: files[]=<pdf> (one per call), prodco_name,
                                      prodco_address, agency_name, work_state, payer_entities
                                      (JSON array of {role,name,address})
-                                     returns {"rows": [...], "issues": [...], "files": [...]}
+                                     returns {"rows": [...], "issues": [...], "files": [...],
+                                     "hotel_blocks": [...]}
   POST /extract-ga-petty-cash      → multipart: files[]=<pdf>, prodco_name, work_state
                                      reuses the IL petty cash engine (chunking, envelope-total
                                      reconciliation); GA-specific prompt/fields (FF1/FF2/AICP,
                                      dual proof-of-payment). Never auto-disqualifies a line --
                                      flags possible-DNQ candidates via notes only.
-                                     returns {"rows": [...], "issues": [...], "files": [...]}
+                                     returns {"rows": [...], "issues": [...], "files": [...],
+                                     "hotel_blocks": [...]}
   POST /extract-ga-prodcc          → multipart: files[]=<pdf>, prodco_name, work_state
                                      production credit card reimbursements -- crew member pays,
                                      then gets repaid (vs. petty cash: production pays up front).
@@ -49,7 +51,19 @@ Endpoints
                                      most ProdCC packets have no envelope structure. The wizard
                                      appends these rows onto the same "Petty Cash" tab, below the
                                      petty cash rows.
-                                     returns {"rows": [...], "issues": [...], "files": [...]}
+                                     returns {"rows": [...], "issues": [...], "files": [...],
+                                     "hotel_blocks": [...]}
+
+  All three of the above (AP, GA petty cash, GA ProdCC) also run every file
+  through a secondary Hotel Charges Summary detection/extraction pass (GA
+  only) -- hotel invoices don't get their own upload folder, they show up
+  wherever they happened to be filed. "hotel_blocks" is a flat list, one
+  entry per person-and-stay (or per-night, when a stay's rate varies night
+  to night), in the same order people appear in their source document. See
+  ga_hotel_extraction_prompt.txt / normalize_ga_hotel_block for the field
+  shape. Cross-linking these blocks back into the Petty Cash/AP/ProdCC rows
+  that triggered them is deferred to v2 -- v1 only writes the Hotel Charges
+  Summary tab itself.
   POST /match-ap-positions         → JSON: {ap_names: [...], crew: [{name,positions[],dates[]}]}
                                      (crew comes from /extract-call-sheet). GPT matches each
                                      ap_name against the crew list and returns its position.
@@ -115,6 +129,7 @@ _PETTY_CASH_PROMPT_PATH         = os.path.join(os.path.dirname(os.path.abspath(_
 _GA_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_ap_extraction_prompt.txt")
 _GA_PETTY_CASH_PROMPT_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_petty_cash_extraction_prompt.txt")
 _GA_PRODCC_PROMPT_PATH          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_prodcc_extraction_prompt.txt")
+_GA_HOTEL_PROMPT_PATH           = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_hotel_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -286,6 +301,11 @@ def _load_ga_prodcc_prompt(prodco_name: str, work_state: str = "GA") -> str:
         .replace("{prodco_name}", name_label)
         .replace("{work_state}", state_label)
     )
+
+
+def _load_ga_hotel_prompt() -> str:
+    with open(_GA_HOTEL_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 def _load_ga_ap_prompt(payer_entities: list, work_state: str = "GA") -> str:
@@ -2613,7 +2633,7 @@ async def extract_ga_petty_cash(
             None, functools.partial(_check_and_compress_pdf_size, filename, data),
         )
         if size_err:
-            return filename, [], size_err, True
+            return filename, [], size_err, True, []
 
         async with sem:
             try:
@@ -2636,18 +2656,25 @@ async def extract_ga_petty_cash(
                         _tag_claude_fallback_rows(raw_list)
                     except Exception as e:
                         print(f"[extract_ga_petty_cash] {filename}: Claude fallback also failed: {e}", flush=True)
-                return filename, raw_list, None, False
+                # Secondary check, independent of how the primary extraction
+                # above went -- hotel invoices don't get their own upload
+                # folder, so every file here also gets scanned for one.
+                hotel_blocks = await loop.run_in_executor(
+                    None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
+                )
+                return filename, raw_list, None, False, hotel_blocks
             except Exception as e:
-                return filename, [], str(e), False
+                return filename, [], str(e), False, []
 
     extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
 
-    rows, issues, file_summaries = [], [], []
+    rows, issues, file_summaries, hotel_blocks_all = [], [], [], []
     custodian_env_max: dict[str, int] = {}
     file_records: list[dict] = []
 
-    for filename, raw_list, err, too_large in extraction_results:
+    for filename, raw_list, err, too_large, hotel_blocks in extraction_results:
         errs: list[str] = []
+        hotel_blocks_all.extend(hotel_blocks)
 
         if too_large:
             errs.append(err)
@@ -2752,7 +2779,7 @@ async def extract_ga_petty_cash(
             "issues":   errs,
         })
 
-    return {"rows": rows, "issues": issues, "files": file_summaries}
+    return {"rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all}
 
 
 @app.post("/extract-ga-prodcc")
@@ -2797,7 +2824,7 @@ async def extract_ga_prodcc(
             None, functools.partial(_check_and_compress_pdf_size, filename, data),
         )
         if size_err:
-            return filename, [], size_err, True
+            return filename, [], size_err, True, []
 
         async with sem:
             try:
@@ -2818,17 +2845,24 @@ async def extract_ga_prodcc(
                         _tag_claude_fallback_rows(raw_list)
                     except Exception as e:
                         print(f"[extract_ga_prodcc] {filename}: Claude fallback also failed: {e}", flush=True)
-                return filename, raw_list, None, False
+                # Secondary check, independent of how the primary extraction
+                # above went -- hotel invoices don't get their own upload
+                # folder, so every file here also gets scanned for one.
+                hotel_blocks = await loop.run_in_executor(
+                    None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
+                )
+                return filename, raw_list, None, False, hotel_blocks
             except Exception as e:
-                return filename, [], str(e), False
+                return filename, [], str(e), False, []
 
     extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
 
-    rows, issues, file_summaries = [], [], []
+    rows, issues, file_summaries, hotel_blocks_all = [], [], [], []
     file_records: list[dict] = []
 
-    for filename, raw_list, err, too_large in extraction_results:
+    for filename, raw_list, err, too_large, hotel_blocks in extraction_results:
         errs: list[str] = []
+        hotel_blocks_all.extend(hotel_blocks)
 
         if too_large:
             errs.append(err)
@@ -2887,7 +2921,7 @@ async def extract_ga_prodcc(
             "issues":   errs,
         })
 
-    return {"rows": rows, "issues": issues, "files": file_summaries}
+    return {"rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all}
 
 
 # ── Agency Hours extractor ───────────────────────────────────────────────────
@@ -3906,6 +3940,94 @@ def normalize_ga_prodcc_row(raw: dict, work_state: str, filename: str) -> dict:
     }
 
 
+# ── GA Hotel Charges Summary: cross-cutting detection ────────────────────────
+# Hotel invoices don't get their own upload folder -- they show up inside
+# whatever Petty Cash/AP/ProdCC packet they happened to be filed under. Every
+# file uploaded to those three endpoints also gets run through this pass, in
+# addition to (never instead of) its own normal extraction. GA/Atlanta only
+# for now.
+
+_GA_HOTEL_EXTRA_FEE_SLOTS = 5
+
+
+def normalize_ga_hotel_block(raw: dict, filename: str) -> dict:
+    nights = raw.get("nights", 1)
+    try:
+        nights = max(1, int(nights))
+    except (TypeError, ValueError):
+        nights = 1
+
+    extra_fees_raw = raw.get("extra_fees", [])
+    extra_fees, overflow = [], []
+    if isinstance(extra_fees_raw, list):
+        for item in extra_fees_raw:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip()
+            if not label:
+                continue
+            amount = normalize_amount(item.get("amount", 0))
+            if len(extra_fees) < _GA_HOTEL_EXTRA_FEE_SLOTS:
+                extra_fees.append({"label": label, "amount": amount})
+            else:
+                overflow.append(f"{label} ${amount:,.2f}")
+
+    notes = str(raw.get("notes", "")).strip()
+    if overflow:
+        overflow_note = "Additional fees not shown (over 5-slot limit): " + "; ".join(overflow)
+        notes = f"{notes}; {overflow_note}" if notes else overflow_note
+
+    return {
+        "hotel_name":     str(raw.get("hotel_name", "")).strip(),
+        "last_name":      clean_name(raw.get("last_name", "")),
+        "first_name":     clean_name(raw.get("first_name", "")),
+        "date_stayed":    str(raw.get("date_stayed", "")).strip(),
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "nights":         nights,
+        "room_charge":    normalize_amount(raw.get("room_charge", 0)),
+        "state_tax":      normalize_amount(raw.get("state_tax", 0)),
+        "city_tax":       normalize_amount(raw.get("city_tax", 0)),
+        "occupancy_tax":  normalize_amount(raw.get("occupancy_tax", 0)),
+        "extra_fees":     extra_fees,
+        "meals_amount":   normalize_amount(raw.get("meals_amount", 0)),
+        "notes":          notes,
+        "sourceFile":     filename,
+    }
+
+
+def _extract_ga_hotel_blocks(filename: str, data: bytes, client) -> list[dict]:
+    """Secondary detection/extraction pass layered on top of a file's own
+    primary extraction (Petty Cash/AP/ProdCC). Returns an empty list for the
+    overwhelming majority of files, which don't contain a hotel invoice at
+    all -- that's the expected, correct result, not a failure, so this
+    deliberately does NOT retry with Claude the way the primary extraction
+    does: doubling every file's cost on a secondary check that's usually a
+    true negative isn't worth it. A missed hotel invoice here is lower
+    stakes than a missed primary extraction, which already has its own
+    fallback."""
+    system_prompt = _load_ga_hotel_prompt()
+    user_text = (
+        "If this document contains a hotel invoice/folio, extract it per the rules below. "
+        "If it does not, return an empty JSON array."
+    )
+    try:
+        raw_list = _extract_petty_cash_from_file(filename, data, system_prompt, client, user_text=user_text)
+    except Exception as e:
+        print(f"[_extract_ga_hotel_blocks] {filename}: hotel detection pass failed: {e}", flush=True)
+        return []
+
+    if not raw_list:
+        return []
+
+    blocks = []
+    for raw in raw_list:
+        try:
+            blocks.append(normalize_ga_hotel_block(raw, filename))
+        except Exception as e:
+            print(f"[_extract_ga_hotel_blocks] {filename}: block normalization error: {e}", flush=True)
+    return blocks
+
+
 @app.post("/extract-ga-ap")
 async def extract_ga_ap(
     files:           list[UploadFile] = File(...),
@@ -3954,16 +4076,23 @@ async def extract_ga_ap(
                     None,
                     functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
                 )
-                return filename, raw_list, None
+                # Secondary check, independent of how the primary extraction
+                # above went -- hotel invoices don't get their own upload
+                # folder, so every file here also gets scanned for one.
+                hotel_blocks = await loop.run_in_executor(
+                    None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
+                )
+                return filename, raw_list, None, hotel_blocks
             except Exception as e:
-                return filename, [], str(e)
+                return filename, [], str(e), []
 
     extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
 
-    rows, issues, file_summaries = [], [], []
+    rows, issues, file_summaries, hotel_blocks_all = [], [], [], []
 
-    for filename, raw_list, err in extraction_results:
+    for filename, raw_list, err, hotel_blocks in extraction_results:
         errs: list[str] = []
+        hotel_blocks_all.extend(hotel_blocks)
         if err:
             errs.append(err)
             issues.append(f"{filename}: {err}")
@@ -3988,7 +4117,7 @@ async def extract_ga_ap(
             "issues": errs,
         })
 
-    return {"rows": rows, "issues": issues, "files": file_summaries}
+    return {"rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all}
 
 
 # ── GA AP call sheet position matching ───────────────────────────────────────
