@@ -2636,35 +2636,43 @@ async def extract_ga_petty_cash(
             return filename, [], size_err, True, []
 
         async with sem:
-            try:
-                raw_list = await loop.run_in_executor(
-                    None,
-                    functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
-                )
-                # GPT-4o has been observed to come back empty on a file for
-                # reasons that don't correspond to any real content problem
-                # (confirmed via direct testing) -- retry with Claude before
-                # giving up on the file entirely.
-                if not raw_list:
-                    print(f"[extract_ga_petty_cash] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
-                    try:
-                        anthropic_client = _anthropic_client()
-                        raw_list = await loop.run_in_executor(
-                            None,
-                            functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
-                        )
-                        _tag_claude_fallback_rows(raw_list)
-                    except Exception as e:
-                        print(f"[extract_ga_petty_cash] {filename}: Claude fallback also failed: {e}", flush=True)
-                # Secondary check, independent of how the primary extraction
-                # above went -- hotel invoices don't get their own upload
-                # folder, so every file here also gets scanned for one.
-                hotel_blocks = await loop.run_in_executor(
+            async def _primary():
+                try:
+                    raw_list = await loop.run_in_executor(
+                        None,
+                        functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
+                    )
+                    # GPT-4o has been observed to come back empty on a file for
+                    # reasons that don't correspond to any real content problem
+                    # (confirmed via direct testing) -- retry with Claude before
+                    # giving up on the file entirely.
+                    if not raw_list:
+                        print(f"[extract_ga_petty_cash] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                        try:
+                            anthropic_client = _anthropic_client()
+                            raw_list = await loop.run_in_executor(
+                                None,
+                                functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
+                            )
+                            _tag_claude_fallback_rows(raw_list)
+                        except Exception as e:
+                            print(f"[extract_ga_petty_cash] {filename}: Claude fallback also failed: {e}", flush=True)
+                    return raw_list, None
+                except Exception as e:
+                    return [], str(e)
+
+            # Runs concurrently with the primary extraction above (not after
+            # it) -- these are two independent calls on the same file bytes,
+            # and running them sequentially was measured to roughly double
+            # per-file wall-clock time, pushing some large petty cash files
+            # over the client's request timeout.
+            async def _hotel():
+                return await loop.run_in_executor(
                     None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
                 )
-                return filename, raw_list, None, False, hotel_blocks
-            except Exception as e:
-                return filename, [], str(e), False, []
+
+            (raw_list, err), hotel_blocks = await asyncio.gather(_primary(), _hotel())
+            return filename, raw_list, err, False, hotel_blocks
 
     extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
 
@@ -2827,33 +2835,39 @@ async def extract_ga_prodcc(
             return filename, [], size_err, True, []
 
         async with sem:
-            try:
-                raw_list = await loop.run_in_executor(
-                    None,
-                    functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
-                )
-                # Same GPT-4o intermittent-refusal behavior seen on petty
-                # cash -- retry with Claude before giving up on the file.
-                if not raw_list:
-                    print(f"[extract_ga_prodcc] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
-                    try:
-                        anthropic_client = _anthropic_client()
-                        raw_list = await loop.run_in_executor(
-                            None,
-                            functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
-                        )
-                        _tag_claude_fallback_rows(raw_list)
-                    except Exception as e:
-                        print(f"[extract_ga_prodcc] {filename}: Claude fallback also failed: {e}", flush=True)
-                # Secondary check, independent of how the primary extraction
-                # above went -- hotel invoices don't get their own upload
-                # folder, so every file here also gets scanned for one.
-                hotel_blocks = await loop.run_in_executor(
+            async def _primary():
+                try:
+                    raw_list = await loop.run_in_executor(
+                        None,
+                        functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
+                    )
+                    # Same GPT-4o intermittent-refusal behavior seen on petty
+                    # cash -- retry with Claude before giving up on the file.
+                    if not raw_list:
+                        print(f"[extract_ga_prodcc] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                        try:
+                            anthropic_client = _anthropic_client()
+                            raw_list = await loop.run_in_executor(
+                                None,
+                                functools.partial(_extract_petty_cash_from_file_claude, filename, data, system_prompt, anthropic_client, user_text=user_text),
+                            )
+                            _tag_claude_fallback_rows(raw_list)
+                        except Exception as e:
+                            print(f"[extract_ga_prodcc] {filename}: Claude fallback also failed: {e}", flush=True)
+                    return raw_list, None
+                except Exception as e:
+                    return [], str(e)
+
+            # Runs concurrently with the primary extraction above, not after
+            # it -- see extract_ga_petty_cash for why (sequential doubled
+            # per-file wall-clock time and caused a real timeout).
+            async def _hotel():
+                return await loop.run_in_executor(
                     None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
                 )
-                return filename, raw_list, None, False, hotel_blocks
-            except Exception as e:
-                return filename, [], str(e), False, []
+
+            (raw_list, err), hotel_blocks = await asyncio.gather(_primary(), _hotel())
+            return filename, raw_list, err, False, hotel_blocks
 
     extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
 
@@ -4071,20 +4085,26 @@ async def extract_ga_ap(
 
     async def _extract_one(filename, data):
         async with sem:
-            try:
-                raw_list = await loop.run_in_executor(
-                    None,
-                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
-                )
-                # Secondary check, independent of how the primary extraction
-                # above went -- hotel invoices don't get their own upload
-                # folder, so every file here also gets scanned for one.
-                hotel_blocks = await loop.run_in_executor(
+            async def _primary():
+                try:
+                    raw_list = await loop.run_in_executor(
+                        None,
+                        functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                    )
+                    return raw_list, None
+                except Exception as e:
+                    return [], str(e)
+
+            # Runs concurrently with the primary extraction above, not after
+            # it -- see extract_ga_petty_cash for why (sequential doubled
+            # per-file wall-clock time and caused a real timeout).
+            async def _hotel():
+                return await loop.run_in_executor(
                     None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
                 )
-                return filename, raw_list, None, hotel_blocks
-            except Exception as e:
-                return filename, [], str(e), []
+
+            (raw_list, err), hotel_blocks = await asyncio.gather(_primary(), _hotel())
+            return filename, raw_list, err, hotel_blocks
 
     extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
 
