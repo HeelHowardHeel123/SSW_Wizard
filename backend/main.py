@@ -2637,10 +2637,12 @@ async def extract_ga_petty_cash(
 
         async with sem:
             try:
+                _primary_t0 = time.monotonic()
                 raw_list = await loop.run_in_executor(
                     None,
                     functools.partial(_extract_petty_cash_from_file, filename, data, system_prompt, client, user_text=user_text),
                 )
+                print(f"[extract_ga_petty_cash] {filename}: primary GPT-4o pass took {time.monotonic() - _primary_t0:.1f}s, {len(raw_list)} row(s)", flush=True)
                 # GPT-4o has been observed to come back empty on a file for
                 # reasons that don't correspond to any real content problem
                 # (confirmed via direct testing) -- retry with Claude before
@@ -2665,9 +2667,12 @@ async def extract_ga_petty_cash(
                 # latency and caused a real timeout when tried).
                 hotel_blocks = []
                 if _raw_list_flags_hotel_invoice(raw_list):
+                    print(f"[extract_ga_petty_cash] {filename}: has_hotel_invoice flagged true, running dedicated hotel pass", flush=True)
+                    _hotel_t0 = time.monotonic()
                     hotel_blocks = await loop.run_in_executor(
                         None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
                     )
+                    print(f"[extract_ga_petty_cash] {filename}: hotel pass took {time.monotonic() - _hotel_t0:.1f}s, found {len(hotel_blocks)} block(s)", flush=True)
                 return filename, raw_list, None, False, hotel_blocks
             except Exception as e:
                 return filename, [], str(e), False, []
@@ -2855,9 +2860,12 @@ async def extract_ga_prodcc(
                 # the primary extraction's own flag rather than unconditional.
                 hotel_blocks = []
                 if _raw_list_flags_hotel_invoice(raw_list):
+                    print(f"[extract_ga_prodcc] {filename}: has_hotel_invoice flagged true, running dedicated hotel pass", flush=True)
+                    _hotel_t0 = time.monotonic()
                     hotel_blocks = await loop.run_in_executor(
                         None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
                     )
+                    print(f"[extract_ga_prodcc] {filename}: hotel pass took {time.monotonic() - _hotel_t0:.1f}s, found {len(hotel_blocks)} block(s)", flush=True)
                 return filename, raw_list, None, False, hotel_blocks
             except Exception as e:
                 return filename, [], str(e), False, []
@@ -4102,9 +4110,12 @@ async def extract_ga_ap(
                 # the primary extraction's own flag rather than unconditional.
                 hotel_blocks = []
                 if _raw_list_flags_hotel_invoice(raw_list):
+                    print(f"[extract_ga_ap] {filename}: has_hotel_invoice flagged true, running dedicated hotel pass", flush=True)
+                    _hotel_t0 = time.monotonic()
                     hotel_blocks = await loop.run_in_executor(
                         None, functools.partial(_extract_ga_hotel_blocks, filename, data, client),
                     )
+                    print(f"[extract_ga_ap] {filename}: hotel pass took {time.monotonic() - _hotel_t0:.1f}s, found {len(hotel_blocks)} block(s)", flush=True)
                 return filename, raw_list, None, hotel_blocks
             except Exception as e:
                 return filename, [], str(e), []
