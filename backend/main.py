@@ -3962,7 +3962,7 @@ def normalize_ga_prodcc_row(raw: dict, work_state: str, filename: str) -> dict:
 # addition to (never instead of) its own normal extraction. GA/Atlanta only
 # for now.
 
-_GA_HOTEL_EXTRA_FEE_SLOTS = 5
+_GA_HOTEL_EXTRA_FEE_SLOTS = 3
 
 
 def normalize_ga_hotel_block(raw: dict, filename: str) -> dict:
@@ -3989,7 +3989,7 @@ def normalize_ga_hotel_block(raw: dict, filename: str) -> dict:
 
     notes = str(raw.get("notes", "")).strip()
     if overflow:
-        overflow_note = "Additional fees not shown (over 5-slot limit): " + "; ".join(overflow)
+        overflow_note = f"Additional fees not shown (over {_GA_HOTEL_EXTRA_FEE_SLOTS}-slot limit): " + "; ".join(overflow)
         notes = f"{notes}; {overflow_note}" if notes else overflow_note
 
     return {
