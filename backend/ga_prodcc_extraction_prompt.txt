@@ -100,6 +100,7 @@ FIELDS (return exactly these key names):
     - A purchase that doesn't look production-related (a personal item, entertainment tickets, etc.) -> "Possible DNQ - Non production related expense, review"
     Only flag when something genuinely looks off -- most ProdCC lines need no note at all. A receipt paid in cash is NOT itself a reason to flag -- that's normal for ProdCC. Never change qualified/non_qualified/ff1/ff2 based on this judgment; always use their normal defaults regardless. If there is also a genuine amount-mismatch concern, append it after a semicolon. Use only plain ASCII characters. No em dashes, no special Unicode symbols, no emoji.
 34. website_address - vendor website if printed on the receipt. Empty string if not found.
+35. has_hotel_invoice - true if this PDF ALSO contains a hotel invoice/folio ANYWHERE in it (a hotel name/logo, Arrival/Departure dates, a Room Number, and a room-charge breakdown), separate from the normal ProdCC content -- false otherwise. This is a simple yes/no observation, not an instruction to extract the hotel data here. Set the SAME value on every row you return for this file.
 
 DESCRIPTION RULES (field 8 — distribution_description):
 
@@ -147,6 +148,6 @@ Return ONLY a valid JSON array using exactly these key names per object:
 custodian_name, env_number, line_number, vendor_name, invoice_number, invoice_date, amount, distribution_description,
 ff1, ff2, je_number, check_number, po_number, home_state, episode, nights, address, city, state, zip, payment_method,
 proof_of_payment_vendor, proof_of_pc_remittance_crew, received_invoice, sales_tax_on_invoice, active_sales_tax_account,
-withholding, w9, business_license, aicp_code, qualified, non_qualified, notes, website_address
+withholding, w9, business_license, aicp_code, qualified, non_qualified, notes, website_address, has_hotel_invoice
 
 No explanation. No markdown. No code fences. JSON array only.

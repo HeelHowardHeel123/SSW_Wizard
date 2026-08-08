@@ -97,6 +97,7 @@ FIELDS (return exactly these key names):
     Only flag when something genuinely looks off -- most petty cash lines need no note at all. Never change qualified/non_qualified/ff1/ff2 based on this judgment; always use their normal defaults regardless. If there is also a genuine amount-mismatch concern, append it after a semicolon. Use only plain ASCII characters. No em dashes, no special Unicode symbols, no emoji.
 33. website_address - vendor website if printed on the receipt. Empty string if not found.
 34. envelope_total - the subtotal for THIS envelope only (the "TOTAL (THIS ENVELOPE)" line or equivalent). Plain number, no $ or commas. Include on EVERY row for that envelope. If the PDF has multiple envelopes, each envelope's rows carry that envelope's own subtotal - do NOT use the grand total across all envelopes. Use 0 if no total is visible.
+35. has_hotel_invoice - true if this PDF ALSO contains a hotel invoice/folio ANYWHERE in it (a hotel name/logo, Arrival/Departure dates, a Room Number, and a room-charge breakdown), separate from the normal petty cash content -- false otherwise. This is a simple yes/no observation, not an instruction to extract the hotel data here. Set the SAME value on every row you return for this file.
 
 DESCRIPTION RULES (field 8 — distribution_description):
 
@@ -144,6 +145,7 @@ Return ONLY a valid JSON array using exactly these key names per object:
 custodian_name, env_number, line_number, vendor_name, invoice_number, invoice_date, amount, distribution_description,
 ff1, ff2, je_number, check_number, po_number, home_state, episode, nights, address, city, state, zip,
 proof_of_payment_vendor, proof_of_pc_remittance_crew, received_invoice, sales_tax_on_invoice, active_sales_tax_account,
-withholding, w9, business_license, aicp_code, qualified, non_qualified, notes, website_address, envelope_total
+withholding, w9, business_license, aicp_code, qualified, non_qualified, notes, website_address, envelope_total,
+has_hotel_invoice
 
 No explanation. No markdown. No code fences. JSON array only.
