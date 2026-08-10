@@ -149,6 +149,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Template-Filename", "X-Template-Published-At"],
 )
 
 
