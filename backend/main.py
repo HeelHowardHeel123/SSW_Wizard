@@ -72,11 +72,22 @@ Endpoints
                                      prodco_address, agency_name, work_state, payer_entities,
                                      project_title
                                      returns populated GA State Submission .xlsx download
+  GET    /templates/{id}           → published template bytes (404 if none published), plus
+                                     X-Template-Filename / X-Template-Published-At headers
+  PUT    /templates/{id}           → multipart: file=<xlsx> — publishes a template for every
+                                     user (Wizard 4's "Publish for everyone"), overwriting
+                                     whatever was previously published under this id
+  DELETE /templates/{id}           → un-publishes; everyone reverts to their own IndexedDB
+                                     override (if any) or the bundled default
 
 Environment variables
-  OPENAI_API_KEY     (required for invoices + image-based fringe) your OpenAI key
-  APP_SHARED_SECRET  (optional) if set, callers must send header X-App-Secret
-  ALLOWED_ORIGINS    (optional) comma-separated CORS origins; default "*"
+  OPENAI_API_KEY        (required for invoices + image-based fringe) your OpenAI key
+  APP_SHARED_SECRET     (optional) if set, callers must send header X-App-Secret
+  ALLOWED_ORIGINS       (optional) comma-separated CORS origins; default "*"
+  TEMPLATE_STORAGE_PATH (optional) directory published templates are written to; default
+                        "/data/templates" — must be on a persistent volume (see ssw_wizard-
+                        volume mounted at /data on Railway) or published templates are wiped
+                        on every redeploy
 """
 
 import os
@@ -90,7 +101,7 @@ import asyncio
 import functools
 
 import openpyxl
-from datetime import datetime as _dt
+from datetime import datetime as _dt, timezone as _tz
 
 import fitz  # PyMuPDF
 import pdfplumber
@@ -113,6 +124,7 @@ OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 APP_SHARED_SECRET = os.environ.get("APP_SHARED_SECRET", "")
 ALLOWED_ORIGINS   = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+TEMPLATE_STORAGE_PATH = os.environ.get("TEMPLATE_STORAGE_PATH", "/data/templates")
 
 _PROMPT_PATH                    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoice_extraction_prompt.txt")
 _CREW_FREELANCE_PROMPT_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crew_freelance_prompt.txt")
@@ -4533,6 +4545,101 @@ async def build_ga_workbook(
             "X-Issues":            str(len(issues)),
         },
     )
+
+
+# ── Published Templates ─────────────────────────────────────────────────────
+# Shared, team-wide template storage. Wizard 4 already lets a user override a
+# workbook template in their own browser via IndexedDB, but that never reaches
+# teammates. These endpoints back a "Publish for everyone" option: an uploaded
+# template lands here and every user's fallback chain becomes
+# "my IndexedDB override → published (here) → bundled default". Stored on the
+# ssw_wizard-volume Railway volume (mounted at /data) so a backend redeploy
+# doesn't wipe what's published.
+
+_TEMPLATE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+def _template_paths(template_id: str) -> tuple[str, str]:
+    if not _TEMPLATE_ID_RE.match(template_id):
+        raise HTTPException(400, "template id may only contain letters, numbers, - and _")
+    base = os.path.join(TEMPLATE_STORAGE_PATH, template_id)
+    return base + ".xlsx", base + ".json"
+
+
+@app.get("/templates/{template_id}")
+async def get_template(template_id: str, x_app_secret: str = Header(default="")):
+    """Returns the published template's raw bytes, or 404 if nothing has been
+    published for this id. Original filename and publish time ride along as
+    response headers so the frontend can show them without a second request."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    xlsx_path, meta_path = _template_paths(template_id)
+    if not os.path.exists(xlsx_path):
+        raise HTTPException(404, f"No published template for id '{template_id}'.")
+
+    meta = {}
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {}
+
+    return FileResponse(
+        xlsx_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "X-Template-Filename":     meta.get("filename", f"{template_id}.xlsx"),
+            "X-Template-Published-At": meta.get("published_at", ""),
+        },
+    )
+
+
+@app.put("/templates/{template_id}")
+async def put_template(
+    template_id:  str,
+    file:         UploadFile = File(...),
+    x_app_secret: str        = Header(default=""),
+):
+    """Publishes a template for every user, overwriting whatever was
+    previously published under this id."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    xlsx_path, meta_path = _template_paths(template_id)
+    os.makedirs(TEMPLATE_STORAGE_PATH, exist_ok=True)
+
+    data = await file.read()
+    with open(xlsx_path, "wb") as f:
+        f.write(data)
+
+    meta = {
+        "filename":     file.filename or f"{template_id}.xlsx",
+        "published_at": _dt.now(_tz.utc).isoformat(),
+        "size":         len(data),
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+
+    return meta
+
+
+@app.delete("/templates/{template_id}")
+async def delete_template(template_id: str, x_app_secret: str = Header(default="")):
+    """Un-publishes a template. Every user reverts to their own IndexedDB
+    override (if they have one) or the bundled default."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    xlsx_path, meta_path = _template_paths(template_id)
+    if not os.path.exists(xlsx_path):
+        raise HTTPException(404, f"No published template for id '{template_id}'.")
+
+    os.remove(xlsx_path)
+    if os.path.exists(meta_path):
+        os.remove(meta_path)
+
+    return {"deleted": True}
 
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
