@@ -4041,13 +4041,17 @@ def _raw_list_flags_hotel_invoice(raw_list: list) -> bool:
 def _extract_ga_hotel_blocks(filename: str, data: bytes, client) -> list[dict]:
     """Dedicated detection/extraction pass for the Hotel Charges Summary
     tab -- only called when _raw_list_flags_hotel_invoice comes back true
-    for this file's primary extraction. Returns an empty list if this call
-    itself doesn't find anything after all (rare -- the primary model's
-    flag is a coarse signal, this prompt does the careful block-level
-    resolution). Deliberately does NOT retry with Claude on an empty
-    result the way the primary extraction does: a miss here is lower
-    stakes than a missed primary extraction, which already has its own
-    fallback."""
+    for this file's primary extraction. By the time we're here, the file is
+    already known (via that flag) to actually contain a hotel invoice, so an
+    empty result from THIS pass is a miss, not a correct negative -- unlike
+    the primary extraction's own file population, which is mostly genuine
+    non-hotel content and where "empty = correct" really does hold most of
+    the time. Confirmed via two live test runs where GPT-4o returned an
+    empty array in ~2-3s (no exception, no refusal) for real hotel invoices
+    that a DIFFERENT run's identical call had extracted successfully, i.e.
+    plain non-determinism rather than a content problem. Retries with
+    Claude once before giving up, same as the primary extraction's own
+    empty-result fallback."""
     system_prompt = _load_ga_hotel_prompt()
     user_text = (
         "If this document contains a hotel invoice/folio, extract it per the rules below. "
@@ -4056,8 +4060,17 @@ def _extract_ga_hotel_blocks(filename: str, data: bytes, client) -> list[dict]:
     try:
         raw_list = _extract_petty_cash_from_file(filename, data, system_prompt, client, user_text=user_text)
     except Exception as e:
-        print(f"[_extract_ga_hotel_blocks] {filename}: hotel detection pass failed: {e}", flush=True)
-        return []
+        print(f"[_extract_ga_hotel_blocks] {filename}: GPT-4o hotel pass failed: {e}", flush=True)
+        raw_list = []
+
+    if not raw_list:
+        print(f"[_extract_ga_hotel_blocks] {filename}: GPT-4o found nothing, retrying with Claude", flush=True)
+        try:
+            anthropic_client = _anthropic_client()
+            raw_list = _extract_petty_cash_from_file_claude(filename, data, system_prompt, anthropic_client, user_text=user_text)
+        except Exception as e:
+            print(f"[_extract_ga_hotel_blocks] {filename}: Claude fallback also failed: {e}", flush=True)
+            raw_list = []
 
     if not raw_list:
         return []
