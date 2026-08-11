@@ -13,10 +13,10 @@ Returns
 {
   "by_ssn": {
       ssn_last4: {jobTitle, street, city, zip, resState, daysWorked,
-                  withholdingsIL}   ← formula string "=a+b" when multi-check
+                  withholdingsIL, withholdingsGA}   ← formula string "=a+b" when multi-check
   },
   "by_ssn_invoice": {
-      (ssn_last4, invoice_id): {same fields, withholdingsIL as plain number}
+      (ssn_last4, invoice_id): {same fields, withholdingsIL/withholdingsGA as plain numbers}
   }
 }
 
@@ -60,6 +60,13 @@ _CHECK_LINE_RE = re.compile(
 # IL state tax: "Illinois State Tax $83.77" or "Illinois State Tax Credit $79.31"
 _IL_TAX_RE = re.compile(
     r"Illinois State Tax(?:\s+Credit)?\s+\$([\d,]+\.\d{2})",
+    re.IGNORECASE,
+)
+
+# GA state tax: "Georgia State Tax $60.33" or "Georgia State Tax Credit $..." -- same
+# format/position as the IL line above
+_GA_TAX_RE = re.compile(
+    r"Georgia State Tax(?:\s+Credit)?\s+\$([\d,]+\.\d{2})",
     re.IGNORECASE,
 )
 
@@ -174,7 +181,7 @@ def _parse_employee(emp_lines: list[str]) -> dict | None:
     city, state, zip5 = _parse_city_state_zip(line4)
 
     # Scan all remaining lines for check blocks
-    checks: list[dict] = []  # {invoice_id, days, il_tax}
+    checks: list[dict] = []  # {invoice_id, days, il_tax, ga_tax}
     current_check: dict | None = None
 
     for line in emp_lines[4:]:
@@ -187,6 +194,7 @@ def _parse_employee(emp_lines: list[str]) -> dict | None:
                 "invoice_id": m_check.group(1),
                 "days": int(m_check.group(2)),
                 "il_tax": None,
+                "ga_tax": None,
             }
             continue
 
@@ -198,12 +206,22 @@ def _parse_employee(emp_lines: list[str]) -> dict | None:
             except ValueError:
                 pass
 
+        # GA state tax within current check block
+        m_ga_tax = _GA_TAX_RE.search(line)
+        if m_ga_tax and current_check is not None:
+            try:
+                current_check["ga_tax"] = round(float(m_ga_tax.group(1).replace(",", "")), 2)
+            except ValueError:
+                pass
+
     if current_check is not None:
         checks.append(current_check)
 
     # Build aggregate (for project-level fringe with no invoice number)
     all_il_taxes = [c["il_tax"] for c in checks if c.get("il_tax") is not None]
     aggregate_withholdings = _format_withholdings(all_il_taxes)
+    all_ga_taxes = [c["ga_tax"] for c in checks if c.get("ga_tax") is not None]
+    aggregate_withholdings_ga = _format_withholdings(all_ga_taxes)
 
     base = {
         "jobTitle":  job_title,
@@ -216,10 +234,12 @@ def _parse_employee(emp_lines: list[str]) -> dict | None:
 
     return {
         "ssn_last4":  ssn_last4,
-        "aggregate":  {**base, "withholdingsIL": aggregate_withholdings},
+        "aggregate":  {**base, "withholdingsIL": aggregate_withholdings,
+                       "withholdingsGA": aggregate_withholdings_ga},
         "checks":     [{**base, "invoice_id": c["invoice_id"],
                         "daysWorked": c["days"],
-                        "withholdingsIL": c["il_tax"]} for c in checks],
+                        "withholdingsIL": c["il_tax"],
+                        "withholdingsGA": c["ga_tax"]} for c in checks],
     }
 
 

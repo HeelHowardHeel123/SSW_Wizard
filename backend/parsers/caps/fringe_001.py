@@ -238,6 +238,7 @@ def extract(pdf_bytes: bytes, **_) -> tuple[list[dict], list[str]]:
                 row["jobTitle"]       = enrichment.get("jobTitle", "")
                 row["daysWorked"]     = enrichment.get("daysWorked")
                 row["withholdingsIL"] = enrichment.get("withholdingsIL")
+                row["withholdingsGA"] = enrichment.get("withholdingsGA")
                 row["street"]         = enrichment.get("street", "")
                 row["city"]           = enrichment.get("city", "")
                 row["zip"]            = enrichment.get("zip", "")

@@ -20,6 +20,16 @@ Endpoints
                                     returns {"invoices": [...], "issues": [...]}
   POST /extract-payroll           → multipart: files[]=<pdf>
                                     returns {"rows": [...], "issues": [...]}
+  POST /extract-ga-production-report → multipart: file=<xlsx/xls/csv>
+                                    A payroll company or production-accounting export feeding
+                                    the GA Payroll Report tab. Column names vary a lot between
+                                    productions, so instead of hardcoded column letters this
+                                    maps the file's own header row onto FRINGE_FIELDS (plus
+                                    withholdingsGA/corpTaxGA) via one GPT text call, then
+                                    applies that mapping to every row. Same response shape as
+                                    /extract-payroll so both sources run through one mapper.
+                                    returns {"rows": [...], "issues": [...], "columns": [...],
+                                    "files": [...]}
   POST /extract-billings          → multipart: files[]=<pdf>, vendor_type, vendor_name,
                                     vendor_address, vendor_city, vendor_state, vendor_zip,
                                     prodco_names, work_state
@@ -93,6 +103,7 @@ Environment variables
 import os
 import re
 import io
+import csv
 import json
 import time
 import random
@@ -111,7 +122,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from parsers.base import FRINGE_FIELDS
+from parsers.base import FRINGE_FIELDS, empty_row, parse_amount, clean_fringe_name, _NUMERIC_FIELDS as _FRINGE_NUMERIC_FIELDS
 from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
@@ -1825,6 +1836,207 @@ async def extract_payroll(
     x_app_secret: str = Header(default=""),
 ):
     return await _run_extract(files, x_app_secret, payroll_hints=payroll_hints)
+
+
+# ── GA Production Report (header-mapped spreadsheet, not vision) ────────────
+# A payroll company or production-accounting export feeding the GA Payroll
+# Report tab. Real examples seen: column names, order, and even which of
+# "StartDate"/"EndDate" vs. "First W/E"/"Last W/E" a given payroll company
+# uses vary per production -- there is no fixed column-letter layout to rely
+# on. Rather than hand-maintaining regexes for every variant, this maps the
+# file's own header row onto FRINGE_FIELDS (plus withholdingsGA/corpTaxGA,
+# which FRINGE_FIELDS didn't have a home for until now) via a single GPT
+# text-only call, then applies that mapping to every row mechanically.
+
+_PRODUCTION_REPORT_TARGET_FIELDS = {
+    "worker":         "employee's full name, in any format (e.g. \"Last, First\" or \"First Last\")",
+    "ssn":            "Social Security Number, in any masked/partial format",
+    "startDate":      "the start date of this row's work/pay period (labeled e.g. Start Date, First W/E, FirstWE, Work Start Date)",
+    "endDate":        "the end date of this row's work/pay period (labeled e.g. End Date, Last W/E, LastWE, Work End Date)",
+    "union":          "union code or ID",
+    "workState":      "the 2-letter state the work was performed in",
+    "resState":       "the employee's 2-letter home/residence state",
+    "wages":          "taxable wages / gross wage payment for this row",
+    "reimbRent":      "non-taxable reimbursement, kit rental fee, mileage, or rental amount",
+    "corporate":      "loan-out corporation wages -- ONLY for loan-out/corp payees; regular W-2 wages go in \"wages\" instead",
+    "socSec":         "employer FICA / Social Security tax",
+    "med":            "employer Medicare tax",
+    "futa":           "employer FUTA / Federal Unemployment tax",
+    "sui":            "employer SUI / State Unemployment tax",
+    "wc":             "Workers' Compensation insurance",
+    "phw":            "Pension, Health & Welfare fringe",
+    "vacHol":         "accrued vacation and/or holiday pay",
+    "adv":            "advances",
+    "other":          "other/miscellaneous taxes or fringes not covered by the fields above",
+    "hand":           "handling fee",
+    "total":          "grand total for this row",
+    "loanOutCompany": "the loan-out company / corp name, if this payee is paid through a loan-out corporation",
+    "jobTitle":       "job title / crew position",
+    "daysWorked":     "number of days worked",
+    "withholdingsIL": "Illinois state income tax withheld",
+    "withholdingsGA": "Georgia state income tax withheld (e.g. \"Georgia State Tax\", \"GA SIT\")",
+    "corpTaxGA":      "Georgia CORPORATE tax withheld -- only applies to loan-out corporation payments (e.g. \"Georgia Corp Tax\")",
+    "street":         "home street address",
+    "city":           "home city",
+    "zip":            "home zip code",
+    "invoiceNo":      "invoice number",
+    "invoiceDate":    "invoice date",
+}
+
+
+def _production_report_header_prompt(headers: list[str]) -> str:
+    fields_desc  = "\n".join(f'  "{k}" - {v}' for k, v in _PRODUCTION_REPORT_TARGET_FIELDS.items())
+    headers_list = "\n".join(f"  {i + 1}. {h!r}" for i, h in enumerate(headers))
+    return f"""You are mapping column headers from a payroll company's Production Report spreadsheet onto a fixed set of target field names.
+
+Here are the ACTUAL column headers found in this file, in order:
+{headers_list}
+
+Here are the TARGET field names and what each one means:
+{fields_desc}
+
+For each actual header above, decide which target field name it corresponds to, if any. A header with no reasonable match (e.g. Ethnicity, Gender, a different state's tax withholding, an internal ID column) should map to null -- do not force a match.
+
+A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent". Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: worker, ssn, jobTitle, street, city, zip, invoiceNo, invoiceDate, startDate, endDate, workState, resState, union, loanOutCompany. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
+
+Return ONLY a JSON object with exactly one entry per ACTUAL header listed above, using the header text itself as the key (verbatim, exactly as printed above) and either one of the target field names or null as the value.
+No explanation. No markdown. No code fences. JSON object only."""
+
+
+def _map_production_report_headers(headers: list[str], client) -> dict:
+    prompt = _production_report_header_prompt(headers)
+    try:
+        mapping = _call_gpt_text_json(prompt, client, max_tokens=2048)
+    except Exception:
+        return {}
+    if not isinstance(mapping, dict):
+        return {}
+    return {h: f for h, f in mapping.items() if f in _PRODUCTION_REPORT_TARGET_FIELDS}
+
+
+def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict]]:
+    """Reads an uploaded .xlsx/.xls/.csv Production Report into (headers, rows),
+    where each row is a dict keyed by the file's own original header text."""
+    ext = os.path.splitext(filename or "")[1].lower()
+
+    if ext == ".csv":
+        text = data.decode("utf-8-sig", errors="replace")
+        reader = csv.DictReader(io.StringIO(text))
+        headers = [h.strip() for h in (reader.fieldnames or []) if h and h.strip()]
+        rows = [dict(r) for r in reader]
+        return headers, rows
+
+    if ext == ".xls":
+        raise ValueError(
+            "Legacy .xls files aren't supported -- please re-save as .xlsx or .csv and re-upload."
+        )
+
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    ws = wb.worksheets[0]
+    all_rows = list(ws.iter_rows(values_only=True))
+    if not all_rows:
+        return [], []
+
+    headers = [str(h).strip() if h not in (None, "") else "" for h in all_rows[0]]
+    rows = []
+    for r in all_rows[1:]:
+        if all(v in (None, "") for v in r):
+            continue
+        row = {headers[i]: r[i] for i in range(min(len(headers), len(r))) if headers[i]}
+        rows.append(row)
+    return headers, rows
+
+
+def _format_production_report_value(field: str, value):
+    if value in (None, ""):
+        return None
+    if field in _FRINGE_NUMERIC_FIELDS:
+        return parse_amount(value)
+    if isinstance(value, _dt):
+        return value.strftime("%m/%d/%Y")
+    return str(value).strip()
+
+
+def normalize_production_report_row(raw_row: dict, header_map: dict, filename: str) -> dict:
+    """One source row -> one output row. Numeric fields SUM across every
+    header mapped to them, rather than the last one winning -- real
+    Production Reports commonly spread wages across several distinct pay-code
+    columns (straight-time, overtime, double-time, ...) that all belong under
+    the single "wages" total, and reimbursements similarly (kit rental,
+    mileage, per diem, ... -> "reimbRent")."""
+    row = empty_row()
+    row["payrollCompany"] = "production_report"
+    row["sourceFile"]     = filename
+
+    start_date = end_date = ""
+    for original_header, raw_value in raw_row.items():
+        field = header_map.get(original_header)
+        if not field:
+            continue
+        value = _format_production_report_value(field, raw_value)
+        if value is None:
+            continue
+        if field == "startDate":
+            start_date = value
+        elif field == "endDate":
+            end_date = value
+        elif field == "worker":
+            name = clean_fringe_name(str(value), from_caps=True)
+            row["worker"] = re.sub(r",(?!\s)", ", ", name)
+        elif field in _FRINGE_NUMERIC_FIELDS:
+            row[field] = round((row.get(field) or 0) + value, 2)
+        else:
+            row[field] = value
+
+    if start_date and end_date and start_date != end_date:
+        row["workDates"] = f"{start_date} - {end_date}"
+    elif start_date or end_date:
+        row["workDates"] = start_date or end_date
+
+    if row.get("corporate") or row.get("loanOutCompany"):
+        row["loanOut"] = True
+
+    return row
+
+
+@app.post("/extract-ga-production-report")
+async def extract_ga_production_report(
+    file: UploadFile = File(...),
+    x_app_secret: str = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    data = await file.read()
+    try:
+        headers, raw_rows = _read_tabular_file(file.filename, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read {file.filename}: {e}")
+
+    if not headers or not raw_rows:
+        return {
+            "rows": [], "issues": [f"{file.filename}: no data rows found"],
+            "columns": FRINGE_FIELDS, "files": [],
+        }
+
+    client = _client()
+    header_map = _map_production_report_headers(headers, client)
+
+    issues = []
+    unmapped = [h for h in headers if h and h not in header_map]
+    if unmapped:
+        issues.append(f"{file.filename}: no matching field found for columns: {', '.join(unmapped)}")
+
+    rows = [normalize_production_report_row(r, header_map, file.filename) for r in raw_rows]
+
+    return {
+        "rows":    rows,
+        "issues":  issues,
+        "columns": FRINGE_FIELDS,
+        "files":   [{"filename": file.filename, "row_count": len(rows)}],
+    }
 
 
 # ── Crew freelance invoice extractor ─────────────────────────────────────────

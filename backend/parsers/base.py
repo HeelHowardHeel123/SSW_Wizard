@@ -48,6 +48,10 @@ FRINGE_FIELDS = [
     "jobTitle",       # job title / crew position
     "daysWorked",     # number of days worked on this invoice
     "withholdingsIL", # Illinois state income tax withheld
+    "withholdingsGA", # Georgia state income tax withheld (Georgia State Tax line)
+    "corpTaxGA",      # Georgia corporate tax withheld on loan-out payments -- not visible
+                      # on a per-employee Payroll Register page in any payroll company's
+                      # PDF seen so far; only ever comes from the Production Report path
     "street",         # home street address
     "city",           # home city
     "zip",            # home zip (5-digit)
@@ -65,7 +69,7 @@ _NUMERIC_FIELDS = {
     "socSec", "med", "futa", "sui", "wc", "phw",
     "vacHol", "adv", "other", "benefits", "platFee", "effRate", "hand",
     "total",
-    "daysWorked", "withholdingsIL",
+    "daysWorked", "withholdingsIL", "withholdingsGA", "corpTaxGA",
 }
 
 

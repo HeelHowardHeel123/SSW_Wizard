@@ -14,6 +14,7 @@ Fields extracted per employee:
   zip           - 5-digit home zip
   resState      - residence state abbreviation
   withholdingsIL - Illinois State Tax withheld (null for loan-outs)
+  withholdingsGA - Georgia State Tax withheld (null for loan-outs)
 """
 
 import re
@@ -49,6 +50,9 @@ _JOB_TITLE_RE = re.compile(r"^(.+?)\s+Federal Filing Status:", re.IGNORECASE)
 
 # IL state tax line: "Illinois State Tax 83.77"
 _IL_TAX_RE = re.compile(r"Illinois State Tax\s+([\d,]+\.\d{2})", re.IGNORECASE)
+
+# GA state tax line: "Georgia State Tax 60.33" -- same position/format as the IL line
+_GA_TAX_RE = re.compile(r"Georgia State Tax\s+([\d,]+\.\d{2})", re.IGNORECASE)
 
 # Explicit res state override: "Res State: IL"
 _RES_STATE_RE = re.compile(r"Res State:\s*([A-Z]{2})", re.IGNORECASE)
@@ -124,6 +128,7 @@ def _parse_employee_block(emp_lines: list[str], addr_state: str) -> dict:
     work_dates = ""
     days_worked = 0
     il_tax = None
+    ga_tax = None
     res_state = addr_state
     work_states: set[str] = set()
 
@@ -145,6 +150,13 @@ def _parse_employee_block(emp_lines: list[str], addr_state: str) -> dict:
             except ValueError:
                 pass
 
+        gm = _GA_TAX_RE.search(line)
+        if gm:
+            try:
+                ga_tax = round(float(gm.group(1).replace(",", "")), 2)
+            except ValueError:
+                pass
+
         rm = _RES_STATE_RE.search(line)
         if rm:
             res_state = rm.group(1).upper()
@@ -161,6 +173,7 @@ def _parse_employee_block(emp_lines: list[str], addr_state: str) -> dict:
         "daysWorked":     days_worked if days_worked else None,
         "resState":       res_state,
         "withholdingsIL": il_tax,
+        "withholdingsGA": ga_tax,
         "workState":      work_state,
     }
 

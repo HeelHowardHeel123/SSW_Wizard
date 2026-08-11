@@ -611,6 +611,7 @@ def _enrich_rows(rows: list[dict], register_data: dict) -> None:
         row["jobTitle"]       = enrichment.get("jobTitle", "")
         row["daysWorked"]     = enrichment.get("daysWorked")
         row["withholdingsIL"] = enrichment.get("withholdingsIL")
+        row["withholdingsGA"] = enrichment.get("withholdingsGA")
         row["street"]         = fmt_street_address(enrichment.get("street", ""))
         row["city"]           = enrichment.get("city", "").title()
         row["zip"]            = enrichment.get("zip", "")
