@@ -61,11 +61,19 @@ def _scan():
     _STATIC = sorted(found, key=lambda m: (getattr(m, "PRIORITY", 10), m.__name__))
 
 
-def _page_texts(pdf_bytes: bytes, n: int = 15) -> list[str]:
+def _page_texts(pdf_bytes: bytes) -> list[str]:
+    """Scans every page, not a fixed window -- a large multi-employee CAPS
+    invoice's Payroll Register section (one entry per employee) can push its
+    Fringe Recap Report marker page well past any small fixed limit. Confirmed
+    on real Coke 012 invoices where that marker didn't appear until page 21 and
+    25: a 15-page-limited scan found no candidate parser at all, and the file
+    fell through to the generic AI-guess fallback instead of the CAPS parser
+    that would have handled it correctly (same failure shape as the identical
+    bug fixed in _is_wrapbook_register_only)."""
     texts = []
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for pg in pdf.pages[:n]:
+            for pg in pdf.pages:
                 t = (pg.extract_text() or "").lower()
                 if t.strip():
                     texts.append(t)
