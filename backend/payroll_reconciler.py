@@ -19,8 +19,16 @@ Production Report only, both), with two differences suited to crew data:
 
 This module never touches the .xlsx -- it returns fully-assembled row dicts
 in the same FRINGE_FIELDS shape the two source endpoints already use, plus
-three extra keys (onProductionReport, onInvoicePdf, automationTotal), in
-final sorted order ready to write starting at row 4.
+four extra keys (onProductionReport, onInvoicePdf, automationTotal, aicpCode),
+in final sorted order ready to write starting at row 4.
+
+AICP classification: every row also gets an AICP category (1-25, same list
+and descriptions as the GA AP prompt's aicp_code field) via one batched GPT
+call over the whole reconciled row set, using each row's worker name and job
+description as context. No category is off-limits on this tab -- 22/23/24
+(Georgia Crew/Cast/Extras Hires) will be correct for the vast majority of
+rows here, but that's steering, not a restriction, since an odd case (e.g. a
+per diem paid through payroll instead of AP) is genuinely possible.
 """
 
 import re
@@ -227,6 +235,111 @@ def _resolve_sort_option(sort_option: str, has_pdf: bool, has_report: bool) -> s
     return sort_option
 
 
+# ── AICP classification ───────────────────────────────────────────────────────
+# Same 25-category list as the GA AP prompt's aicp_code field -- no category is
+# off-limits on any tab, this is steering (22/23/24 will be right most of the
+# time here) rather than a restriction.
+
+_AICP_CATEGORIES_TEXT = """1 — Lodging (Hotels, Condos, etc.)
+2 — Car Rental: an actual rental car from a rental company, rented for a specific named individual.
+3 — Transportation/Truck Rentals/Gasoline/Car Services: everything else in ground transportation.
+4 — Airfare Purchase.
+5 — Catering/Crafty.
+6 — Construction Hardware/Lumber/Supplies.
+7 — Office/Production Equipment Rentals and Purchases.
+8 — Camera: Package/Rentals/Expendables.
+9 — Grip/Electric: Package/Rentals/Expendables.
+10 — Sound: Package/Rentals/Walkies/Expendables.
+11 — Set Dressing/Props: Rentals/Purchases/Expendables.
+12 — Wardrobe: Rentals/Purchases/Dry Cleaning/Laundry.
+13 — Makeup/Hair/Special Effects Purchases.
+14 — Location Fees/Permits.
+15 — Facility Rental: Office.
+16 — Facility Rental: Stage/Warehouse.
+17 — Post Editing in Georgia (post-production/editing services with a Georgia vendor address only).
+18 — Original Music Scored.
+19 — Other: catch-all when nothing else fits but you can tell what the payment is for.
+20 — Off-Duty Government Personnel (Police/Fire): only when explicitly off-duty police/fire.
+21 — Security Personnel: default for general security services when off-duty status isn't stated.
+22 — Georgia Crew Hires: below-the-line crew labor (gaffer, grip, PA, etc.) -- the default for a normal payroll wage row.
+23 — Georgia Cast Hires: a credited/principal performer being paid through payroll instead of the Talent pipeline.
+24 — Georgia Extras Hires: a background/extra performer being paid through payroll instead of the Talent pipeline.
+25 — Per Diem Payments Cast & Crew: a flat daily allowance not tied to hours/wages."""
+
+
+def _classify_aicp_codes(rows: list[dict], openai_key: str) -> None:
+    """Assigns row["aicpCode"] (int, or None if unclassifiable) to every row,
+    in place, via one batched GPT call rather than one call per person.
+
+    Best-effort: any failure (no key, API error, malformed response) leaves
+    every row's aicpCode as None rather than raising -- a missing AICP code
+    is something a reviewer can fill in by hand, not worth failing the whole
+    reconciliation over.
+    """
+    for row in rows:
+        row["aicpCode"] = None
+
+    if not rows or not openai_key:
+        return
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=openai_key)
+
+        items = [
+            {
+                "index":       i,
+                "worker":      row.get("worker", ""),
+                "jobTitle":    row.get("jobTitle", ""),
+                "wages":       row.get("wages"),
+                "total":       row.get("total"),
+            }
+            for i, row in enumerate(rows)
+        ]
+
+        prompt = (
+            "You are classifying rows on a Georgia film production's Crew Payroll Report "
+            "by AICP category, for the state tax incentive submission.\n\n"
+            "Pick the single best-matching AICP category number for each row below, using "
+            "this list:\n"
+            f"{_AICP_CATEGORIES_TEXT}\n\n"
+            "On this tab, categories 22, 23, and 24 (Georgia Crew/Cast/Extras Hires) will be "
+            "correct for the large majority of rows -- most rows are simply below-the-line "
+            "crew being paid regular wages (22). But this is steering, not a restriction: if a "
+            "row's job title clearly indicates something else (a flat per diem with no hours "
+            "tied to it -- 25; or genuinely a different category if the data clearly shows it), "
+            "use the correct one instead of defaulting to 22.\n\n"
+            "Rows to classify:\n"
+            f"{json.dumps(items, indent=2)}\n\n"
+            "Return ONLY a JSON object mapping each row's index (as a string) to its AICP "
+            'category number (an integer): {"0": 22, "1": 25, ...}\n'
+            "Every index above must appear in your response. No explanation. No markdown. "
+            "No code fences. JSON object only."
+        )
+
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+        raw = json.loads(resp.choices[0].message.content)
+        if not isinstance(raw, dict):
+            return
+
+        for key, val in raw.items():
+            try:
+                idx = int(key)
+                code = int(val)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < len(rows) and 1 <= code <= 25:
+                rows[idx]["aicpCode"] = code
+    except Exception:
+        pass  # leave every aicpCode as None -- reviewable by hand, not fatal
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def reconcile_payroll(
@@ -337,5 +450,7 @@ def reconcile_payroll(
         _sort_by_effective(final_entries)
 
     final_rows = [e["row"] for e in final_entries]
+
+    _classify_aicp_codes(final_rows, openai_key)
 
     return {"rows": final_rows, "issues": issues}

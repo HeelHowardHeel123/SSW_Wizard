@@ -91,11 +91,13 @@ FIELDS — return exactly these key names:
     16 — Facility Rental: Stage/Warehouse.
     17 — Post Editing in Georgia: only when the invoice is for post-production/editing services AND the vendor's address is in Georgia (state is GA).
     18 — Original Music Scored.
-    19 — Other: the catch-all for an invoice that clearly doesn't fit any other category on this list -- use this instead of leaving aicp_code null whenever you can tell what the invoice is for but it just isn't covered above (e.g. a plain freelance crew labor invoice, since categories 22-24 below are out of scope).
+    19 — Other: the catch-all for an invoice that clearly doesn't fit any other category on this list -- use this instead of leaving aicp_code null whenever you can tell what the invoice is for but it just isn't covered above.
     20 — Off-Duty Government Personnel (Police/Fire): only when the invoice explicitly states the security personnel are off-duty police/fire.
     21 — Security Personnel: the default for a general security services invoice when off-duty government status is not explicitly stated.
+    22 — Georgia Crew Hires: this invoice is for one individual's below-the-line labor (a crew role -- gaffer, grip, PA, etc.), being paid through AP instead of a payroll report.
+    23 — Georgia Cast Hires: this invoice is for a credited/principal performer's services, being paid through AP instead of the Talent pipeline.
+    24 — Georgia Extras Hires: this invoice is for a background/extra performer, being paid through AP instead of the Talent pipeline.
     25 — Per Diem Payments Cast & Crew: a flat daily allowance paid directly to a cast or crew member, not tied to hours/wages. Pair this with ff1 = "PD2" by default, or "PD1" only if this PDF confirms the recipient is above the line (see ff1 above).
-    Categories 22, 23, and 24 (Georgia Crew Hires, Georgia Cast Hires, Georgia Extras Hires) are out of scope for now -- never assign them.
     Leave aicp_code null only when the invoice is genuinely too unclear/unreadable to tell what it's for at all -- prefer 19 (Other) over null whenever you can identify the invoice's purpose.
 34. qualified — leave blank. Always return empty string.
 35. labor — true if this invoice is primarily for human labor or personal services: crew member invoices, freelance individuals, loan-out corporations, casting fees, staffing agencies, talent agencies. false for goods, equipment rentals, facilities, catering, transportation, and all other non-labor vendor invoices. This field is not written to the submission workbook but is used downstream for tab routing.
