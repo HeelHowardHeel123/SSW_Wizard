@@ -1579,11 +1579,19 @@ def _is_wrapbook_register_only(pdf_bytes: bytes) -> bool:
     A standalone register has 'Payroll Register' pages but no 'Fringe Report' pages.
     These are uploaded alongside fringe PDFs so their IL withholding data can enrich
     the project-level fringe rows (which have no invoice number).
+
+    Scans every page, not just the first N -- a large multi-employee CAPS invoice
+    puts its own Payroll Register section (one entry per employee) before its
+    Fringe Recap Report page, and that register section alone can run well past
+    10 pages on a big invoice. Confirmed on real Coke 012 invoices where Fringe
+    Recap didn't start until page 12, 21, and 25 -- a page-limited scan found the
+    register, never found the fringe page, and misclassified the whole invoice as
+    a standalone register, silently dropping every row it would have produced.
     """
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             has_register = has_fringe = False
-            for pg in pdf.pages[:10]:
+            for pg in pdf.pages:
                 text = (pg.extract_text() or "").lower()
                 if "payroll register" in text and "xxx-xx-" in text:
                     has_register = True
