@@ -30,6 +30,19 @@ Endpoints
                                     /extract-payroll so both sources run through one mapper.
                                     returns {"rows": [...], "issues": [...], "columns": [...],
                                     "files": [...]}
+  POST /reconcile-ga-payroll       → JSON: {pdf_rows: [...], production_report_rows: [...],
+                                    sort_option: "name_invoice"|"invoice_pdf_layout"|
+                                    "production_report_layout"}
+                                    Matches already-extracted PDF rows against already-extracted
+                                    Production Report rows by invoice number (SSN last-4, then
+                                    normalized name, then an LLM fuzzy fallback), flags which
+                                    source(s) each person came from, and returns the combined
+                                    list in the requested order. Production Report always wins
+                                    on financial values when a person matches both sides; the
+                                    PDF's own total only ever feeds the Automation Total
+                                    cross-check column. No file uploads -- reconciles rows the
+                                    frontend already has from its two other calls.
+                                    returns {"rows": [...], "issues": [...]}
   POST /extract-billings          → multipart: files[]=<pdf>, vendor_type, vendor_name,
                                     vendor_address, vendor_city, vendor_state, vendor_zip,
                                     prodco_names, work_state
@@ -123,6 +136,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from parsers.base import FRINGE_FIELDS, empty_row, parse_amount, clean_fringe_name, _NUMERIC_FIELDS as _FRINGE_NUMERIC_FIELDS
+from payroll_reconciler import reconcile_payroll
 from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
@@ -2045,6 +2059,35 @@ async def extract_ga_production_report(
         "columns": FRINGE_FIELDS,
         "files":   [{"filename": file.filename, "row_count": len(rows)}],
     }
+
+
+class ReconcilePayrollRequest(BaseModel):
+    pdf_rows:               list[dict] = []
+    production_report_rows: list[dict] = []
+    sort_option:            str        = "invoice_pdf_layout"
+
+
+@app.post("/reconcile-ga-payroll")
+async def reconcile_ga_payroll(
+    body:         ReconcilePayrollRequest,
+    x_app_secret: str = Header(default=""),
+):
+    """Matches already-extracted PDF rows (from /extract-fringe) against
+    already-extracted Production Report rows (from
+    /extract-ga-production-report) by invoice number, flags which source(s)
+    each person came from, and returns the combined list in the requested
+    sort order. No file uploads here -- the frontend already has both row
+    sets from its two earlier calls; this just reconciles and orders them.
+    """
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    return reconcile_payroll(
+        body.pdf_rows,
+        body.production_report_rows,
+        body.sort_option,
+        OPENAI_API_KEY,
+    )
 
 
 # ── Crew freelance invoice extractor ─────────────────────────────────────────
