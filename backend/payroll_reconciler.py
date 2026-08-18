@@ -13,9 +13,11 @@ Production Report only, both), with two differences suited to crew data:
     reliably; Talent invoices/PTIP mostly don't), before falling back to
     normalized-name matching.
   - Financial precedence is simpler than Talent's split rule: the Production
-    Report always wins on dollar values when a person matches both sides.
-    The PDF's own total is only ever used for the Automation Total
-    cross-check column, never written into the row's real financial columns.
+    Report always wins on any field it actually has a value for, when a
+    person matches both sides. The PDF only fills in fields the Production
+    Report left blank -- it never overrides a value the Production Report
+    did provide. The PDF's own total is separately used for the Automation
+    Total cross-check column regardless.
 
 This module never touches the .xlsx -- it returns fully-assembled row dicts
 in the same FRINGE_FIELDS shape the two source endpoints already use, plus
@@ -383,7 +385,12 @@ def reconcile_payroll(
         for pi, ri in pairs:
             p_idx, p_row = pdf_list[pi]
             r_idx, r_row = report_list[ri]
-            row = dict(r_row)  # Production Report wins on every financial/identity field
+            row = dict(r_row)  # Production Report wins on every field it actually has a value for
+            for field, value in p_row.items():
+                if field in ("worker", "invoiceNo"):
+                    continue  # matching keys -- Production Report's own spelling wins outright
+                if row.get(field) in (None, "") and value not in (None, ""):
+                    row[field] = value  # PDF fills in whatever the Production Report left blank
             row["onProductionReport"] = True
             row["onInvoicePdf"]       = True
             row["automationTotal"]    = p_row.get("total")

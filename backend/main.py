@@ -1873,8 +1873,10 @@ async def extract_payroll(
 _PRODUCTION_REPORT_TARGET_FIELDS = {
     "worker":         "employee's full name, in any format (e.g. \"Last, First\" or \"First Last\")",
     "ssn":            "Social Security Number, in any masked/partial format",
-    "startDate":      "the start date of this row's work/pay period (labeled e.g. Start Date, First W/E, FirstWE, Work Start Date)",
-    "endDate":        "the end date of this row's work/pay period (labeled e.g. End Date, Last W/E, LastWE, Work End Date)",
+    "weStart":        "the PAY PERIOD / WEEK-ENDING start date for this row (labeled e.g. First W/E, FirstWE, Week Ending Start) -- NOT the actual day work began",
+    "weEnd":          "the PAY PERIOD / WEEK-ENDING end date for this row (labeled e.g. Last W/E, LastWE, Week Ending End) -- NOT the actual day work ended",
+    "startDate":      "the actual date this row's work/shift STARTED (labeled e.g. Start Date, Work Start Date, Dates Worked start) -- NOT a pay-period week-ending date",
+    "endDate":        "the actual date this row's work/shift ENDED (labeled e.g. End Date, Work End Date, Dates Worked end) -- NOT a pay-period week-ending date",
     "union":          "union code or ID",
     "workState":      "the 2-letter state the work was performed in",
     "resState":       "the employee's 2-letter home/residence state",
@@ -1919,7 +1921,9 @@ Here are the TARGET field names and what each one means:
 
 For each actual header above, decide which target field name it corresponds to, if any. A header with no reasonable match (e.g. Ethnicity, Gender, a different state's tax withholding, an internal ID column) should map to null -- do not force a match.
 
-A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent". Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: worker, ssn, jobTitle, street, city, zip, invoiceNo, invoiceDate, startDate, endDate, workState, resState, union, loanOutCompany. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
+A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent". Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: worker, ssn, jobTitle, street, city, zip, invoiceNo, invoiceDate, weStart, weEnd, startDate, endDate, workState, resState, union, loanOutCompany. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
+
+"weStart"/"weEnd" and "startDate"/"endDate" are two DIFFERENT date pairs that can both appear in the same report -- do not conflate them. A report may have both a pay-period week-ending pair (First W/E / Last W/E) AND an actual-work-date pair (Start Date / End Date) as separate columns; map each to its own correct field rather than picking just one pair to use.
 
 Every numeric target field above (wages, reimbRent, corporate, socSec, med, futa, sui, wc, phw, vacHol, adv, other, hand, total, withholdingsIL, withholdingsGA, corpTaxGA) means an actual DOLLAR AMOUNT for this row. Never map a column that is a RATE (e.g. "BaseRate", "HourlyRate", "Rate") or a COUNT/QUANTITY (e.g. "TotalHoursWorked", "Hours", "Units", "Days") to any of these dollar fields, even though it was used to calculate the wage -- those columns must map to null. Only an already-computed dollar total (e.g. "10 - STRAIGHT-TIME", "915 - OVERTIME") belongs in "wages".
 
@@ -1974,6 +1978,12 @@ def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict
 def _format_production_report_value(field: str, value):
     if value in (None, ""):
         return None
+    if isinstance(value, str) and value.strip().upper() == "NULL":
+        # Some payroll companies' exports write the literal text "NULL" into
+        # a cell instead of leaving it blank -- treat it exactly like an
+        # empty cell everywhere, or it reads as real data (e.g. a truthy
+        # "loanOutCompany" string that isn't actually a company name).
+        return None
     if field in _FRINGE_NUMERIC_FIELDS:
         return parse_amount(value)
     if isinstance(value, _dt):
@@ -1992,7 +2002,7 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
     row["payrollCompany"] = "production_report"
     row["sourceFile"]     = filename
 
-    start_date = end_date = ""
+    we_start = we_end = start_date = end_date = ""
     for original_header, raw_value in raw_row.items():
         field = header_map.get(original_header)
         if not field:
@@ -2000,7 +2010,11 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
         value = _format_production_report_value(field, raw_value)
         if value is None:
             continue
-        if field == "startDate":
+        if field == "weStart":
+            we_start = value
+        elif field == "weEnd":
+            we_end = value
+        elif field == "startDate":
             start_date = value
         elif field == "endDate":
             end_date = value
@@ -2012,10 +2026,13 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
         else:
             row[field] = value
 
-    if start_date and end_date and start_date != end_date:
-        row["workDates"] = f"{start_date} - {end_date}"
-    elif start_date or end_date:
-        row["workDates"] = start_date or end_date
+    # Prefer the pay-period week-ending pair when present; only fall back to
+    # actual work dates if the report never gave us week-ending dates at all.
+    range_start, range_end = (we_start, we_end) if (we_start or we_end) else (start_date, end_date)
+    if range_start and range_end and range_start != range_end:
+        row["workDates"] = f"{range_start} - {range_end}"
+    elif range_start or range_end:
+        row["workDates"] = range_start or range_end
 
     if row.get("corporate") or row.get("loanOutCompany"):
         row["loanOut"] = True
