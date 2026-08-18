@@ -367,6 +367,21 @@ def _classify_aicp_codes(rows: list[dict], openai_key: str) -> None:
 # group's totals into one Automation Total to compare against the
 # Production Report's single already-aggregated figure.
 
+def _format_invoice_breakdown(group: list[dict]) -> str:
+    """"Invoices: 330535 ($1,401.16), 332355 ($1,985.12)" -- a person-level
+    matched row has no invoice-number field of its own (that's the whole
+    point of this mode), so this is the only place the underlying per-invoice
+    breakdown that fed its Automation Total is still visible. Sums by
+    invoice in case a person has more than one PDF line item within the
+    same invoice."""
+    totals: dict[str, float] = defaultdict(float)
+    for p_row in group:
+        inv = _norm_invoice(p_row.get("invoiceNo")) or "?"
+        totals[inv] += p_row.get("total") or 0
+    parts = [f"{inv} (${amt:,.2f})" for inv, amt in sorted(totals.items(), key=lambda kv: kv[0].zfill(20))]
+    return "Invoices: " + ", ".join(parts)
+
+
 def _reconcile_person_level(
     pdf_rows: list[dict],
     production_report_rows: list[dict],
@@ -405,6 +420,7 @@ def _reconcile_person_level(
             row["onProductionReport"] = True
             row["onInvoicePdf"]       = True
             row["automationTotal"]    = round(sum((p.get("total") or 0) for p in group), 2)
+            row["notes"]              = _format_invoice_breakdown(group)
         else:
             row["onProductionReport"] = True
             row["onInvoicePdf"]       = False
@@ -446,6 +462,7 @@ def _reconcile_person_level(
                             row[field] = value
                 row["onInvoicePdf"]    = True
                 row["automationTotal"] = round(sum((p.get("total") or 0) for p in group), 2)
+                row["notes"]           = _format_invoice_breakdown(group)
 
     pdf_only_out: list[dict] = []
     for key, group in pdf_groups.items():
