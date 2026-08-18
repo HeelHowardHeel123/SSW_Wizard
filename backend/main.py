@@ -1905,7 +1905,7 @@ _PRODUCTION_REPORT_TARGET_FIELDS = {
     "street":         "home street address",
     "city":           "home city",
     "zip":            "home zip code",
-    "invoiceNo":      "invoice number",
+    "invoiceNo":      "the invoice/pay-run/batch number this row's payment belongs to -- often NOT literally labeled \"Invoice Number\". Payroll-system exports commonly call this \"Payroll ID\", \"Batch ID\", \"Pay Run ID\", or similar -- any column whose value is shared by every OTHER person paid in that same run is this field, even if its header doesn't say \"invoice\". If the file also has a separate per-line-item id (e.g. \"Payment ID\", unique to every single row, never repeated), that one is NOT invoiceNo -- it identifies one wage/expense line, not the batch.",
     "invoiceDate":    "invoice date",
 }
 
