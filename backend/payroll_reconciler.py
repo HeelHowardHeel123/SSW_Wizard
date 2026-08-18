@@ -369,8 +369,8 @@ def reconcile_payroll(
         key=lambda x: x.zfill(20),
     )
 
-    matched_rows:   list[dict] = []
-    unmatched_rows: list[dict] = []
+    report_rows:   list[dict] = []  # has a Production Report row: matched + report-only
+    pdf_only_rows: list[dict] = []  # exists ONLY on a PDF, no Production Report row at all
 
     for inv_no in all_invoices:
         pdf_list    = list(pdf_by_invoice.get(inv_no, []))
@@ -387,7 +387,7 @@ def reconcile_payroll(
             row["onProductionReport"] = True
             row["onInvoicePdf"]       = True
             row["automationTotal"]    = p_row.get("total")
-            matched_rows.append({"row": row, "pdf_idx": p_idx, "report_idx": r_idx})
+            report_rows.append({"row": row, "pdf_idx": p_idx, "report_idx": r_idx})
 
         for ri, (r_idx, r_row) in enumerate(report_list):
             if ri in report_consumed:
@@ -396,7 +396,7 @@ def reconcile_payroll(
             row["onProductionReport"] = True
             row["onInvoicePdf"]       = False
             row["automationTotal"]    = None
-            unmatched_rows.append({"row": row, "pdf_idx": None, "report_idx": r_idx})
+            report_rows.append({"row": row, "pdf_idx": None, "report_idx": r_idx})
             if pdf_list:
                 issues.append(
                     f"Invoice {inv_no}: {r_row.get('worker', '(unnamed)')} is on the "
@@ -413,7 +413,7 @@ def reconcile_payroll(
             reason = llm_reasons.get(p_row.get("worker", ""), "")
             if reason:
                 row["notes"] = (row.get("notes") or "") or f"[no Production Report match] {reason}"
-            unmatched_rows.append({"row": row, "pdf_idx": p_idx, "report_idx": None})
+            pdf_only_rows.append({"row": row, "pdf_idx": p_idx, "report_idx": None})
             if report_list:
                 issues.append(
                     f"Invoice {inv_no}: {p_row.get('worker', '(unnamed)')} is on the "
@@ -434,19 +434,21 @@ def reconcile_payroll(
             entries.sort(key=_sort_key_invoice_pdf_layout)
 
     if has_pdf and has_report:
-        # Real reconciliation: sort the matched rows per the chosen layout,
-        # then append the (hopefully few) unmatched stragglers at the end,
-        # grouped together and sorted by name so they're easy to spot for
-        # review -- this is the "something doesn't line up" case.
-        _sort_by_effective(matched_rows)
-        unmatched_rows.sort(key=lambda e: _normalize_name(e["row"].get("worker")))
-        final_entries = matched_rows + unmatched_rows
+        # Real reconciliation: everything with a Production Report row --
+        # matched or not -- has a real name/invoice/position to sort by, so
+        # it all sorts together per the chosen layout. Only rows that exist
+        # EXCLUSIVELY on a PDF, with no Production Report row at all, get
+        # pushed to the end as the "needs review" bucket, grouped together
+        # and sorted by name so they're easy to spot.
+        _sort_by_effective(report_rows)
+        pdf_only_rows.sort(key=lambda e: _normalize_name(e["row"].get("worker")))
+        final_entries = report_rows + pdf_only_rows
     else:
         # Only one source was ever provided -- there's nothing to reconcile,
-        # so every row ends up in unmatched_rows trivially. Treating that as
-        # a "needs review" bucket would be wrong here: sort the whole list
-        # per the resolved layout instead of forcing alphabetical order.
-        final_entries = matched_rows + unmatched_rows
+        # so every row ends up in one list or the other trivially. Sort the
+        # whole thing per the resolved layout instead of forcing alphabetical
+        # order.
+        final_entries = report_rows + pdf_only_rows
         _sort_by_effective(final_entries)
 
     final_rows = [e["row"] for e in final_entries]
