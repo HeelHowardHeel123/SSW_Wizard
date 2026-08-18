@@ -1893,13 +1893,15 @@ _PRODUCTION_REPORT_TARGET_FIELDS = {
     "adv":            "advances",
     "other":          "other/miscellaneous taxes or fringes not covered by the fields above",
     "hand":           "handling fee",
+    "platFee":        "payroll platform / processing fee (e.g. \"Platform Fee\", \"Plat Fee\")",
     "total":          "grand total for this row",
     "loanOutCompany": "the loan-out company / corp name, if this payee is paid through a loan-out corporation",
     "jobTitle":       "job title / crew position",
     "daysWorked":     "number of days worked",
     "withholdingsIL": "Illinois state income tax withheld",
-    "withholdingsGA": "Georgia state income tax withheld (e.g. \"Georgia State Tax\", \"GA SIT\")",
-    "corpTaxGA":      "Georgia CORPORATE tax withheld -- only applies to loan-out corporation payments (e.g. \"Georgia Corp Tax\")",
+    "withholdingsGA": "Georgia state income tax withheld (e.g. \"Georgia State Tax\", \"GA SIT\", \"GA Employee Income Tax\")",
+    "corpTaxGA":      "Georgia CORPORATE/loan-out tax withheld -- only applies to loan-out corporation payments (e.g. \"Georgia Corp Tax\", \"GA Loan-out Income Tax\")",
+    "loanOutIndicator": "a column whose NONZERO value indicates this row is a loan-out/corporate payment, for any state OTHER than Georgia (e.g. \"HI Loan-out Income Tax\", \"NC Loan-out Income Tax\", \"LA Loan-out Income Tax\") -- map every such column here regardless of state, EXCEPT Georgia's own loan-out tax column, which goes in \"corpTaxGA\" instead since we track its real dollar amount",
     "street":         "home street address",
     "city":           "home city",
     "zip":            "home zip code",
@@ -1919,13 +1921,15 @@ Here are the ACTUAL column headers found in this file, in order:
 Here are the TARGET field names and what each one means:
 {fields_desc}
 
-For each actual header above, decide which target field name it corresponds to, if any. A header with no reasonable match (e.g. Ethnicity, Gender, a different state's tax withholding, an internal ID column) should map to null -- do not force a match.
+For each actual header above, decide which target field name it corresponds to, if any. A header with no reasonable match (e.g. Ethnicity, Gender, a different state's regular EMPLOYEE income tax withholding, an internal ID column) should map to null -- do not force a match. The one exception: a different state's LOAN-OUT income tax column (e.g. "HI Loan-out Income Tax", "NC Loan-out Income Tax") is NOT a no-match -- it maps to "loanOutIndicator" (see below), even though we don't care about that state's regular employee tax column.
 
 A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent". Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: worker, ssn, jobTitle, street, city, zip, invoiceNo, invoiceDate, weStart, weEnd, startDate, endDate, workState, resState, union, loanOutCompany. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
 
 "weStart"/"weEnd" and "startDate"/"endDate" are two DIFFERENT date pairs that can both appear in the same report -- do not conflate them. A report may have both a pay-period week-ending pair (First W/E / Last W/E) AND an actual-work-date pair (Start Date / End Date) as separate columns; map each to its own correct field rather than picking just one pair to use.
 
-Every numeric target field above (wages, reimbRent, corporate, socSec, med, futa, sui, wc, phw, vacHol, adv, other, hand, total, withholdingsIL, withholdingsGA, corpTaxGA) means an actual DOLLAR AMOUNT for this row. Never map a column that is a RATE (e.g. "BaseRate", "HourlyRate", "Rate") or a COUNT/QUANTITY (e.g. "TotalHoursWorked", "Hours", "Units", "Days") to any of these dollar fields, even though it was used to calculate the wage -- those columns must map to null. Only an already-computed dollar total (e.g. "10 - STRAIGHT-TIME", "915 - OVERTIME") belongs in "wages".
+Every numeric target field above (wages, reimbRent, corporate, socSec, med, futa, sui, wc, phw, vacHol, adv, other, hand, platFee, total, withholdingsIL, withholdingsGA, corpTaxGA, loanOutIndicator) means an actual DOLLAR AMOUNT for this row. Never map a column that is a RATE (e.g. "BaseRate", "HourlyRate", "Rate") or a COUNT/QUANTITY (e.g. "TotalHoursWorked", "Hours", "Units", "Days") to any of these dollar fields, even though it was used to calculate the wage -- those columns must map to null. Only an already-computed dollar total (e.g. "10 - STRAIGHT-TIME", "915 - OVERTIME") belongs in "wages".
+
+"loanOutIndicator" is a detection-only field, not a real dollar total anyone will see -- map EVERY state's Loan-out Income Tax column (except Georgia's, which goes to "corpTaxGA" instead) to it, summed together, purely so a nonzero sum can flag the row as a loan-out payment.
 
 Return ONLY a JSON object with exactly one entry per ACTUAL header listed above, using the header text itself as the key (verbatim, exactly as printed above) and either one of the target field names or null as the value.
 No explanation. No markdown. No code fences. JSON object only."""
@@ -2003,9 +2007,15 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
     row["sourceFile"]     = filename
 
     we_start = we_end = start_date = end_date = ""
+    loan_out_indicator_sum = 0.0
     for original_header, raw_value in raw_row.items():
         field = header_map.get(original_header)
         if not field:
+            continue
+        if field == "loanOutIndicator":
+            amt = parse_amount(raw_value)
+            if amt:
+                loan_out_indicator_sum += amt
             continue
         value = _format_production_report_value(field, raw_value)
         if value is None:
@@ -2019,12 +2029,25 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
         elif field == "endDate":
             end_date = value
         elif field == "worker":
-            name = clean_fringe_name(str(value), from_caps=True)
+            raw_name = str(value)
+            # Only re-title-case genuinely ALL-CAPS names (e.g. CAPS's own
+            # exports) -- forcing .title() on an already-mixed-case name
+            # like "Kevin DeMunn" would corrupt it to "Kevin Demunn".
+            name = clean_fringe_name(raw_name, from_caps=raw_name.isupper())
             row["worker"] = re.sub(r",(?!\s)", ", ", name)
         elif field in _FRINGE_NUMERIC_FIELDS:
             row[field] = round((row.get(field) or 0) + value, 2)
         else:
             row[field] = value
+
+    # Loan-out determination: default NO unless something explicitly says
+    # otherwise. Georgia's own loan-out tax lands in corpTaxGA (a real,
+    # usable dollar figure), so a nonzero corpTaxGA counts on its own --
+    # every OTHER state's loan-out tax column only ever feeds the generic
+    # indicator sum above, since we don't track those states' corp tax as
+    # a real field.
+    if row.get("corporate") or row.get("loanOutCompany") or row.get("corpTaxGA") or loan_out_indicator_sum:
+        row["loanOut"] = True
 
     # Prefer the pay-period week-ending pair when present; only fall back to
     # actual work dates if the report never gave us week-ending dates at all.

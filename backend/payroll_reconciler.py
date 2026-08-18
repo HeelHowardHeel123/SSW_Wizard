@@ -31,6 +31,16 @@ description as context. No category is off-limits on this tab -- 22/23/24
 (Georgia Crew/Cast/Extras Hires) will be correct for the vast majority of
 rows here, but that's steering, not a restriction, since an odd case (e.g. a
 per diem paid through payroll instead of AP) is genuinely possible.
+
+A second reconciliation mode exists for "consolidated" Production Reports
+(one row per person for the WHOLE project, every pay period pre-summed, no
+invoice-number column at all -- seen from some payroll companies alongside
+their normal per-invoice "expanded" export of the same data). There's
+nothing to group by invoice in that shape, so _reconcile_person_level matches
+a person against every one of their PDF rows across every invoice instead of
+one invoice at a time, and sums the whole group into a single Automation
+Total. Dispatch between the two modes is automatic: if no Production Report
+row anywhere has an invoice number, it's treated as consolidated.
 """
 
 import re
@@ -53,8 +63,13 @@ def _ssn_last4(v) -> str:
 
 
 def _normalize_name(name: str) -> str:
+    """Word-order-insensitive so "DeMunn, Kevin" (Last, First -- how PDFs
+    format it) and "Kevin DeMunn" (First Last -- how some Production
+    Reports, e.g. PGC 005's Expanded report, format it with no SSN column
+    to fall back on) still compare equal."""
     clean = re.sub(r"[.,']", "", str(name or "").lower()).strip()
-    return re.sub(r"\s+", " ", clean)
+    clean = re.sub(r"\s+", " ", clean)
+    return " ".join(sorted(clean.split()))
 
 
 # ── LLM fuzzy-match fallback ──────────────────────────────────────────────────
@@ -342,6 +357,123 @@ def _classify_aicp_codes(rows: list[dict], openai_key: str) -> None:
         pass  # leave every aicpCode as None -- reviewable by hand, not fatal
 
 
+# ── Person-level reconciliation (no invoice numbers at all) ────────────────────
+# Some payroll companies' "consolidated" Production Reports (e.g. PGC 005's
+# "2) Consolidated") have exactly one row per person for the WHOLE project --
+# every pay period already summed together, with no invoice-number-equivalent
+# column at all. The per-invoice matcher above can't apply to that (there's
+# nothing to group invoices by), so this is a separate mode: match a person
+# against every PDF row of theirs across every invoice, and sum the whole
+# group's totals into one Automation Total to compare against the
+# Production Report's single already-aggregated figure.
+
+def _reconcile_person_level(
+    pdf_rows: list[dict],
+    production_report_rows: list[dict],
+    openai_key: str,
+) -> dict:
+    issues: list[str] = []
+
+    pdf_groups: dict[str, list[dict]] = defaultdict(list)
+    for row in pdf_rows:
+        key = _ssn_last4(row.get("ssn")) or _normalize_name(row.get("worker"))
+        if key:
+            pdf_groups[key].append(row)
+
+    consumed: set[str] = set()
+    report_out: list[dict] = []
+
+    for r_row in production_report_rows:
+        r_ssn  = _ssn_last4(r_row.get("ssn"))
+        r_name = _normalize_name(r_row.get("worker"))
+        group_key = None
+        if r_ssn and r_ssn in pdf_groups and r_ssn not in consumed:
+            group_key = r_ssn
+        elif r_name in pdf_groups and r_name not in consumed:
+            group_key = r_name
+
+        row = dict(r_row)
+        if group_key:
+            consumed.add(group_key)
+            group = pdf_groups[group_key]
+            for p_row in group:
+                for field, value in p_row.items():
+                    if field in ("worker", "invoiceNo"):
+                        continue
+                    if row.get(field) in (None, "") and value not in (None, ""):
+                        row[field] = value
+            row["onProductionReport"] = True
+            row["onInvoicePdf"]       = True
+            row["automationTotal"]    = round(sum((p.get("total") or 0) for p in group), 2)
+        else:
+            row["onProductionReport"] = True
+            row["onInvoicePdf"]       = False
+            row["automationTotal"]    = None
+            issues.append(
+                f"{r_row.get('worker', '(unnamed)')} is on the Production Report "
+                "but no matching PDF invoice(s) were found across the whole batch."
+            )
+        report_out.append(row)
+
+    # LLM fuzzy fallback for anything still unmatched -- safe to run globally
+    # here (unlike the per-invoice matcher, which only fires once an invoice
+    # already has a confirmed pairing) since there's only one scope, the
+    # whole project, so there's no wrong-invoice cross-matching risk.
+    if openai_key:
+        remaining_report_idx = [
+            i for i, r in enumerate(report_out) if not r["onInvoicePdf"]
+        ]
+        remaining_pdf_keys = [k for k in pdf_groups if k not in consumed]
+        if remaining_report_idx and remaining_pdf_keys:
+            report_names = [report_out[i].get("worker", "") for i in remaining_report_idx]
+            pdf_names    = [pdf_groups[k][0].get("worker", "") for k in remaining_pdf_keys]
+            matches, _ = _llm_fuzzy_match_payroll(pdf_names, report_names, openai_key)
+            name_to_key   = {pdf_groups[k][0].get("worker", ""): k for k in remaining_pdf_keys}
+            name_to_ridx  = {report_out[i].get("worker", ""): i for i in remaining_report_idx}
+            for pdf_name, report_name in matches.items():
+                key  = name_to_key.get(pdf_name)
+                ridx = name_to_ridx.get(report_name)
+                if key is None or ridx is None or key in consumed:
+                    continue
+                consumed.add(key)
+                group = pdf_groups[key]
+                row = report_out[ridx]
+                for p_row in group:
+                    for field, value in p_row.items():
+                        if field in ("worker", "invoiceNo"):
+                            continue
+                        if row.get(field) in (None, "") and value not in (None, ""):
+                            row[field] = value
+                row["onInvoicePdf"]    = True
+                row["automationTotal"] = round(sum((p.get("total") or 0) for p in group), 2)
+
+    pdf_only_out: list[dict] = []
+    for key, group in pdf_groups.items():
+        if key in consumed:
+            continue
+        for p_row in group:
+            row = dict(p_row)
+            row["onProductionReport"] = False
+            row["onInvoicePdf"]       = True
+            row["automationTotal"]    = p_row.get("total")
+            pdf_only_out.append(row)
+        issues.append(
+            f"{group[0].get('worker', '(unnamed)')} is on a PDF invoice but not "
+            "on the Production Report."
+        )
+
+    # No invoice number exists anywhere in this mode, so none of the three
+    # invoice-based sort options apply -- everything just sorts by name, with
+    # the (hopefully rare) PDF-only stragglers grouped at the end.
+    report_out.sort(key=lambda r: _normalize_name(r.get("worker")))
+    pdf_only_out.sort(key=lambda r: _normalize_name(r.get("worker")))
+    final_rows = report_out + pdf_only_out
+
+    _classify_aicp_codes(final_rows, openai_key)
+
+    return {"rows": final_rows, "issues": issues}
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def reconcile_payroll(
@@ -356,6 +488,15 @@ def reconcile_payroll(
 
     Returns {"rows": [...], "issues": [...]}.
     """
+    if production_report_rows and not any(
+        _norm_invoice(r.get("invoiceNo")) for r in production_report_rows
+    ):
+        # No row in this Production Report carries an invoice number at all
+        # -- it's a "consolidated" one-row-per-person report, not one this
+        # module can group by invoice. Dispatch to the person-level path
+        # instead of silently bucketing every row under invoice "".
+        return _reconcile_person_level(pdf_rows, production_report_rows, openai_key)
+
     issues: list[str] = []
 
     pdf_by_invoice:    dict[str, list[tuple[int, dict]]] = defaultdict(list)
