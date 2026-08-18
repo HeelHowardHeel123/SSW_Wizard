@@ -1979,6 +1979,23 @@ def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict
     return headers, rows
 
 
+_COMBINED_ADDRESS_RE = re.compile(
+    r"^(?P<street>.+?),\s*(?P<city>[^,]+?),\s*[A-Za-z]{2},\s*(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+
+
+def _split_combined_address(value: str) -> tuple[str, str, str] | None:
+    """Some Production Reports (e.g. PGC 005's Expanded report) give home
+    address as one combined "street, city, state, zip" string instead of
+    separate columns -- there's no separate header to map city/zip from, so
+    this splits the "street" field's value itself once it's been assigned.
+    Returns (street, city, zip) or None if it doesn't match that shape."""
+    m = _COMBINED_ADDRESS_RE.match(value)
+    if not m:
+        return None
+    return m.group("street").strip(), m.group("city").strip(), m.group("zip").strip()
+
+
 def _format_production_report_value(field: str, value):
     if value in (None, ""):
         return None
@@ -2035,6 +2052,15 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             # like "Kevin DeMunn" would corrupt it to "Kevin Demunn".
             name = clean_fringe_name(raw_name, from_caps=raw_name.isupper())
             row["worker"] = re.sub(r",(?!\s)", ", ", name)
+        elif field == "street":
+            split = _split_combined_address(value)
+            if split:
+                street, city, zip_code = split
+                row["street"] = street
+                row["city"]   = row.get("city") or city
+                row["zip"]    = row.get("zip") or zip_code
+            else:
+                row["street"] = value
         elif field in _FRINGE_NUMERIC_FIELDS:
             row[field] = round((row.get(field) or 0) + value, 2)
         else:
@@ -2057,10 +2083,58 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
     elif range_start or range_end:
         row["workDates"] = range_start or range_end
 
-    if row.get("corporate") or row.get("loanOutCompany"):
-        row["loanOut"] = True
-
     return row
+
+
+def _fill_addresses_via_ai_regex(rows: list[dict], client) -> None:
+    """Best-effort batch fallback for rows where street got populated but the
+    deterministic _split_combined_address pattern didn't match it -- some
+    other combined-address format we haven't seen before. Rather than call
+    GPT once per row, this sends the handful of distinct unresolved formats
+    ONE time, asks for a single regex that covers them, and applies it
+    locally to every unresolved row. Silently leaves rows unresolved on any
+    failure (bad regex, no API key, malformed response) -- a blank city/zip
+    is something a reviewer can fill in by hand, not worth failing the whole
+    extraction over."""
+    unresolved = [r for r in rows if r.get("street") and not r.get("city") and not r.get("zip")]
+    if not unresolved:
+        return
+
+    samples = list(dict.fromkeys(r["street"] for r in unresolved))[:15]
+    prompt = (
+        "These are home address values from a payroll Production Report that "
+        "combine street, city, and zip (and possibly state) into one string, "
+        "in a consistent format:\n\n"
+        + "\n".join(f"  {s!r}" for s in samples)
+        + "\n\nReturn a single Python regular expression (using (?P<name>...) "
+        "named groups) that parses this format into groups named exactly "
+        "\"street\", \"city\", and \"zip\" (a \"state\" group is fine too if "
+        "present, but not required). The regex must anchor to the whole "
+        "string (^...$) and use re.match semantics.\n\n"
+        'Return ONLY a JSON object: {"regex": "<the pattern as a string>"}\n'
+        "No explanation. No markdown. No code fences."
+    )
+    try:
+        result = _call_gpt_text_json(prompt, client, max_tokens=500)
+        pattern = re.compile(result["regex"])
+        if not {"street", "city", "zip"} <= set(pattern.groupindex):
+            return
+    except Exception:
+        return
+
+    for row in unresolved:
+        try:
+            m = pattern.match(row["street"])
+        except Exception:
+            continue
+        if not m:
+            continue
+        gd = m.groupdict()
+        row["street"] = (gd.get("street") or row["street"]).strip()
+        if gd.get("city"):
+            row["city"] = gd["city"].strip()
+        if gd.get("zip"):
+            row["zip"] = gd["zip"].strip()
 
 
 @app.post("/extract-ga-production-report")
@@ -2094,6 +2168,7 @@ async def extract_ga_production_report(
         issues.append(f"{file.filename}: no matching field found for columns: {', '.join(unmapped)}")
 
     rows = [normalize_production_report_row(r, header_map, file.filename) for r in raw_rows]
+    _fill_addresses_via_ai_regex(rows, client)
 
     return {
         "rows":    rows,
