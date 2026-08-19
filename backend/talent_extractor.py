@@ -957,7 +957,10 @@ def _llm_fuzzy_match_talent(
             "- Name order: 'William Rose II' (invoice) = 'Rose, William' (PTIP)\n"
             "- Company DBA: 'Ashley Washington Holdings LLC dba Karen Stavins Enterprises' = "
             "'Karen Stavins Enterprises'\n"
-            "- Typos: 'Bac Talent Managment Inc' = 'Bac Talent Management Inc'\n\n"
+            "- Typos: 'Bac Talent Managment Inc' = 'Bac Talent Management Inc'\n"
+            "- A cast/category code glued directly onto the name with no separator, from imperfect "
+            "PDF table extraction: 'Cedric Williams 22NS' (invoice) = 'Cedric Williams' (PTIP), "
+            "'Rollie Smith 22NS' = 'Rollie Smith'\n\n"
             "Rules:\n"
             "- Only match if you are CONFIDENT they are the same person or entity.\n"
             "- Do NOT guess — if uncertain, put the name in 'unmatched' with a brief reason.\n"
@@ -1216,10 +1219,15 @@ def extract_talent(
                 matched_pairs.append((tr, ptip_match, ptip_match_local_i))
 
             # LLM fallback: attempt fuzzy matches for rows still unmatched after exact pass.
-            # Only fire when at least one row already matched (ptip_consumed non-empty) — if
-            # nothing matched at all, there's no basis to trust the invoice/PTIP pair.
+            # Used to require at least one exact match first (ptip_consumed non-empty) as
+            # evidence the invoice/PTIP pair actually correspond -- but they're already
+            # scoped to the same invoice number on both sides before we ever get here, which
+            # is real structural evidence on its own. Gating on a prior exact match meant a
+            # PDF layout that corrupts EVERY name in an invoice (e.g. a cast-category code
+            # glued onto the name with no separator) got zero exact matches, so the fallback
+            # never even ran -- exactly the invoice that most needs it.
             llm_reasons: dict[str, str] = {}
-            if openai_key and inv_has_ptip and ptip_consumed:
+            if openai_key and inv_has_ptip:
                 unmatched_inv = [
                     tr for tr, pm, _ in matched_pairs
                     if pm is None
