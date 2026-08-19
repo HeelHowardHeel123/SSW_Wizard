@@ -4053,19 +4053,25 @@ async def extract_talent_endpoint(
             workbook_type=workbook_type,
         )
 
-    # Default: Extreme Reach
-    ptip_bytes: bytes | None = None
-    if ptip_file:
-        ptip_bytes = await ptip_file.read()
-        if not ptip_bytes:
-            ptip_bytes = None
+    # Default: Extreme Reach -- GA sends one PTIP report per invoice via
+    # repeated ptip_files; IL's single-file case still works the same way
+    # (a list of length 1). ptip_file is a back-compat fallback only.
+    ptip_bytes_list: list[bytes] = []
+    for uf in (ptip_files or []):
+        data = await uf.read()
+        if data:
+            ptip_bytes_list.append(data)
+    if not ptip_bytes_list and ptip_file:
+        data = await ptip_file.read()
+        if data:
+            ptip_bytes_list.append(data)
 
-    if not pdf_bytes_list and not ptip_bytes:
+    if not pdf_bytes_list and not ptip_bytes_list:
         raise HTTPException(400, "Provide at least one PDF or a PTIP file.")
 
     return extract_talent(
         pdf_files=pdf_bytes_list,
-        ptip_bytes=ptip_bytes,
+        ptip_bytes_list=ptip_bytes_list,
         project_title=project_title,
         workbook_type=workbook_type,
         openai_key=OPENAI_API_KEY,

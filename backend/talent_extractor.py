@@ -22,6 +22,8 @@ from datetime import datetime
 import openpyxl
 import pdfplumber
 
+from payroll_reconciler import _AICP_CATEGORIES_TEXT
+
 
 # ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -470,6 +472,7 @@ def _build_row(
     payment_entity: str = 'Extreme Reach Talent, Inc',
     pah_from_pdf: bool = False,    # Teams: P&H from PDF talent table, not PTIP
     calc_signatory_fee: bool = False,  # Teams: (wages+misc)*2%
+    workbook_type: str = '',       # 'ga' changes ptip_amount's total definition -- see below
 ) -> dict:
     """Assemble one workbook row from PTIP and/or PDF data."""
 
@@ -528,7 +531,12 @@ def _build_row(
     # ── PTIP financial columns ───────────────────────────────────────────────
     if ptip:
         # Try explicit Total column (manually-enhanced PTIP); otherwise compute it.
-        # ER native PTIP excludes State Tax Withheld from the total (it is employee-side).
+        # ER native PTIP excludes State Tax Withheld from IL's own total (it's an
+        # employee-side deduction there). GA's Total Amount column is a real Excel
+        # formula (=SUM(J:S)) that DOES include State Tax Withheld -- ptip_amount
+        # has to match whatever "Total" means on the tab it's feeding, or
+        # PTIP_Check would show a false discrepancy on every single row, off by
+        # exactly the state tax amount, regardless of workbook_type.
         _RAW_TOTAL = _to_float(ptip.get('Total') or ptip.get('TOTAL'))
         if _RAW_TOTAL:
             ptip_amount = _RAW_TOTAL
@@ -538,12 +546,17 @@ def _build_row(
                 'Local Tax Withheld', 'State Disability Withheld',
                 'Employer Taxes', 'Workers Compensation', 'Handling Fee', 'Signatory Fee',
             ]
+            if workbook_type == 'ga':
+                _TOTAL_KEYS = _TOTAL_KEYS + ['State Tax Withheld']
             ptip_amount = round(sum(_to_float(ptip.get(k)) for k in _TOTAL_KEYS), 2)
         er_tax_ptip    = _to_float(ptip.get('Employer Taxes'))
         wc_ptip        = _to_float(ptip.get('Workers Compensation'))
         handling_ptip  = _to_float(ptip.get('Handling Fee'))
         sag_ptip       = _to_float(ptip.get('P&H'))
         signatory_ptip = _to_float(ptip.get('Signatory Fee'))
+        state_tax_withheld       = _to_float(ptip.get('State Tax Withheld'))
+        local_tax_withheld       = _to_float(ptip.get('Local Tax Withheld'))
+        state_disability_withheld = _to_float(ptip.get('State Disability Withheld'))
         check_number      = str(ptip.get('Check Number', '') or '').strip()
         commercial_id     = str(ptip.get('Commercial Id', '') or '').strip()
         commercial_title  = str(ptip.get('Commercial Title', '') or '').strip()
@@ -552,6 +565,7 @@ def _build_row(
         on_ptip           = True
     else:
         ptip_amount = er_tax_ptip = wc_ptip = handling_ptip = sag_ptip = signatory_ptip = None
+        state_tax_withheld = local_tax_withheld = state_disability_withheld = 0.0
         check_number = commercial_id = commercial_title = ssn_fein = ''
         on_ptip = False
 
@@ -676,6 +690,9 @@ def _build_row(
         'handling':       round(handling, 2),
         'sag':            round(sag, 2),
         'signatory_fee':  round(signatory_fee, 2),
+        'state_tax_withheld':        round(state_tax_withheld, 2),
+        'local_tax_withheld':        round(local_tax_withheld, 2),
+        'state_disability_withheld': round(state_disability_withheld, 2),
         'total':          total,
         'check_number':   check_number,
         'received_invoice': received_invoice,
@@ -977,15 +994,90 @@ def _llm_fuzzy_match_talent(
         return {}, {}
 
 
+# ── AICP classification (GA only -- IL's Talent & Extras has no such column) ──
+
+def _classify_aicp_codes_talent(rows: list[dict], openai_key: str) -> None:
+    """Assigns row['aicp_code'] (int 1-25, or None) to every row in place, via
+    one batched GPT call. Same steering-not-restriction principle as Crew
+    Payroll's _classify_aicp_codes: 23/24 (Georgia Cast/Extras Hires) will be
+    correct for most rows here, but every category stays available since an
+    odd case (e.g. an agent fee, or a per diem paid through Talent) is
+    genuinely possible. Best-effort -- leaves aicp_code as None on any
+    failure rather than raising, same as the Crew Payroll version."""
+    for row in rows:
+        row['aicp_code'] = None
+
+    if not rows or not openai_key:
+        return
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=openai_key)
+
+        items = [
+            {"index": i, "talent_name": r.get("talent_name", ""), "title": r.get("title", "")}
+            for i, r in enumerate(rows)
+        ]
+
+        prompt = (
+            "You are classifying rows on a Georgia film production's Talent Report "
+            "by AICP category, for the state tax incentive submission.\n\n"
+            "Pick the single best-matching AICP category number for each row below, "
+            "using this list:\n"
+            f"{_AICP_CATEGORIES_TEXT}\n\n"
+            "On this tab, categories 23 and 24 (Georgia Cast Hires / Georgia Extras "
+            "Hires) will be correct for the large majority of rows -- these are "
+            "on-camera talent/performer payments. But this is steering, not a "
+            "restriction: if a row's title/context clearly indicates something else "
+            "(e.g. an agent fee, a per diem), use the correct category instead of "
+            "defaulting to 23/24.\n\n"
+            "Rows to classify:\n"
+            f"{json.dumps(items, indent=2)}\n\n"
+            "Return ONLY a JSON object mapping each row's index (as a string) to its "
+            'AICP category number (an integer): {"0": 23, "1": 24, ...}\n'
+            "Every index above must appear in your response. No explanation. No "
+            "markdown. No code fences. JSON object only."
+        )
+
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+        raw = json.loads(resp.choices[0].message.content)
+        if not isinstance(raw, dict):
+            return
+
+        for key, val in raw.items():
+            try:
+                idx = int(key)
+                code = int(val)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < len(rows) and 1 <= code <= 25:
+                rows[idx]['aicp_code'] = code
+    except Exception:
+        pass  # leave every aicp_code as None -- reviewable by hand, not fatal
+
+
 def extract_talent(
     pdf_files: list[tuple[str, bytes]],  # [(filename, bytes), ...]
-    ptip_bytes: bytes | None,
+    ptip_bytes_list: list[bytes] | None,  # one Extreme Reach PTIP file per invoice, or a single consolidated file
     project_title: str,
     workbook_type: str,
     openai_key: str = "",
 ) -> dict:
     """
     Run the full talent extraction.
+
+    GA productions get one Extreme Reach PTIP report PER INVOICE rather than
+    IL's single consolidated file, so ptip_bytes_list is combined the same
+    way parse_teams_ptip_xlsx already combines multiple Teams PTIP files --
+    parse each independently (header row position/columns can vary file to
+    file) and concatenate the row lists. Works unchanged for IL's
+    single-file case too (a list of length 1).
 
     Returns the /extract-talent response dict:
     {rows, ptip_excel_b64, summary: {total_rows, invoices_with_pdf,
@@ -1015,14 +1107,25 @@ def extract_talent(
 
     received_invoice_nos: set[str] = set(pdf_invoices.keys())
 
-    # ── Step 2: Parse PTIP ────────────────────────────────────────────────────
+    # ── Step 2: Parse PTIP (one or more files, combined) ────────────────────────
     ptip_rows: list[dict] = []
     header_cols: list[str] = []
-    original_ptip_bytes = ptip_bytes  # keep for organized PTIP
+    # First file only, for organized-PTIP styling reference (logo, header
+    # colors, fonts) -- build_organized_ptip_xlsx uses this purely cosmetically,
+    # every file's row DATA still goes into the combined ptip_rows list below.
+    original_ptip_bytes = ptip_bytes_list[0] if ptip_bytes_list else None
 
-    if ptip_bytes:
-        ptip_rows, ptip_issues, header_cols = parse_ptip_xlsx(ptip_bytes)
-        issues.extend(ptip_issues)
+    for file_i, pb in enumerate(ptip_bytes_list or []):
+        if not pb:
+            continue
+        file_rows, file_issues, file_header_cols = parse_ptip_xlsx(pb)
+        if len(ptip_bytes_list) > 1:
+            issues.extend(f"PTIP file {file_i + 1}: {msg}" for msg in file_issues)
+        else:
+            issues.extend(file_issues)
+        ptip_rows.extend(file_rows)
+        if not header_cols and file_header_cols:
+            header_cols = file_header_cols
 
     # ── Step 3: Determine scenario ────────────────────────────────────────────
     has_pdf  = bool(pdf_invoices)
@@ -1167,6 +1270,7 @@ def extract_talent(
                     first_tax_row=is_first_tax,
                     scenario=eff_scenario,
                     ptip_row_no=(inv_ptip_orig[ptip_match_local_i] + 1) if ptip_match_local_i is not None else None,
+                    workbook_type=workbook_type,
                 )
                 if ptip_match is None:
                     reason = llm_reasons.get(tr['name'], '')
@@ -1190,6 +1294,7 @@ def extract_talent(
                     first_tax_row=False,
                     scenario=scenario,
                     ptip_row_no=orig_idx + 1,
+                    workbook_type=workbook_type,
                 )
                 workbook_rows.append(row)
                 if not is_dup:
@@ -1209,6 +1314,7 @@ def extract_talent(
                     first_tax_row=False,
                     scenario=scenario,
                     ptip_row_no=orig_idx + 1,
+                    workbook_type=workbook_type,
                 )
                 workbook_rows.append(row)
                 if not is_dup:
@@ -1270,7 +1376,11 @@ def extract_talent(
         except Exception as e:
             issues.append(f"Organized PTIP build error: {e}")
 
-    # ── Step 10: Build summary ────────────────────────────────────────────────
+    # ── Step 10: AICP classification (GA only) ──────────────────────────────────
+    if workbook_type == 'ga':
+        _classify_aicp_codes_talent(workbook_rows, openai_key)
+
+    # ── Step 11: Build summary ────────────────────────────────────────────────
     ptip_inv_nos = {str(r.get('Invoice Number', '') or '').strip() for r in ptip_rows}
     invoices_with_pdf  = sorted(received_invoice_nos & ptip_inv_nos) if has_ptip else sorted(received_invoice_nos)
     invoices_ptip_only = sorted(ptip_inv_nos - received_invoice_nos) if has_ptip else []
