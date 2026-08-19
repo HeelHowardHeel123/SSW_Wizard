@@ -30,9 +30,18 @@ Endpoints
                                     /extract-payroll so both sources run through one mapper.
                                     returns {"rows": [...], "issues": [...], "columns": [...],
                                     "files": [...]}
+  POST /extract-ga-timecards       → multipart: files[]=<pdf>
+                                    A third Crew Payroll source some productions use instead of
+                                    or alongside invoice PDFs -- batch PDFs of individual CREW
+                                    TIME CARD pages (one per person per work week). Regex-first
+                                    extraction; a page whose layout the deterministic regex
+                                    doesn't recognize falls back to one Anthropic call per file
+                                    covering every unrecognized page in it, with the
+                                    AI-generated regex always surfaced in "issues" for review.
+                                    returns {"rows": [...], "issues": [...], "files": [...]}
   POST /reconcile-ga-payroll       → JSON: {pdf_rows: [...], production_report_rows: [...],
-                                    sort_option: "name_invoice"|"invoice_pdf_layout"|
-                                    "production_report_layout"}
+                                    timecard_rows: [...], sort_option: "name_invoice"|
+                                    "invoice_pdf_layout"|"production_report_layout"}
                                     Matches already-extracted PDF rows against already-extracted
                                     Production Report rows by invoice number (SSN last-4, then
                                     normalized name, then an LLM fuzzy fallback), flags which
@@ -40,8 +49,13 @@ Endpoints
                                     list in the requested order. Production Report always wins
                                     on financial values when a person matches both sides; the
                                     PDF's own total only ever feeds the Automation Total
-                                    cross-check column. No file uploads -- reconciles rows the
-                                    frontend already has from its two other calls.
+                                    cross-check column. If timecard_rows is provided (from
+                                    /extract-ga-timecards), each resulting row is additionally
+                                    cross-checked against every timecard for that person whose
+                                    work week overlaps the row's date range, summed together,
+                                    adding hasTimecard/timecardTotal and a notes breakdown.
+                                    No file uploads -- reconciles rows the frontend already has
+                                    from its other calls.
                                     returns {"rows": [...], "issues": [...]}
   POST /extract-billings          → multipart: files[]=<pdf>, vendor_type, vendor_name,
                                     vendor_address, vendor_city, vendor_state, vendor_zip,
@@ -137,6 +151,8 @@ from pydantic import BaseModel
 
 from parsers.base import FRINGE_FIELDS, empty_row, parse_amount, clean_fringe_name, _NUMERIC_FIELDS as _FRINGE_NUMERIC_FIELDS
 from payroll_reconciler import reconcile_payroll
+from timecard_parser import extract_timecards
+from timecard_reconciler import match_timecards
 from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
@@ -2083,6 +2099,16 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
     elif range_start or range_end:
         row["workDates"] = range_start or range_end
 
+    # Kept separately from workDates (which prefers the pay-period
+    # week-ending label for display) because timecard matching needs the
+    # ACTUAL work date range specifically -- a week-ending date is an
+    # administrative pay-period label, not necessarily the calendar days
+    # worked, and the two can disagree.
+    if start_date:
+        row["startDate"] = start_date
+    if end_date:
+        row["endDate"] = end_date
+
     return row
 
 
@@ -2178,9 +2204,47 @@ async def extract_ga_production_report(
     }
 
 
+@app.post("/extract-ga-timecards")
+async def extract_ga_timecards(
+    files: list[UploadFile] = File(...),
+    x_app_secret: str = Header(default=""),
+):
+    """Crew timecard batch PDFs -- a third Crew Payroll source some
+    productions use instead of/alongside invoice PDFs (e.g. PJ 004, which
+    has no invoice PDFs at all). Each file is a stack of individual CREW
+    TIME CARD pages, one per person per work week. Extraction is
+    regex-first; any page a new/different timecard layout defeats falls
+    back to one Anthropic call per file covering every unrecognized page in
+    it, and the generated regex is always surfaced in "issues" for review.
+    returns {"rows": [...], "issues": [...], "files": [...]}
+    """
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    anthropic_client = None
+    if ANTHROPIC_API_KEY:
+        try:
+            anthropic_client = _anthropic_client()
+        except Exception:
+            anthropic_client = None
+
+    all_rows: list[dict] = []
+    all_issues: list[str] = []
+    file_summaries: list[dict] = []
+    for file in files:
+        data = await file.read()
+        rows, issues = extract_timecards(data, file.filename, anthropic_client)
+        all_rows.extend(rows)
+        all_issues.extend(issues)
+        file_summaries.append({"filename": file.filename, "row_count": len(rows)})
+
+    return {"rows": all_rows, "issues": all_issues, "files": file_summaries}
+
+
 class ReconcilePayrollRequest(BaseModel):
     pdf_rows:               list[dict] = []
     production_report_rows: list[dict] = []
+    timecard_rows:          list[dict] = []
     sort_option:            str        = "invoice_pdf_layout"
 
 
@@ -2195,16 +2259,27 @@ async def reconcile_ga_payroll(
     each person came from, and returns the combined list in the requested
     sort order. No file uploads here -- the frontend already has both row
     sets from its two earlier calls; this just reconciles and orders them.
+
+    If timecard_rows is non-empty (from /extract-ga-timecards), each
+    resulting row is additionally cross-checked against every timecard for
+    that same person (SSN, then name) whose work week overlaps the row's
+    own date range -- summed together, since a Production Report row
+    sometimes spans more than one timecard week. Adds hasTimecard (bool),
+    timecardTotal (float|None), and appends a "Timecards: ..." breakdown
+    string to notes when matched.
     """
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
-    return reconcile_payroll(
+    result = reconcile_payroll(
         body.pdf_rows,
         body.production_report_rows,
         body.sort_option,
         OPENAI_API_KEY,
     )
+    if body.timecard_rows:
+        result["rows"] = match_timecards(result["rows"], body.timecard_rows)
+    return result
 
 
 # ── Crew freelance invoice extractor ─────────────────────────────────────────
