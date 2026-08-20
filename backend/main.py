@@ -4051,6 +4051,7 @@ async def extract_talent_endpoint(
             ptip_bytes_list=ptip_bytes_list,
             project_title=project_title,
             workbook_type=workbook_type,
+            openai_key=OPENAI_API_KEY,
         )
 
     # Default: Extreme Reach -- GA sends one PTIP report per invoice via

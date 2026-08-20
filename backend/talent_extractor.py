@@ -471,7 +471,6 @@ def _build_row(
     ptip_row_no: int | None,
     payment_entity: str = 'Extreme Reach Talent, Inc',
     pah_from_pdf: bool = False,    # Teams: P&H from PDF talent table, not PTIP
-    calc_signatory_fee: bool = False,  # Teams: (wages+misc)*2%
     workbook_type: str = '',       # 'ga' changes ptip_amount's total definition -- see below
 ) -> dict:
     """Assemble one workbook row from PTIP and/or PDF data."""
@@ -574,23 +573,29 @@ def _build_row(
         commercial_title = pdf_invoice['commercial_title']
 
     # ── Wages and Misc Pmt ───────────────────────────────────────────────────
+    other_fees = 0.0
+    notes      = ''
     if scenario in ('A',) and pdf_talent:
         # PDF-only: wages and misc from PDF talent row
         wages    = pdf_talent.get('gross_wages', 0.0)
         misc_pmt = pdf_talent.get('misc_pmt', 0.0)
         # Taxes: first talent row only (agent rows always get 0 taxes in PDF-only)
         if first_tax_row and not is_agent and pdf_invoice:
-            er_tax   = pdf_invoice.get('total_er_tax', 0.0)
-            sag      = pdf_invoice.get('total_pah', 0.0)
-            handling = pdf_invoice.get('total_handling', 0.0)
-            wc       = pdf_invoice.get('total_wc', 0.0)
+            er_tax        = pdf_invoice.get('total_er_tax', 0.0)
+            sag           = pdf_invoice.get('total_pah', 0.0)
+            handling      = pdf_invoice.get('total_handling', 0.0)
+            wc            = pdf_invoice.get('total_wc', 0.0)
+            # No PTIP for this invoice means the PDF is the only source of
+            # truth -- take its numbers as-is. No synthetic percentage guess;
+            # only use a signatory fee when the PDF prints a real "TS
+            # Signatory Fee" footer line.
+            signatory_fee = pdf_invoice.get('total_signatory_fee', 0.0)
+            other_fees    = pdf_invoice.get('total_other_fees', 0.0)
+            detail        = pdf_invoice.get('other_fees_detail') or []
+            if detail:
+                notes = ', '.join(f"{d['label']} (${d['amount']:,.2f})" for d in detail)
         else:
-            er_tax = sag = handling = wc = 0.0
-        signatory_fee = 0.0
-        if calc_signatory_fee:
-            wages_tmp    = pdf_talent.get('gross_wages', 0.0)
-            misc_pmt_tmp = pdf_talent.get('misc_pmt', 0.0)
-            signatory_fee = round((wages_tmp + misc_pmt_tmp) * 0.02, 2)
+            er_tax = sag = handling = wc = signatory_fee = 0.0
     elif scenario == 'B' and ptip:
         # PTIP-only: talent rows go to wages; agent rows go to misc (we know the cast)
         ptip_wages = _to_float(ptip.get('Wages'))
@@ -604,10 +609,9 @@ def _build_row(
         wc       = wc_ptip or 0.0
         handling = handling_ptip or 0.0
         sag      = sag_ptip or 0.0
-        if calc_signatory_fee:
-            signatory_fee = round(wages * 0.02, 2)
-        else:
-            signatory_fee = signatory_ptip or 0.0
+        # No synthetic percentage guess -- a lot of payroll has no signatory
+        # fee at all. Only record it when it's actually on the PTIP report.
+        signatory_fee = signatory_ptip or 0.0
     elif scenario == 'C':
         # Both: PDF wins on wages/misc placement; PTIP for taxes
         if pdf_talent and received_invoice:
@@ -629,10 +633,9 @@ def _build_row(
             sag = pdf_talent['pah']
         else:
             sag = sag_ptip or 0.0
-        if calc_signatory_fee:
-            signatory_fee = round((wages + misc_pmt) * 0.02, 2)
-        else:
-            signatory_fee = signatory_ptip or 0.0
+        # No synthetic percentage guess -- only record a signatory fee when
+        # it's actually on the PTIP report.
+        signatory_fee = signatory_ptip or 0.0
     else:
         wages = misc_pmt = er_tax = wc = handling = sag = signatory_fee = 0.0
 
@@ -669,7 +672,7 @@ def _build_row(
     if ptip_amount is not None:
         total = ptip_amount
     else:
-        total = round(wages + misc_pmt + er_tax + wc + handling + sag + signatory_fee, 2)
+        total = round(wages + misc_pmt + er_tax + wc + handling + sag + signatory_fee + other_fees, 2)
 
     return {
         'item_no':        item_no,
@@ -690,6 +693,7 @@ def _build_row(
         'handling':       round(handling, 2),
         'sag':            round(sag, 2),
         'signatory_fee':  round(signatory_fee, 2),
+        'other_fees':     round(other_fees, 2),
         'state_tax_withheld':        round(state_tax_withheld, 2),
         'local_tax_withheld':        round(local_tax_withheld, 2),
         'state_disability_withheld': round(state_disability_withheld, 2),
@@ -705,7 +709,7 @@ def _build_row(
         'ssn_fein':          ssn_fein,
         'commercial_id':     commercial_id,
         'commercial_title':  commercial_title,
-        'notes':             '',
+        'notes':             notes,
         'ptip_row_no':    ptip_row_no,
         'is_duplicate':   is_duplicate,
     }
@@ -1518,7 +1522,7 @@ def _parse_teams_sag_talent_row(line: str, has_apply_col: bool = False) -> dict 
     while after_date and _TEAMS_AMOUNT_RE.match(after_date[-1]):
         amounts.insert(0, _to_float(after_date.pop()))
 
-    if len(amounts) < 2:
+    if not amounts:
         return None
 
     work_date = _expand_date_yy(rest[date_idx])
@@ -1562,7 +1566,17 @@ def _parse_teams_sag_talent_row(line: str, has_apply_col: bool = False) -> dict 
     name_end = min(x for x in [os1_idx, os2_idx, pre_pos] if x is not None)
     name = ' '.join(before_date[:name_end]).strip()
 
-    if has_apply_col:
+    if len(amounts) == 1:
+        # Single trailing amount -- seen on SAG/AFTRA guarantee-installment rows,
+        # which carry no separate Misc Payment breakdown. The Team Companies
+        # books guarantee payments through the P&H line rather than Gross Wages,
+        # so an OFF-camera lone amount is P&H; an ON-camera one is Gross Wages.
+        # Confirmed against invoice 26225373's own footer totals (Wages & Misc.
+        # Payments = 0.00, Pension & Health Cont = this row's one amount, exactly).
+        gross = 0.0 if cam == 'OFF' else amounts[0]
+        misc  = 0.0
+        pah   = amounts[0] if cam == 'OFF' else 0.0
+    elif has_apply_col:
         # amounts = [Apply(skip), GrossWages, P&H]  — or [Apply, Gross, Misc, P&H] if 4
         # 2-amount rows on an Apply invoice are treated as plain [Gross/Misc, P&H]
         if len(amounts) == 2:
@@ -1606,9 +1620,13 @@ def parse_teams_sag_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         return None
 
     inv_no = ''
-    m = re.search(r'Invoice\s*#[:\s]*(\d+)', text)
+    # A stray colon from an overlapping PDF text run can land mid-digit-string
+    # (observed as literal "Invoice #2:6225373" for invoice 26225373) -- allow
+    # embedded colons in the capture and strip them, or a plain \d+ match would
+    # silently truncate to the digits before the colon.
+    m = re.search(r'Invoice\s*#[:\s]*([\d:]+)', text)
     if m:
-        inv_no = m.group(1).strip()
+        inv_no = m.group(1).replace(':', '').strip()
 
     invoice_date = ''
     # Invoice date always precedes "Page:" on the same line; use that to avoid
@@ -1632,10 +1650,26 @@ def parse_teams_sag_invoice_pdf(pdf_bytes: bytes) -> dict | None:
     m_taxes    = re.search(r'Payroll Taxes\s+([\d,]+\.\d{2})', text)
     m_pah      = re.search(r'Pension\s*&\s*Health\s*Cont\s+([\d,]+\.\d{2})', text)
     m_handling = re.search(r'Handling\s+([\d,]+\.\d{2})', text)
+    # TS Signatory Fee is a real, occasionally-present footer line -- when it's
+    # there, it's the actual signatory fee for the invoice, not something to
+    # estimate. Business Affairs Fee / Wire Fee - Domestic are one-off invoice
+    # charges with no dedicated column on the GA template; they get summed into
+    # "Other Fees" with a note describing what's in it.
+    m_signatory = re.search(r'TS Signatory Fee\s+([\d,]+\.\d{2})', text)
+    m_biz_aff   = re.search(r'Business Affairs Fee\s+([\d,]+\.\d{2})', text)
+    m_wire      = re.search(r'Wire Fee\s*-?\s*Domestic\s+([\d,]+\.\d{2})', text)
 
-    total_er_tax   = _to_float(m_taxes.group(1)    if m_taxes    else 0)
-    total_pah      = _to_float(m_pah.group(1)      if m_pah      else 0)
-    total_handling = _to_float(m_handling.group(1) if m_handling else 0)
+    total_er_tax       = _to_float(m_taxes.group(1)     if m_taxes     else 0)
+    total_pah          = _to_float(m_pah.group(1)       if m_pah       else 0)
+    total_handling     = _to_float(m_handling.group(1)  if m_handling  else 0)
+    total_signatory_fee = _to_float(m_signatory.group(1) if m_signatory else 0)
+
+    other_fees_detail: list[dict] = []
+    if m_biz_aff:
+        other_fees_detail.append({'label': 'Business Affairs Fee', 'amount': _to_float(m_biz_aff.group(1))})
+    if m_wire:
+        other_fees_detail.append({'label': 'Wire Fee', 'amount': _to_float(m_wire.group(1))})
+    total_other_fees = round(sum(d['amount'] for d in other_fees_detail), 2)
 
     # Auto-detect whether the first amount in each row is an Apply credit (skip it)
     # or Gross Wages.  Parse with both interpretations and keep the one whose
@@ -1680,6 +1714,9 @@ def parse_teams_sag_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         'total_pah':      total_pah,
         'total_handling': total_handling,
         'total_wc':       0.0,
+        'total_signatory_fee': total_signatory_fee,
+        'total_other_fees':    total_other_fees,
+        'other_fees_detail':   other_fees_detail,
         'talent_rows':    talent_rows,
         'union_type':     'SAG',
         'format':         'teams_sag',
@@ -1700,9 +1737,13 @@ def parse_teams_nonunion_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         return None  # SAG invoice, not non-union
 
     inv_no = ''
-    m = re.search(r'Invoice\s*#[:\s]*(\d+)', text)
+    # A stray colon from an overlapping PDF text run can land mid-digit-string
+    # (observed as literal "Invoice #2:6225373" for invoice 26225373) -- allow
+    # embedded colons in the capture and strip them, or a plain \d+ match would
+    # silently truncate to the digits before the colon.
+    m = re.search(r'Invoice\s*#[:\s]*([\d:]+)', text)
     if m:
-        inv_no = m.group(1).strip()
+        inv_no = m.group(1).replace(':', '').strip()
 
     invoice_date = ''
     m = re.search(r'Inv\.\s*Date[:\s]+(\d{1,2}/\d{1,2}/\d{2})', text)
@@ -1806,7 +1847,10 @@ def _normalize_teams_ptip_row(row: dict) -> dict:
     sui      = _to_float(row.get('SUI', 0))
     sdi      = _to_float(row.get('SDI', 0))
     other    = _to_float(row.get('Other Taxes', 0))
-    er_tax   = round(fica + medicare + futa + sui + sdi + other, 2)
+    # SDI is reported separately below (State Disability Withheld) -- _build_row's
+    # _TOTAL_KEYS sums Employer Taxes and State Disability Withheld independently,
+    # so folding SDI into er_tax here would double-count it in ptip_amount.
+    er_tax   = round(fica + medicare + futa + sui + other, 2)
 
     street    = str(row.get('Address Line 1', '') or '').strip()
     city      = str(row.get('City', '') or '').strip()
@@ -1838,10 +1882,20 @@ def _normalize_teams_ptip_row(row: dict) -> dict:
         'Work State':          str(row.get('Work State', '') or '').strip(),
         'Talent Address':      full_address,
         'Check Date':          row.get('Invoice Date'),
-        'Commercial Id':       str(row.get('Project ID', '') or '').strip(),
+        # 'Job Number' is what GA's Teams PTIP export actually calls this column
+        # (confirmed against a real GA file); 'Project ID' kept as a fallback in
+        # case some other Teams export still uses that name.
+        'Commercial Id':       str(row.get('Job Number', '') or row.get('Project ID', '') or '').strip(),
         'SSN':                 str(row.get('SSN', '') or '').strip(),
         'FEIN':                '',
         'Check Number':        '',
+        # GA-only fields (blank/0 for IL Teams files that don't have these columns).
+        # 'GA SIT' is confirmed as the GA state-income-tax-withheld column name;
+        # the plain 'SIT' column seen alongside it is NOT mapped here -- its exact
+        # meaning (resident-state SIT when different from GA?) isn't confirmed yet.
+        'State Tax Withheld':        _to_float(row.get('GA SIT', 0)),
+        'Local Tax Withheld':        0.0,
+        'State Disability Withheld': sdi,
     }
 
 
@@ -2074,6 +2128,7 @@ def extract_teams_talent(
     ptip_bytes_list: list[bytes],
     project_title:   str,
     workbook_type:   str,
+    openai_key:      str = '',
 ) -> dict:
     """
     Run the full Teams talent extraction.
@@ -2172,10 +2227,11 @@ def extract_teams_talent(
             ptip_consumed:   set[int] = set()
             first_talent_seen = False
 
+            # Pass 1: exact normalized-name matching, falling back to SSN last-4
+            matched_pairs: list[tuple] = []  # (tr, ptip_match | None, ptip_match_orig | None)
             for tr in inv_data['talent_rows']:
                 tr_full_norm, _ = _normalize_for_match(tr['name'])
 
-                # Match to PTIP row by name; fall back to SSN last-4
                 ptip_match:       dict | None = None
                 ptip_match_orig:  int | None  = None
                 for local_i, (pr, orig_i) in enumerate(inv_ptip_pairs):
@@ -2201,6 +2257,46 @@ def extract_teams_talent(
                                 ptip_consumed.add(local_i)
                                 break
 
+                matched_pairs.append((tr, ptip_match, ptip_match_orig))
+
+            # LLM fallback: a performer's PDF row (their own name) and their PTIP
+            # row (often their loan-out corp's name, e.g. "Woods, Gloria" vs
+            # "Glorilla Music LLC") don't share any normalized-name overlap, so
+            # exact matching and SSN-last-4 both miss it -- same failure class
+            # ER hit with a cast-category code glued onto the name.
+            llm_reasons: dict[str, str] = {}
+            if openai_key and inv_has_ptip:
+                unmatched_idx = [
+                    i for i, (tr, pm, _) in enumerate(matched_pairs) if pm is None
+                ]
+                remaining_local = [
+                    li for li in range(len(inv_ptip_pairs)) if li not in ptip_consumed
+                ]
+                if unmatched_idx and remaining_local:
+                    inv_names = [matched_pairs[i][0]['name'] for i in unmatched_idx]
+                    remaining_ptip_names = [
+                        str(inv_ptip_pairs[li][0].get('Talent Name', '') or '').strip()
+                        for li in remaining_local
+                    ]
+                    llm_map, llm_reasons = _llm_fuzzy_match_talent(inv_names, remaining_ptip_names, openai_key)
+                    if llm_map:
+                        ptip_name_to_local = {
+                            str(inv_ptip_pairs[li][0].get('Talent Name', '') or '').strip(): li
+                            for li in remaining_local
+                        }
+                        for i in unmatched_idx:
+                            tr, pm, pm_orig = matched_pairs[i]
+                            matched_name = llm_map.get(tr['name'])
+                            if not matched_name:
+                                continue
+                            li = ptip_name_to_local.get(matched_name)
+                            if li is not None and li not in ptip_consumed:
+                                pr, orig_i = inv_ptip_pairs[li]
+                                matched_pairs[i] = (tr, pr, orig_i)
+                                ptip_consumed.add(li)
+
+            # Pass 2: emit rows in PDF order
+            for tr, ptip_match, ptip_match_orig in matched_pairs:
                 is_first_tax = (not inv_has_ptip) and (not first_talent_seen)
                 first_talent_seen = True
                 eff_scenario = 'A' if not inv_has_ptip else scenario
@@ -2217,8 +2313,12 @@ def extract_teams_talent(
                     ptip_row_no=(ptip_match_orig + 1) if ptip_match_orig is not None else None,
                     payment_entity='The Team Companies',
                     pah_from_pdf=True,
-                    calc_signatory_fee=True,
+                    workbook_type=workbook_type,
                 )
+                if ptip_match is None:
+                    reason = llm_reasons.get(tr['name'], '')
+                    if reason:
+                        row['notes'] = f"[LLM no match] {reason}"
                 workbook_rows.append(row)
                 item_no += 1
 
@@ -2238,7 +2338,7 @@ def extract_teams_talent(
                     ptip_row_no=orig_i + 1,
                     payment_entity='The Team Companies',
                     pah_from_pdf=True,
-                    calc_signatory_fee=True,
+                    workbook_type=workbook_type,
                 )
                 workbook_rows.append(row)
                 item_no += 1
@@ -2258,7 +2358,7 @@ def extract_teams_talent(
                     ptip_row_no=orig_i + 1,
                     payment_entity='The Team Companies',
                     pah_from_pdf=True,
-                    calc_signatory_fee=True,
+                    workbook_type=workbook_type,
                 )
                 workbook_rows.append(row)
                 item_no += 1
@@ -2291,7 +2391,11 @@ def extract_teams_talent(
     for _r in workbook_rows:
         _r['talent_name'] = _fmt_teams_talent_name(_r['talent_name'])
 
-    # ── Step 10: Summary ──────────────────────────────────────────────────────
+    # ── Step 10: AICP classification (GA only) ───────────────────────────────
+    if _is_ga_workbook(workbook_type):
+        _classify_aicp_codes_talent(workbook_rows, openai_key)
+
+    # ── Step 11: Summary ──────────────────────────────────────────────────────
     ptip_inv_nos        = set(ptip_by_invoice.keys())
     invoices_with_pdf   = sorted(received_invoice_nos & ptip_inv_nos) if has_ptip else sorted(received_invoice_nos)
     invoices_ptip_only  = sorted(ptip_inv_nos - received_invoice_nos) if has_ptip else []
