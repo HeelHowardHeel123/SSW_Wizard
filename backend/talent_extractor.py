@@ -546,7 +546,7 @@ def _build_row(
                 'Local Tax Withheld', 'State Disability Withheld',
                 'Employer Taxes', 'Workers Compensation', 'Handling Fee', 'Signatory Fee',
             ]
-            if workbook_type == 'ga':
+            if _is_ga_workbook(workbook_type):
                 _TOTAL_KEYS = _TOTAL_KEYS + ['State Tax Withheld']
             ptip_amount = round(sum(_to_float(ptip.get(k)) for k in _TOTAL_KEYS), 2)
         er_tax_ptip    = _to_float(ptip.get('Employer Taxes'))
@@ -997,6 +997,15 @@ def _llm_fuzzy_match_talent(
         return {}, {}
 
 
+def _is_ga_workbook(workbook_type: str) -> bool:
+    """workbook_type is an unvalidated free-text string from the frontend's
+    own form field -- nothing in this backend defines or normalizes its
+    exact casing/spelling, so match tolerantly rather than gating two real
+    features (the ptip_amount total definition and AICP classification) on
+    a single guessed literal like 'ga' that could silently never match."""
+    return (workbook_type or "").strip().lower() in ("ga", "georgia")
+
+
 # ── AICP classification (GA only -- IL's Talent & Extras has no such column) ──
 
 def _classify_aicp_codes_talent(rows: list[dict], openai_key: str) -> None:
@@ -1385,7 +1394,7 @@ def extract_talent(
             issues.append(f"Organized PTIP build error: {e}")
 
     # ── Step 10: AICP classification (GA only) ──────────────────────────────────
-    if workbook_type == 'ga':
+    if _is_ga_workbook(workbook_type):
         _classify_aicp_codes_talent(workbook_rows, openai_key)
 
     # ── Step 11: Build summary ────────────────────────────────────────────────
