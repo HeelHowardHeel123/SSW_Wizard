@@ -472,6 +472,7 @@ def _build_row(
     payment_entity: str = 'Extreme Reach Talent, Inc',
     pah_from_pdf: bool = False,    # Teams: P&H from PDF talent table, not PTIP
     workbook_type: str = '',       # 'ga' changes ptip_amount's total definition -- see below
+    first_row_of_invoice: bool = False,  # Teams: this row absorbs the invoice's Other Fees
 ) -> dict:
     """Assemble one workbook row from PTIP and/or PDF data."""
 
@@ -572,9 +573,21 @@ def _build_row(
     if pdf_invoice and pdf_invoice.get('commercial_title'):
         commercial_title = pdf_invoice['commercial_title']
 
-    # ── Wages and Misc Pmt ───────────────────────────────────────────────────
+    # ── Other Fees (invoice-level, no dedicated column) ──────────────────────
+    # Business Affairs Fee / Wire Fee / etc. have no column of their own on the
+    # template regardless of whether this invoice has a PTIP report -- a PTIP
+    # match only ever carries per-performer wage/tax data, never these. Attach
+    # to exactly one row per invoice (the first PDF-matched row) so the money
+    # isn't silently lost when PTIP exists but doesn't reflect it.
     other_fees = 0.0
     notes      = ''
+    if first_row_of_invoice and pdf_invoice:
+        other_fees = pdf_invoice.get('total_other_fees', 0.0)
+        detail     = pdf_invoice.get('other_fees_detail') or []
+        if detail:
+            notes = ', '.join(f"{d['label']} (${d['amount']:,.2f})" for d in detail)
+
+    # ── Wages and Misc Pmt ───────────────────────────────────────────────────
     if scenario in ('A',) and pdf_talent:
         # PDF-only: wages and misc from PDF talent row
         wages    = pdf_talent.get('gross_wages', 0.0)
@@ -590,10 +603,6 @@ def _build_row(
             # only use a signatory fee when the PDF prints a real "TS
             # Signatory Fee" footer line.
             signatory_fee = pdf_invoice.get('total_signatory_fee', 0.0)
-            other_fees    = pdf_invoice.get('total_other_fees', 0.0)
-            detail        = pdf_invoice.get('other_fees_detail') or []
-            if detail:
-                notes = ', '.join(f"{d['label']} (${d['amount']:,.2f})" for d in detail)
         else:
             er_tax = sag = handling = wc = signatory_fee = 0.0
     elif scenario == 'B' and ptip:
@@ -2298,6 +2307,7 @@ def extract_teams_talent(
             # Pass 2: emit rows in PDF order
             for tr, ptip_match, ptip_match_orig in matched_pairs:
                 is_first_tax = (not inv_has_ptip) and (not first_talent_seen)
+                is_first_row = not first_talent_seen
                 first_talent_seen = True
                 eff_scenario = 'A' if not inv_has_ptip else scenario
 
@@ -2314,11 +2324,13 @@ def extract_teams_talent(
                     payment_entity='The Team Companies',
                     pah_from_pdf=True,
                     workbook_type=workbook_type,
+                    first_row_of_invoice=is_first_row,
                 )
                 if ptip_match is None:
                     reason = llm_reasons.get(tr['name'], '')
                     if reason:
-                        row['notes'] = f"[LLM no match] {reason}"
+                        llm_note = f"[LLM no match] {reason}"
+                        row['notes'] = f"{row['notes']}; {llm_note}" if row['notes'] else llm_note
                 workbook_rows.append(row)
                 item_no += 1
 
