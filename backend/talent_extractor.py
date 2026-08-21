@@ -2423,3 +2423,500 @@ def extract_teams_talent(
             'issues':             issues,
         },
     }
+
+
+# ── Highland Talent invoice PDF parsing ─────────────────────────────────────
+# Highland has no PTIP-style file at all -- instead a "Payroll Report" xlsx
+# consolidates a PID's pay ACROSS every invoice in the job into one row
+# (unlike ER/Teams, which key PTIP rows to a single invoice). Every performer
+# and agency has a unique 6-char alphanumeric PID; there are no SSNs. Dollar
+# figures on the report are authoritative and are never re-derived from the
+# PDFs -- the PDFs exist here only to (a) support the PDF-only fallback when
+# no report was provided, and (b) cross-check that every PID on a PDF is
+# accounted for in the report and vice versa.
+
+_HIGHLAND_PID_RE    = re.compile(r'^[A-Z0-9]{6}$')
+_HIGHLAND_AMOUNT_RE = re.compile(r'^[\d,]+\.\d{2}$')
+# The category code varies more than expected (seen: P, E, AGT, EXD, FE) --
+# match any 1-4 letter code rather than a fixed enum, and rely on ON/OFF
+# (consistently performer vs. agent across every example seen) to tell them
+# apart rather than the category text itself.
+_HIGHLAND_ROW_RE    = re.compile(
+    r'^([A-Z0-9]{6})\s+(.+?)\s+(ON|OFF)\s+([A-Z]{1,4})\b(.*)$'
+)
+_HIGHLAND_CONT_RE   = re.compile(r'^([A-Z])\s+([\d,]+\.\d{2})\*?\s*$')
+_HIGHLAND_TITLES    = {'P': 'Principal', 'E': 'Extra'}
+
+# Confirmed by cross-referencing invoice line items against the payroll
+# report's own Taxable Wages column across three real jobs: E (fitting) and
+# N (night premium) are taxable; A (wardrobe), D (travel), R (reimburse), and
+# B (agent fee) are not. An uncoded/base amount is always taxable.
+_HIGHLAND_REIMB_CODES = frozenset({'A', 'D', 'R', 'B'})
+
+
+def _parse_highland_amount_run(rest: str) -> tuple[list[tuple[str | None, float]], float]:
+    """Parse the trailing '[LETTER] amount' tokens on a Highland row's own
+    line. The LAST amount is always the row's own displayed running total,
+    never a fee component -- everything before it is a real line item.
+
+    Some invoices print a per-unit rate field (e.g. "19.25") ahead of the
+    state code that reads exactly like a dollar amount but isn't a fee --
+    real fee/total figures always come after the state code, so only scan
+    for amounts in the text following it."""
+    # Some invoices glue the state code directly onto the next field with no
+    # space (e.g. "GA22J"), so a real \b word-boundary won't find it -- match
+    # on a token start (not preceded by a non-space char) instead.
+    state_m = None
+    for state_m in re.finditer(r'(?<!\S)[A-Z]{2}(?=\d|\s|$)', rest):
+        pass  # keep the LAST match
+    scan_from = state_m.end() if state_m else 0
+    pairs = re.findall(r'([A-Z])?\s*([\d,]+\.\d{2})\*?', rest[scan_from:])
+    parsed = [(code or None, _to_float(amt)) for code, amt in pairs]
+    if not parsed:
+        return [], 0.0
+    *components, (last_code, last_amt) = parsed
+    # The trailing total is occasionally itself code-tagged (e.g. a lone 'B'
+    # commission row) -- only treat it as a bare total when nothing else on
+    # the line already claims that meaning.
+    if last_code is not None and not components:
+        components = [(last_code, last_amt)]
+    return components, last_amt
+
+
+def parse_highland_invoice_pdf(pdf_bytes: bytes) -> dict | None:
+    """Parse a Highland Talent invoice PDF. Returns None if not recognized."""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            text = '\n'.join(pg.extract_text() or '' for pg in pdf.pages)
+    except Exception:
+        return None
+
+    if 'PAYROLL TAXES:' not in text or 'SERVICE CHARGE:' not in text:
+        return None
+
+    inv_no = ''
+    invoice_date = ''
+    # Date year is 4-digit on most invoices, but the older template uses a
+    # 2-digit year (e.g. "08/29/24") -- accept both.
+    m = re.search(r'USD STANDARD IV\s+(\d{1,2}/\d{1,2}/\d{2,4})\s+(\d+)', text)
+    if m:
+        invoice_date, inv_no = m.group(1), m.group(2)
+        if len(invoice_date.split('/')[-1]) == 2:
+            invoice_date = _expand_date_yy(invoice_date)
+
+    work_state = 'GA'
+    m = re.search(r'\b([A-Z][A-Za-z]+),\s+([A-Z]{2})\b', text)
+    if m:
+        work_state = m.group(2)
+
+    m_taxes  = re.search(r'PAYROLL TAXES:\s*([\d,]+\.\d{2})', text)
+    m_svc    = re.search(r'SERVICE CHARGE:\s*([\d,]+\.\d{2})', text)
+    payroll_taxes  = _to_float(m_taxes.group(1) if m_taxes else 0)
+    service_charge = _to_float(m_svc.group(1)   if m_svc   else 0)
+
+    rows: list[dict] = []
+    current: dict | None = None
+
+    def _finalize(row):
+        if row is None:
+            return
+        comp_sum = round(sum(a for _, a in row['_components']), 2)
+        wages    = round(sum(a for c, a in row['_components'] if c not in _HIGHLAND_REIMB_CODES), 2)
+        misc_pmt = round(comp_sum - wages, 2)
+        row['wages']    = wages
+        row['misc_pmt'] = misc_pmt
+        del row['_components']
+        rows.append(row)
+
+    for raw_line in text.split('\n'):
+        line = raw_line.strip()
+        if not line or line == 'MINOR':
+            continue
+
+        m = _HIGHLAND_ROW_RE.match(line)
+        if m:
+            _finalize(current)
+            pid, name, onoff, cat, rest = m.groups()
+            is_agent = (onoff == 'OFF')
+            name = re.sub(r'\s+\d{1,3}%.*$', '', name).strip()
+            components, row_total = _parse_highland_amount_run(rest)
+            current = {
+                'pid':        pid,
+                'name':       name,
+                'is_agent':   is_agent,
+                'title':      'Agency fee' if is_agent else _HIGHLAND_TITLES.get(cat, cat),
+                'row_total':  row_total,
+                '_components': components,
+            }
+            continue
+
+        cm = _HIGHLAND_CONT_RE.match(line)
+        if cm and current is not None:
+            current['_components'].append((cm.group(1), _to_float(cm.group(2))))
+            continue
+        # Anything else (headers, legend text, MINOR, control numbers, footer
+        # labels, page breaks) is ignored without disturbing `current` -- a
+        # continuation line can legitimately follow a page-break header block.
+
+    _finalize(current)
+
+    if not rows:
+        return None
+
+    gross_wages = round(sum(r['row_total'] for r in rows), 2)
+
+    return {
+        'invoice_no':      inv_no,
+        'invoice_date':    invoice_date,
+        'work_state':      work_state,
+        'gross_wages':     gross_wages,
+        'payroll_taxes':   payroll_taxes,
+        'service_charge':  service_charge,
+        'invoice_total':   round(gross_wages + payroll_taxes + service_charge, 2),
+        'talent_rows':     rows,
+    }
+
+
+# ── Highland Payroll Report parsing ─────────────────────────────────────────
+
+def _normalize_highland_col(v) -> str:
+    if v is None:
+        return ''
+    return re.sub(r'\s*\n\s*', ' ', str(v)).strip()
+
+
+_HIGHLAND_REPORT_REQUIRED_COLS = ('PID', 'Taxable Wages', 'Invoice Total')
+
+
+def _find_highland_report_sheet(wb):
+    """Highland's report workbook is inconsistent -- sometimes one sheet,
+    sometimes several (a GA-tax-only view, an audit/QA copy, a sheet named
+    after a date). Find whichever sheet actually has the full financial
+    columns, preferring a name that doesn't look like a QA/audit copy."""
+    candidates = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        for row_vals in ws.iter_rows(max_row=10, values_only=True):
+            norms = [_normalize_highland_col(v) for v in row_vals]
+            if all(col in norms for col in _HIGHLAND_REPORT_REQUIRED_COLS):
+                candidates.append((sheet_name, ws, norms))
+                break
+    if not candidates:
+        return None, []
+    for sheet_name, ws, norms in candidates:
+        if 'audit' not in sheet_name.lower():
+            return ws, norms
+    return candidates[0][1], candidates[0][2]
+
+
+def parse_highland_report_xlsx(xlsx_bytes_list: list[bytes]) -> tuple[list[dict], list[str]]:
+    """Read one or more Highland Payroll Report Excel files. Returns
+    (rows, issues). Each row is one PID, aggregated across however many
+    invoices the report itself grouped together for that PID."""
+    rows:   list[dict] = []
+    issues: list[str]  = []
+
+    for file_i, xlsx_bytes in enumerate(xlsx_bytes_list):
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+            ws, headers = _find_highland_report_sheet(wb)
+            if ws is None:
+                issues.append(f"Payroll report {file_i + 1}: could not find a sheet with PID/Taxable Wages/Invoice Total columns")
+                continue
+
+            hdr_row_idx = None
+            for r_idx, row_vals in enumerate(ws.iter_rows(max_row=10, values_only=True)):
+                norms = [_normalize_highland_col(v) for v in row_vals]
+                if all(col in norms for col in _HIGHLAND_REPORT_REQUIRED_COLS):
+                    hdr_row_idx = r_idx
+                    break
+            if hdr_row_idx is None:
+                continue
+
+            file_headers = [_normalize_highland_col(v) for v in list(ws.iter_rows(
+                min_row=hdr_row_idx + 1, max_row=hdr_row_idx + 1, values_only=True))[0]]
+
+            for row_vals in ws.iter_rows(min_row=hdr_row_idx + 2, values_only=True):
+                row = dict(zip(file_headers, row_vals))
+                pid = str(row.get('PID', '') or '').strip()
+                if not _HIGHLAND_PID_RE.match(pid):
+                    continue  # skips totals rows, stray dates, blank rows
+
+                name = str(row.get('Talent/Agency Name', '') or row.get('Talent Name', '') or '').strip()
+                inv_no_raw = str(row.get('Invoice #', '') or '').strip()
+
+                rows.append({
+                    'pid':             pid,
+                    'name':            name,
+                    'loanout':         str(row.get('Loan-Out Company', '') or '').strip(),
+                    'work_state':      str(row.get('Work State', '') or '').strip(),
+                    'address':         str(row.get('Address', '') or '').strip(),
+                    'city':            str(row.get('City', '') or '').strip(),
+                    'state':           str(row.get('State', '') or '').strip(),
+                    'zip':             str(row.get('Zip', '') or '').strip(),
+                    'invoice_no_raw':  inv_no_raw,
+                    'gross_payment':   _to_float(row.get('Gross Payment')),
+                    'expense_reimb':   _to_float(row.get('Expense Reimb')),
+                    'taxable_wages':   _to_float(row.get('Taxable Wages')),
+                    'pension_health':  _to_float(row.get('Pension & Health')),
+                    'employer_taxes':  _to_float(row.get("Employer's Payroll Taxes")),
+                    'workers_comp':    _to_float(row.get("Workers' Comp Insurance")),
+                    'service_charge':  _to_float(row.get('Service Charge')),
+                    'invoice_total':   _to_float(row.get('Invoice Total')),
+                })
+        except Exception as e:
+            issues.append(f"Payroll report {file_i + 1}: parse error — {e}")
+
+    return rows, issues
+
+
+# ── Highland row assembly ────────────────────────────────────────────────────
+
+def _build_highland_row(
+    *,
+    item_no: int,
+    report_row: dict | None,
+    pdf_row: dict | None,          # PDF-only fallback: one raw invoice-line dict
+    pdf_invoice: dict | None,      # the invoice this pdf_row came from (PDF-only mode)
+    invoice_no: str,
+    received_invoice: bool,
+    first_row_of_invoice: bool,    # PDF-only mode: absorb this invoice's footer totals
+    notes: str = '',
+) -> dict:
+    """Assemble one workbook row, mirroring _build_row()'s output shape so
+    main.py's response contract is identical regardless of payroll company."""
+
+    if report_row:
+        name       = report_row['name']
+        is_agent   = _is_company_name(name)
+        title      = 'Agency fee' if is_agent else (pdf_row.get('title', '') if pdf_row else '')
+        work_state = report_row['work_state'] or 'GA'
+        home_addr  = report_row['address']
+        city       = report_row['city']
+        state      = report_row['state']
+        zip_code   = report_row['zip']
+        wages      = report_row['taxable_wages']
+        misc_pmt   = report_row['expense_reimb']
+        sag        = report_row['pension_health']
+        er_tax     = report_row['employer_taxes']
+        wc         = report_row['workers_comp']
+        handling   = report_row['service_charge']
+        total      = report_row['invoice_total']
+        on_ptip    = True
+        ptip_amount = total
+        ssn_fein   = report_row['pid']
+    else:
+        name       = pdf_row['name']
+        is_agent   = pdf_row['is_agent']
+        title      = pdf_row['title']
+        work_state = pdf_invoice['work_state'] if pdf_invoice else 'GA'
+        home_addr = city = state = zip_code = ''
+        wages    = pdf_row['wages']
+        misc_pmt = pdf_row['misc_pmt']
+        sag = er_tax = wc = handling = 0.0
+        if first_row_of_invoice and not is_agent and pdf_invoice:
+            er_tax   = pdf_invoice['payroll_taxes']
+            handling = pdf_invoice['service_charge']
+        total    = round(wages + misc_pmt + sag + er_tax + wc + handling, 2)
+        on_ptip  = False
+        ptip_amount = None
+        ssn_fein = pdf_row['pid']
+
+    if state and work_state and state.upper() != work_state.upper():
+        qualify = 'NO-OOS'
+    else:
+        qualify = ''
+
+    return {
+        'item_no':        item_no,
+        'qualify':        qualify,
+        'on_ptip':        on_ptip,
+        'ptip_amount':    ptip_amount,
+        'work_state':     work_state,
+        'talent_name':    name,
+        'title':          title,
+        'work_days':      None,
+        'work_dates':     '',
+        'invoice_no':     invoice_no,
+        'invoice_date':   pdf_invoice.get('invoice_date', '') if pdf_invoice else '',
+        'wages':          round(wages, 2),
+        'misc_pymt':      round(misc_pmt, 2),
+        'er_tax':         round(er_tax, 2),
+        'wc':             round(wc, 2),
+        'handling':       round(handling, 2),
+        'sag':            round(sag, 2),
+        'signatory_fee':  0.0,
+        'other_fees':     0.0,
+        'state_tax_withheld':        0.0,
+        'local_tax_withheld':        0.0,
+        'state_disability_withheld': 0.0,
+        'total':          total,
+        'check_number':   '',
+        'received_invoice': received_invoice,
+        'payment_entity': 'Highland Talent Payments, Inc',
+        'type':           'Session',
+        'home_address':   home_addr,
+        'city':           city,
+        'state':          state,
+        'zip':            zip_code,
+        'ssn_fein':          ssn_fein,
+        'commercial_id':     '',
+        'commercial_title':  '',
+        'notes':             notes,
+        'ptip_row_no':    None,
+        'is_duplicate':   False,
+    }
+
+
+def extract_highland_talent(
+    pdf_files:         list[tuple[str, bytes]],
+    report_bytes_list:  list[bytes] | None,
+    project_title:      str,
+    workbook_type:      str,
+    openai_key:         str = '',
+) -> dict:
+    """Run the full Highland Talent extraction. Returns the same shape as
+    extract_talent()/extract_teams_talent()."""
+    issues: list[str] = []
+
+    # ── Step 1: Parse every PDF, regardless of whether a report exists -- we
+    # always need per-PID/per-invoice PDF data for the completeness check and
+    # the wage-mismatch note, and it's the only source at all in PDF-only mode.
+    pdf_invoices: dict[str, dict] = {}
+    for filename, data in pdf_files:
+        result = parse_highland_invoice_pdf(data)
+        if result is None:
+            issues.append(f"{filename}: not recognized as a Highland Talent invoice")
+            continue
+        inv_no = result['invoice_no']
+        if not inv_no:
+            issues.append(f"{filename}: could not extract invoice number")
+            continue
+        if inv_no in pdf_invoices:
+            issues.append(f"{filename}: duplicate invoice number {inv_no} — skipped")
+            continue
+        pdf_invoices[inv_no] = result
+
+    received_invoice_nos = set(pdf_invoices.keys())
+
+    # PID -> [(invoice_no, row_total), ...] across every received PDF, in the
+    # order PDFs were processed -- used both for the completeness check and
+    # as the invoice-number fallback when the report has no Invoice # column.
+    pid_pdf_hits: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    pid_pdf_row:  dict[str, dict] = {}  # last-seen raw PDF row per PID, for PDF-only mode
+    for inv_no, inv in pdf_invoices.items():
+        for r in inv['talent_rows']:
+            pid_pdf_hits[r['pid']].append((inv_no, r['row_total']))
+            pid_pdf_row[r['pid']] = r
+
+    # ── Step 2: Parse the payroll report, if provided ────────────────────────
+    report_rows: list[dict] = []
+    if report_bytes_list:
+        report_rows, report_issues = parse_highland_report_xlsx(report_bytes_list)
+        issues.extend(report_issues)
+
+    workbook_rows: list[dict] = []
+    item_no = 1
+
+    if report_rows:
+        # ── Report-driven mode: one row per PID, at whatever granularity the
+        # report itself used. Never re-derive wages/taxes from the PDFs.
+        report_pids = set()
+        for rr in report_rows:
+            report_pids.add(rr['pid'])
+            hits = pid_pdf_hits.get(rr['pid'], [])
+            pdf_sum = round(sum(total for _, total in hits), 2)
+            received = bool(hits)
+
+            if rr['invoice_no_raw']:
+                invoice_no = rr['invoice_no_raw']
+            else:
+                invoice_no = ', '.join(sorted({inv for inv, _ in hits}, key=lambda x: x.zfill(20)))
+
+            notes = ''
+            if not received:
+                notes = "Not found on any received PDF invoice"
+            elif abs(pdf_sum - rr['gross_payment']) > 0:
+                notes = (f"Production Report Gross Payment = ${rr['gross_payment']:,.2f} "
+                         f"but we only have ${pdf_sum:,.2f} in PDF wages")
+
+            row = _build_highland_row(
+                item_no=item_no,
+                report_row=rr,
+                pdf_row=pid_pdf_row.get(rr['pid']),
+                pdf_invoice=None,
+                invoice_no=invoice_no,
+                received_invoice=received,
+                first_row_of_invoice=False,
+                notes=notes,
+            )
+            workbook_rows.append(row)
+            item_no += 1
+
+        # Completeness check: any PID seen on a PDF but absent from the report
+        for pid, hits in pid_pdf_hits.items():
+            if pid not in report_pids:
+                inv_list = ', '.join(sorted({inv for inv, _ in hits}))
+                name = pid_pdf_row.get(pid, {}).get('name', pid)
+                issues.append(f"{name} ({pid}), invoice(s) {inv_list}: on the PDF but not found in the payroll report")
+
+        # Completeness check: any invoice # the report references that we
+        # never received a PDF for
+        report_inv_nos = set()
+        for rr in report_rows:
+            for tok in re.split(r'[,\n]+', rr['invoice_no_raw']):
+                tok = tok.strip()
+                if tok:
+                    report_inv_nos.add(tok)
+        for inv_no in sorted(report_inv_nos - received_invoice_nos):
+            issues.append(f"Invoice {inv_no}: referenced in the payroll report but no matching PDF was received")
+
+    else:
+        # ── PDF-only fallback: one row per invoice-line, in PDF order. The
+        # invoice's own footer totals (Payroll Taxes, Service Charge) land on
+        # the first non-agent row of that invoice, same as ER/Teams.
+        for inv_no in sorted(pdf_invoices.keys(), key=lambda x: x.zfill(20)):
+            inv = pdf_invoices[inv_no]
+            first_seen = False
+            for r in inv['talent_rows']:
+                is_first = (not first_seen) and not r['is_agent']
+                first_seen = first_seen or not r['is_agent']
+                row = _build_highland_row(
+                    item_no=item_no,
+                    report_row=None,
+                    pdf_row=r,
+                    pdf_invoice=inv,
+                    invoice_no=inv_no,
+                    received_invoice=True,
+                    first_row_of_invoice=is_first,
+                )
+                workbook_rows.append(row)
+                item_no += 1
+
+    if not report_rows and not pdf_invoices:
+        return {
+            'rows': [],
+            'ptip_excel_b64': None,
+            'summary': {
+                'total_rows': 0,
+                'invoices_with_pdf': [],
+                'invoices_ptip_only': [],
+                'duplicates_found': 0,
+                'issues': issues + ['No PDFs or payroll report provided.'],
+            },
+        }
+
+    if _is_ga_workbook(workbook_type):
+        _classify_aicp_codes_talent(workbook_rows, openai_key)
+
+    return {
+        'rows': workbook_rows,
+        'ptip_excel_b64': None,
+        'summary': {
+            'total_rows':         len(workbook_rows),
+            'invoices_with_pdf':  sorted(received_invoice_nos),
+            'invoices_ptip_only': [],
+            'duplicates_found':   0,
+            'issues':             issues,
+        },
+    }

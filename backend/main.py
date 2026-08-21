@@ -157,7 +157,7 @@ from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
 from notify import send_parser_alert, send_run_summary, ALERT_EMAIL
-from talent_extractor import extract_talent, extract_teams_talent
+from talent_extractor import extract_talent, extract_teams_talent, extract_highland_talent
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -4019,7 +4019,7 @@ async def extract_talent_endpoint(
     ptip_files:     list[UploadFile] = File(default=[]),     # Teams: multiple PTIP files
     project_title:  str              = Form(default=""),
     workbook_type:  str              = Form(default=""),
-    payroll_company: str             = Form(default="er"),   # "er" or "teams"
+    payroll_company: str             = Form(default="er"),   # "er", "teams", or "highland"
     x_app_secret:   str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
@@ -4049,6 +4049,28 @@ async def extract_talent_endpoint(
         return extract_teams_talent(
             pdf_files=pdf_bytes_list,
             ptip_bytes_list=ptip_bytes_list,
+            project_title=project_title,
+            workbook_type=workbook_type,
+            openai_key=OPENAI_API_KEY,
+        )
+
+    if payroll_company.lower() == 'highland':
+        report_bytes_list: list[bytes] = []
+        for uf in (ptip_files or []):
+            data = await uf.read()
+            if data:
+                report_bytes_list.append(data)
+        if not report_bytes_list and ptip_file:
+            data = await ptip_file.read()
+            if data:
+                report_bytes_list.append(data)
+
+        if not pdf_bytes_list and not report_bytes_list:
+            raise HTTPException(400, "Provide at least one PDF or a Payroll Report file.")
+
+        return extract_highland_talent(
+            pdf_files=pdf_bytes_list,
+            report_bytes_list=report_bytes_list,
             project_title=project_title,
             workbook_type=workbook_type,
             openai_key=OPENAI_API_KEY,
