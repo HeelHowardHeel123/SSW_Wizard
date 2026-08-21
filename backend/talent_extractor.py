@@ -2829,16 +2829,29 @@ def extract_highland_talent(
             received = bool(hits)
 
             if rr['invoice_no_raw']:
-                invoice_no = rr['invoice_no_raw']
+                # The report's own field is sometimes newline-separated
+                # rather than comma-separated -- normalize either way.
+                invoice_no = ', '.join(
+                    tok.strip() for tok in re.split(r'[,\n]+', rr['invoice_no_raw']) if tok.strip()
+                )
             else:
                 invoice_no = ', '.join(sorted({inv for inv, _ in hits}, key=lambda x: x.zfill(20)))
 
-            notes = ''
+            notes_parts = []
             if not received:
-                notes = "Not found on any received PDF invoice"
+                notes_parts.append("Not found on any received PDF invoice")
             elif abs(pdf_sum - rr['gross_payment']) > 0:
-                notes = (f"Production Report Gross Payment = ${rr['gross_payment']:,.2f} "
-                         f"but we only have ${pdf_sum:,.2f} in PDF wages")
+                notes_parts.append(f"Production Report Gross Payment = ${rr['gross_payment']:,.2f} "
+                                    f"but we only have ${pdf_sum:,.2f} in PDF wages")
+            if len(hits) > 1:
+                # Show how a multi-invoice PID's total actually breaks down,
+                # since the workbook only ever shows one combined number.
+                breakdown = ', '.join(
+                    f"Invoice {inv} (${amt:,.2f})"
+                    for inv, amt in sorted(hits, key=lambda h: h[0].zfill(20))
+                )
+                notes_parts.append(breakdown)
+            notes = '; '.join(notes_parts)
 
             row = _build_highland_row(
                 item_no=item_no,
