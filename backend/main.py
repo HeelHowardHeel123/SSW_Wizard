@@ -2310,9 +2310,26 @@ def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict
     if not all_rows:
         return [], []
 
-    headers = [str(h).strip() if h not in (None, "") else "" for h in all_rows[0]]
+    # Some Production Reports prepend a few title/metadata rows (report
+    # title, client name, project title, employee count) before the real
+    # column-header row -- confirmed real case: JOJX's report has row 1 =
+    # "Production Tax Credit Report: GA" with the actual headers ("Employee
+    # Name", "SSN", ...) on row 5, which silently produced 58 all-blank rows
+    # since every downstream field was keyed off that one bogus "header".
+    # A genuine header row is almost entirely text labels across nearly
+    # every column, while metadata rows populate only 1-2 cells and data
+    # rows mix in numbers/dates for wage/tax/date columns -- so the row with
+    # the most non-empty STRING cells (within the first few rows) is
+    # reliably the header, including the common case where it's just row 1.
+    scan_limit = min(15, len(all_rows))
+    header_row_idx = max(
+        range(scan_limit),
+        key=lambda i: sum(1 for v in all_rows[i] if isinstance(v, str) and v.strip()),
+    )
+
+    headers = [str(h).strip() if h not in (None, "") else "" for h in all_rows[header_row_idx]]
     rows = []
-    for r in all_rows[1:]:
+    for r in all_rows[header_row_idx + 1:]:
         if all(v in (None, "") for v in r):
             continue
         row = {headers[i]: r[i] for i in range(min(len(headers), len(r))) if headers[i]}
