@@ -1728,16 +1728,29 @@ def _loan_out_rows_from_fringe(rows: list[dict]) -> list[dict]:
     for r in rows:
         if not r.get("loanOut"):
             continue
-        # "corporate" is the CAPS loan-out-wages column; Wrapbook loan-outs
-        # report the same dollar amount in the ordinary "wages" field instead.
-        gross = r.get("corporate") or r.get("wages") or 0
+        # automationTotal (set by /reconcile-ga-payroll) sums correctly across
+        # every invoice a person appears on; "wages" is only ever one of
+        # those invoices' values (first-non-empty wins during the person-
+        # level merge), so prefer automationTotal when it's present. Pre-
+        # reconciliation rows (straight from /extract-payroll) have neither
+        # multi-invoice concern nor this field, so they fall through as
+        # before -- "corporate" is the CAPS loan-out-wages column; Wrapbook
+        # loan-outs report the same dollar amount in "wages" instead.
+        gross = r.get("automationTotal") or r.get("corporate") or r.get("wages") or 0
         title = r.get("jobTitle", "") or ""
         address = ", ".join(p for p in (r.get("street", ""), r.get("city", "")) if p)
+        # A person-level reconciled row (from /reconcile-ga-payroll) has no
+        # single invoice number of its own -- its per-invoice breakdown lives
+        # in "notes" instead (e.g. "Invoices: 330535 ($1,401.16), 332355
+        # ($1,985.12)"). A pre-reconciliation row (straight from
+        # /extract-payroll) still has its own real invoiceNo, so prefer that
+        # when present.
         out.append(_loan_out_row(
             name=r.get("worker", ""), title=title, company=r.get("loanOutCompany", ""),
             gross=gross, payroll_company=(r.get("payrollCompany") or "").title(),
             address=address, home_state=r.get("resState", ""), work_state=r.get("workState", ""),
             invoice_date=r.get("invoiceDate", ""), invoice_no=r.get("invoiceNo", ""),
+            notes=r.get("notes", "") if not r.get("invoiceNo") else "",
         ))
     return out
 
@@ -2366,6 +2379,14 @@ async def reconcile_ga_payroll(
     )
     if body.timecard_rows:
         result["rows"] = match_timecards(result["rows"], body.timecard_rows)
+    # The fringe PDF alone often has no way to identify a loan-out (e.g.
+    # Wrapbook's invoice PDF has no per-employee Type/corp-name column at
+    # all) -- that information frequently only exists on the Production
+    # Report side, which _reconcile_person_level already merges in here.
+    # /extract-payroll's own loan_out_rows only ever sees the pre-merge PDF
+    # rows, so this reconciled set is the real, complete source for Crew
+    # Payroll loan-outs.
+    result["loan_out_rows"] = _loan_out_rows_from_fringe(result["rows"])
     return result
 
 
