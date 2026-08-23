@@ -492,6 +492,17 @@ def _build_row(
     elif pdf_talent:
         is_agent = pdf_talent.get('is_agent', False)
 
+    # ER's PTIP sometimes writes a loan-out performer's name as
+    # "First Last\n(Company Name)" in the same Talent Name cell (confirmed
+    # real example: "Aspen K Wilson\n(Aspen Kennedy Inc)") -- an agent row's
+    # own name is never itself the loan-out pattern, so skip those.
+    ptip_loan_out_company = ''
+    if ptip and not is_agent:
+        full_ptip_name = str(ptip.get('Talent Name', '') or '').strip()
+        m = re.search(r'\(([^()]+)\)\s*$', full_ptip_name)
+        if m and '\n' in full_ptip_name:
+            ptip_loan_out_company = m.group(1).strip()
+
     # ── Name ────────────────────────────────────────────────────────────────
     if talent_name_override:
         talent_name = talent_name_override
@@ -688,6 +699,10 @@ def _build_row(
         total = ptip_amount
     else:
         total = round(wages + misc_pmt + er_tax + wc + handling + sag + signatory_fee + other_fees, 2)
+
+    if not loan_out_company and ptip_loan_out_company:
+        loan_out         = True
+        loan_out_company = ptip_loan_out_company
 
     if loan_out_company:
         loan_out_note = f"Loan-out company: {loan_out_company}"
