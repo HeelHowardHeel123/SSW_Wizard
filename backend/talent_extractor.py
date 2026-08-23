@@ -473,6 +473,10 @@ def _build_row(
     pah_from_pdf: bool = False,    # Teams: P&H from PDF talent table, not PTIP
     workbook_type: str = '',       # 'ga' changes ptip_amount's total definition -- see below
     first_row_of_invoice: bool = False,  # Teams: this row absorbs the invoice's Other Fees
+    loan_out: bool = False,
+    loan_out_company: str = '',
+    talent_name_override: str = '',  # use the real performer's name instead of a matched
+                                      # loan-out corp's PTIP name (caller-determined)
 ) -> dict:
     """Assemble one workbook row from PTIP and/or PDF data."""
 
@@ -489,7 +493,9 @@ def _build_row(
         is_agent = pdf_talent.get('is_agent', False)
 
     # ── Name ────────────────────────────────────────────────────────────────
-    if ptip:
+    if talent_name_override:
+        talent_name = talent_name_override
+    elif ptip:
         name_raw = str(ptip.get('Talent Name', '') or '').split('\n')[0].strip()
         talent_name = _ptip_name_to_last_first(name_raw, is_agent)
     elif pdf_talent:
@@ -683,6 +689,10 @@ def _build_row(
     else:
         total = round(wages + misc_pmt + er_tax + wc + handling + sag + signatory_fee + other_fees, 2)
 
+    if loan_out_company:
+        loan_out_note = f"Loan-out company: {loan_out_company}"
+        notes = f"{notes}; {loan_out_note}" if notes else loan_out_note
+
     return {
         'item_no':        item_no,
         'qualify':        qualify,
@@ -690,6 +700,7 @@ def _build_row(
         'ptip_amount':    ptip_amount,
         'work_state':     work_state,
         'talent_name':    talent_name,
+        'loan_out':       'YES' if loan_out else 'NO',
         'title':          title,
         'work_days':      work_days,
         'work_dates':     work_dates,
@@ -2274,6 +2285,11 @@ def extract_teams_talent(
             # exact matching and SSN-last-4 both miss it -- same failure class
             # ER hit with a cast-category code glued onto the name.
             llm_reasons: dict[str, str] = {}
+            # A fuzzy match that bridges a real person's PDF name to a
+            # company-named PTIP entry is a loan-out payment, not a plain
+            # name-formatting mismatch -- track which resolved indices this
+            # applies to so Pass 2 can flag them and keep the real name.
+            loan_out_idx: dict[int, str] = {}
             if openai_key and inv_has_ptip:
                 unmatched_idx = [
                     i for i, (tr, pm, _) in enumerate(matched_pairs) if pm is None
@@ -2303,13 +2319,16 @@ def extract_teams_talent(
                                 pr, orig_i = inv_ptip_pairs[li]
                                 matched_pairs[i] = (tr, pr, orig_i)
                                 ptip_consumed.add(li)
+                                if _is_company_name(matched_name):
+                                    loan_out_idx[i] = matched_name
 
             # Pass 2: emit rows in PDF order
-            for tr, ptip_match, ptip_match_orig in matched_pairs:
+            for pair_idx, (tr, ptip_match, ptip_match_orig) in enumerate(matched_pairs):
                 is_first_tax = (not inv_has_ptip) and (not first_talent_seen)
                 is_first_row = not first_talent_seen
                 first_talent_seen = True
                 eff_scenario = 'A' if not inv_has_ptip else scenario
+                loan_out_company = loan_out_idx.get(pair_idx, '')
 
                 row = _build_row(
                     item_no=item_no,
@@ -2325,6 +2344,9 @@ def extract_teams_talent(
                     pah_from_pdf=True,
                     workbook_type=workbook_type,
                     first_row_of_invoice=is_first_row,
+                    loan_out=bool(loan_out_company),
+                    loan_out_company=loan_out_company,
+                    talent_name_override=tr['name'] if loan_out_company else '',
                 )
                 if ptip_match is None:
                     reason = llm_reasons.get(tr['name'], '')
@@ -2705,6 +2727,7 @@ def _build_highland_row(
         on_ptip    = True
         ptip_amount = total
         ssn_fein   = report_row['pid']
+        loan_out_company = report_row['loanout']
     else:
         name       = pdf_row['name']
         is_agent   = pdf_row['is_agent']
@@ -2721,6 +2744,11 @@ def _build_highland_row(
         on_ptip  = False
         ptip_amount = None
         ssn_fein = pdf_row['pid']
+        loan_out_company = ''  # not on the payroll report -- can't be identified from the PDF alone
+
+    if loan_out_company:
+        loan_out_note = f"Loan-out company: {loan_out_company}"
+        notes = f"{notes}; {loan_out_note}" if notes else loan_out_note
 
     if state and work_state and state.upper() != work_state.upper():
         qualify = 'NO-OOS'
@@ -2734,6 +2762,7 @@ def _build_highland_row(
         'ptip_amount':    ptip_amount,
         'work_state':     work_state,
         'talent_name':    name,
+        'loan_out':       'YES' if loan_out_company else 'NO',
         'title':          title,
         'work_days':      None,
         'work_dates':     '',
