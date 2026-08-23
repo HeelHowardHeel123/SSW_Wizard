@@ -1903,6 +1903,118 @@ def _payroll_roster_rows_from_ap(rows: list[dict], work_state: str) -> list[dict
     return out
 
 
+# ── GL(BILLING) / GL(PRODCO) consolidation ───────────────────────────────────
+# GL(BILLING) = costs billed directly to TPC Productions itself: the ProdCo's
+# own lump-sum production-fee invoices (billing_extraction_prompt.txt,
+# vendor_type="prodco"), plus Talent/SAG payments (TPC's own signatory
+# relationship, not run through the job's local AP/payroll).
+# GL(PRODCO) = the job's own itemized production-cost ledger: AP, Petty Cash,
+# ProdCC (production credit card), and Payroll Report (crew). Crew Payroll's
+# contribution is built frontend-side from the already-reconciled Payroll
+# Report tab rows -- the backend has no single reconciled source for crew
+# payroll (reconciliation happens client-side; see the Loan Out Withholding
+# wrong-endpoint lesson), so a backend-side feed here would double-count.
+
+def _gl_row(*, check_number='', invoice_number='', invoice_date='', po_number='',
+            vendor_employee='', ff1='', ff2='', source_code='',
+            distribution_description='', last_name='', first_name='',
+            home_state='', episode='', nights=None, amount=0, qualify='', notes=''):
+    return {
+        "check_number":             check_number,
+        "invoice_number":           invoice_number,
+        "invoice_date":             invoice_date,
+        "po_number":                po_number,
+        "vendor_employee":          vendor_employee,
+        "ff1":                      ff1,
+        "ff2":                      ff2,
+        "source_code":              source_code,
+        "distribution_description": distribution_description,
+        "last_name":                last_name,
+        "first_name":               first_name,
+        "home_state":               home_state,
+        "episode":                  episode,
+        "nights":                   nights,
+        "org_cur":                  "USD",
+        "amount":                   amount,
+        "qualify":                  qualify,
+        "notes":                    notes,
+    }
+
+
+def _gl_prodco_rows_from_ap(rows: list[dict]) -> list[dict]:
+    return [
+        _gl_row(
+            check_number=r.get("check_number", ""), invoice_number=r.get("invoice_number", ""),
+            invoice_date=r.get("invoice_date", ""), po_number=r.get("po_number", ""),
+            vendor_employee=r.get("vendor_name", ""), ff1=r.get("ff1", ""), ff2=r.get("ff2", ""),
+            source_code="AP", distribution_description=r.get("distribution_description", ""),
+            last_name=r.get("last_name", ""), first_name=r.get("first_name", ""),
+            home_state=r.get("home_state", ""), episode=r.get("episode", ""), nights=r.get("nights"),
+            amount=r.get("amount", 0), qualify=r.get("qualified", ""), notes=r.get("notes", ""),
+        )
+        for r in rows
+    ]
+
+
+def _gl_prodco_rows_from_petty_cash(rows: list[dict]) -> list[dict]:
+    return [
+        _gl_row(
+            check_number=r.get("check_number", ""), invoice_number=r.get("invoice_number", ""),
+            invoice_date=r.get("invoice_date", ""), po_number=r.get("po_number", ""),
+            vendor_employee=r.get("vendor_name", ""), ff1=r.get("ff1", ""), ff2=r.get("ff2", ""),
+            source_code="PC", distribution_description=r.get("distribution_description", ""),
+            last_name=r.get("last_name", ""), first_name=r.get("first_name", ""),
+            home_state=r.get("home_state", ""), episode=r.get("episode", ""), nights=r.get("nights"),
+            amount=r.get("amount", 0), qualify=r.get("qualified", ""), notes=r.get("notes", ""),
+        )
+        for r in rows
+    ]
+
+
+def _gl_prodco_rows_from_prodcc(rows: list[dict]) -> list[dict]:
+    return [
+        _gl_row(
+            check_number=r.get("check_number", ""), invoice_number=r.get("invoice_number", ""),
+            invoice_date=r.get("invoice_date", ""), po_number=r.get("po_number", ""),
+            vendor_employee=r.get("vendor_name", ""), ff1=r.get("ff1", ""), ff2=r.get("ff2", ""),
+            source_code="CC", distribution_description=r.get("distribution_description", ""),
+            last_name=r.get("last_name", ""), first_name=r.get("first_name", ""),
+            home_state=r.get("home_state", ""), episode=r.get("episode", ""), nights=r.get("nights"),
+            amount=r.get("amount", 0), qualify=r.get("qualified", ""), notes=r.get("notes", ""),
+        )
+        for r in rows
+    ]
+
+
+def _gl_billing_rows_from_talent(rows: list[dict]) -> list[dict]:
+    """Talent/SAG payments -- billed to TPC's own signatory account, not the
+    job's local payroll. FF2 (GL/DL residency split) is left blank for now."""
+    return [
+        _gl_row(
+            check_number=r.get("check_number", ""), invoice_number=r.get("invoice_no", ""),
+            invoice_date=r.get("invoice_date", ""), vendor_employee=r.get("talent_name", ""),
+            source_code="PR", distribution_description=r.get("title", ""),
+            home_state=r.get("state", ""), amount=r.get("total", 0), notes=r.get("notes", ""),
+        )
+        for r in rows
+    ]
+
+
+def _gl_billing_rows_from_prodco_invoice(rows: list[dict]) -> list[dict]:
+    """ProdCo's own lump-sum production-fee invoices (billed to TPC Productions
+    directly). Only rows from /extract-billings with vendor_type="prodco" --
+    Agency/Sub-ProdCo billing from the same endpoint doesn't belong on the GL."""
+    return [
+        _gl_row(
+            invoice_number=r.get("invoiceNo", ""), invoice_date=r.get("invoiceDate", ""),
+            po_number=r.get("jobNumber", ""), vendor_employee=r.get("vendorName", ""),
+            ff2="GS", distribution_description=r.get("details", "") or r.get("description", ""),
+            amount=r.get("eligibleTotal", 0), notes=r.get("notes", ""),
+        )
+        for r in rows
+    ]
+
+
 async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -2964,7 +3076,12 @@ async def extract_billings(
             "issues":   errs,
         })
 
-    return {"rows": rows, "issues": issues, "files": file_summaries}
+    result = {"rows": rows, "issues": issues, "files": file_summaries}
+    if vendor_type.lower() == "prodco":
+        # Only the ProdCo's own lump-sum billing to TPC belongs on GL(BILLING)
+        # -- Agency/Sub-ProdCo billing from this same endpoint does not.
+        result["gl_billing_rows"] = _gl_billing_rows_from_prodco_invoice(rows)
+    return result
 
 
 # ── Agency Sub-Vendors extractor ─────────────────────────────────────────────
@@ -3487,7 +3604,10 @@ async def extract_ga_petty_cash(
             "issues":   errs,
         })
 
-    return {"rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all}
+    return {
+        "rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all,
+        "gl_prodco_rows": _gl_prodco_rows_from_petty_cash(rows),
+    }
 
 
 @app.post("/extract-ga-prodcc")
@@ -3633,7 +3753,10 @@ async def extract_ga_prodcc(
             "issues":   errs,
         })
 
-    return {"rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all}
+    return {
+        "rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all,
+        "gl_prodco_rows": _gl_prodco_rows_from_prodcc(rows),
+    }
 
 
 # ── Agency Hours extractor ───────────────────────────────────────────────────
@@ -4284,6 +4407,7 @@ async def extract_talent_endpoint(
         )
         result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
         result["payroll_roster_rows"] = _payroll_roster_rows_from_talent(result["rows"])
+        result["gl_billing_rows"] = _gl_billing_rows_from_talent(result["rows"])
         return result
 
     if payroll_company.lower() == 'highland':
@@ -4309,6 +4433,7 @@ async def extract_talent_endpoint(
         )
         result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
         result["payroll_roster_rows"] = _payroll_roster_rows_from_talent(result["rows"])
+        result["gl_billing_rows"] = _gl_billing_rows_from_talent(result["rows"])
         return result
 
     # Default: Extreme Reach -- GA sends one PTIP report per invoice via
@@ -4336,6 +4461,7 @@ async def extract_talent_endpoint(
     )
     result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
     result["payroll_roster_rows"] = _payroll_roster_rows_from_talent(result["rows"])
+    result["gl_billing_rows"] = _gl_billing_rows_from_talent(result["rows"])
     return result
 
 
@@ -4903,6 +5029,7 @@ async def extract_ga_ap(
         "rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all,
         "loan_out_rows": _loan_out_rows_from_ap(rows, work_state),
         "payroll_roster_rows": _payroll_roster_rows_from_ap(rows, work_state),
+        "gl_prodco_rows": _gl_prodco_rows_from_ap(rows),
     }
 
 
