@@ -1693,6 +1693,90 @@ async def extract_invoices(
     return {"invoices": invoices, "issues": issues}
 
 
+# ── Loan Out Withholding consolidation ──────────────────────────────────────
+# The GA "Loan Out Withholding" tab has no upload of its own -- it consolidates
+# loan-out payments already identified by Crew Payroll, Talent, and AP
+# extraction. Each of those three endpoints appends one entry here per
+# loan-out row it finds, in the tab's own shape; the frontend accumulates
+# these across every call for a job and writes them onto that tab directly.
+# Amount Withheld is a live template formula off the gross amount, so it's
+# deliberately not sent. SSN/FEIN/Federal Tax Classification/Payment Date
+# aren't collected by any of the three pipelines yet -- left out entirely
+# rather than guessed, pending a v2 pass.
+
+def _loan_out_row(*, name, title, company, gross, payroll_company,
+                   address, home_state, work_state, invoice_date, invoice_no, notes=''):
+    return {
+        "crew_employee_name":   name,
+        "position_title":       title,
+        "crew_position":        title,
+        "loan_out_name":        company,
+        "invoice_gross_amount": gross,
+        "payroll_company":      payroll_company,
+        "address":              address,
+        "home_state":           home_state,
+        "work_state":           work_state,
+        "invoice_date":         invoice_date,
+        "invoice_number":       invoice_no,
+        "notes":                notes,
+    }
+
+
+def _loan_out_rows_from_fringe(rows: list[dict]) -> list[dict]:
+    """Crew Payroll (Wrapbook/CAPS/Teams fringe rows, FRINGE_FIELDS shape)."""
+    out = []
+    for r in rows:
+        if not r.get("loanOut"):
+            continue
+        # "corporate" is the CAPS loan-out-wages column; Wrapbook loan-outs
+        # report the same dollar amount in the ordinary "wages" field instead.
+        gross = r.get("corporate") or r.get("wages") or 0
+        title = r.get("jobTitle", "") or ""
+        address = ", ".join(p for p in (r.get("street", ""), r.get("city", "")) if p)
+        out.append(_loan_out_row(
+            name=r.get("worker", ""), title=title, company=r.get("loanOutCompany", ""),
+            gross=gross, payroll_company=(r.get("payrollCompany") or "").title(),
+            address=address, home_state=r.get("resState", ""), work_state=r.get("workState", ""),
+            invoice_date=r.get("invoiceDate", ""), invoice_no=r.get("invoiceNo", ""),
+        ))
+    return out
+
+
+def _loan_out_rows_from_talent(rows: list[dict]) -> list[dict]:
+    """Talent rows (ER/Teams/Highland) -- shared row shape from talent_extractor.py."""
+    out = []
+    for r in rows:
+        if r.get("loan_out") != "YES":
+            continue
+        title = r.get("title", "") or ""
+        address = ", ".join(p for p in (r.get("home_address", ""), r.get("city", "")) if p)
+        out.append(_loan_out_row(
+            name=r.get("talent_name", ""), title=title, company=r.get("loan_out_company", ""),
+            gross=r.get("total", 0), payroll_company=r.get("payment_entity", ""),
+            address=address, home_state=r.get("state", ""), work_state=r.get("work_state", ""),
+            invoice_date=r.get("invoice_date", ""), invoice_no=r.get("invoice_no", ""),
+        ))
+    return out
+
+
+def _loan_out_rows_from_ap(rows: list[dict], work_state: str) -> list[dict]:
+    """GA AP rows -- normalize_ga_ap_row() shape. work_state is a per-request
+    constant here (the production's own work state), not a per-row field."""
+    out = []
+    for r in rows:
+        if r.get("loan_out") != "Yes":
+            continue
+        address = ", ".join(p for p in (r.get("address", ""), r.get("city", ""), r.get("state", "")) if p)
+        out.append(_loan_out_row(
+            name=r.get("loan_out_individual_name", ""), title="", company=r.get("vendor_name", ""),
+            gross=r.get("amount", 0), payroll_company="",
+            address=address, home_state=r.get("home_state", ""), work_state=work_state,
+            invoice_date=r.get("invoice_date", ""), invoice_no=r.get("invoice_number", ""),
+            notes=r.get("notes", ""),
+        ))
+    return out
+
+
 async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -1855,7 +1939,10 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
         )
         issues.append(alert_msg)
 
-    return {"rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries}
+    return {
+        "rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries,
+        "loan_out_rows": _loan_out_rows_from_fringe(rows),
+    }
 
 
 @app.post("/extract-fringe")
@@ -4046,13 +4133,15 @@ async def extract_talent_endpoint(
         if not pdf_bytes_list and not ptip_bytes_list:
             raise HTTPException(400, "Provide at least one PDF or PTIP file.")
 
-        return extract_teams_talent(
+        result = extract_teams_talent(
             pdf_files=pdf_bytes_list,
             ptip_bytes_list=ptip_bytes_list,
             project_title=project_title,
             workbook_type=workbook_type,
             openai_key=OPENAI_API_KEY,
         )
+        result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
+        return result
 
     if payroll_company.lower() == 'highland':
         report_bytes_list: list[bytes] = []
@@ -4068,13 +4157,15 @@ async def extract_talent_endpoint(
         if not pdf_bytes_list and not report_bytes_list:
             raise HTTPException(400, "Provide at least one PDF or a Payroll Report file.")
 
-        return extract_highland_talent(
+        result = extract_highland_talent(
             pdf_files=pdf_bytes_list,
             report_bytes_list=report_bytes_list,
             project_title=project_title,
             workbook_type=workbook_type,
             openai_key=OPENAI_API_KEY,
         )
+        result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
+        return result
 
     # Default: Extreme Reach -- GA sends one PTIP report per invoice via
     # repeated ptip_files; IL's single-file case still works the same way
@@ -4092,13 +4183,15 @@ async def extract_talent_endpoint(
     if not pdf_bytes_list and not ptip_bytes_list:
         raise HTTPException(400, "Provide at least one PDF or a PTIP file.")
 
-    return extract_talent(
+    result = extract_talent(
         pdf_files=pdf_bytes_list,
         ptip_bytes_list=ptip_bytes_list,
         project_title=project_title,
         workbook_type=workbook_type,
         openai_key=OPENAI_API_KEY,
     )
+    result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
+    return result
 
 
 # ── Consolidated run summary email ───────────────────────────────────────────
@@ -4661,7 +4754,10 @@ async def extract_ga_ap(
             "issues": errs,
         })
 
-    return {"rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all}
+    return {
+        "rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all,
+        "loan_out_rows": _loan_out_rows_from_ap(rows, work_state),
+    }
 
 
 # ── GA AP call sheet position matching ───────────────────────────────────────
