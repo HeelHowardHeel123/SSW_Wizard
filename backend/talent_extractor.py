@@ -251,6 +251,10 @@ def parse_ptip_xlsx(xlsx_bytes: bytes) -> tuple[list[dict], list[str], list[str]
 
 _AMOUNT_RE = re.compile(r'^\d[\d,]*\.\d{2}$')
 _DATE_YY_RE = re.compile(r'^\d{2}/\d{2}/\d{2}$')
+# Cam Code / Cat Code tokens (e.g. "22NS") -- digits optionally followed by a
+# few letters. Pure-digit cam codes match too, so this subsumes the old
+# digit-only check.
+_CODE_TOKEN_RE = re.compile(r'^\d+[A-Za-z]{0,4}$')
 
 
 def _parse_talent_row(line: str) -> dict | None:
@@ -282,6 +286,13 @@ def _parse_talent_row(line: str) -> dict | None:
     if len(amounts) not in (3, 5):
         return None
 
+    # A one-off "Tag" token (e.g. an on-air spot ID like "SO'N37478ST") can
+    # sit wedged between the two dates and the amounts on some rows --
+    # discard it so the date pop below still lands on the real dates.
+    if (tail and not _DATE_YY_RE.match(tail[-1]) and len(tail) >= 3
+            and _DATE_YY_RE.match(tail[-2]) and _DATE_YY_RE.match(tail[-3])):
+        tail.pop()
+
     # Pop trailing date tokens (MM/DD/YY)
     dates: list[str] = []
     while tail and _DATE_YY_RE.match(tail[-1]):
@@ -308,9 +319,11 @@ def _parse_talent_row(line: str) -> dict | None:
     role_code = tail[on_off_idx + 1] if on_off_idx + 1 < len(tail) else ''
     is_agent = (on_off == 'off') or (role_code.lower() == 'agent')
 
-    # Name is everything before On/Off, minus a trailing cam-code number
+    # Name is everything before On/Off, minus trailing Cam/Cat code token(s)
+    # (e.g. "Dayanari Umana 22NS" -> "Dayanari Umana"; a loan-out row has no
+    # name at all here, just the code(s), which strips down to empty).
     before = tail[:on_off_idx]
-    if before and before[-1].isdigit():
+    while before and _CODE_TOKEN_RE.match(before[-1]):
         before = before[:-1]
     name = ' '.join(before)
 
@@ -395,9 +408,25 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
     while i < len(pdf_lines):
         row = _parse_talent_row(pdf_lines[i].strip())
         if row:
-            if not row['name'] and i + 1 < len(pdf_lines):
-                next_line = pdf_lines[i + 1].strip()
-                if next_line and not _parse_talent_row(next_line):
+            row['loan_out_company'] = ''
+            if not row['name']:
+                # Name wrapped onto the line above the data row. For a
+                # loan-out entry ER prints the real performer's own name
+                # above the row and their loan-out company below it
+                # (confirmed real pattern: "Joshua E Vasquez" / data row /
+                # "MaJeliv Productions Inc").
+                prev_line = pdf_lines[i - 1].strip() if i > 0 else ''
+                if prev_line and not _parse_talent_row(prev_line):
+                    row['name'] = prev_line
+
+                next_line = pdf_lines[i + 1].strip() if i + 1 < len(pdf_lines) else ''
+                has_next = bool(next_line) and not _parse_talent_row(next_line)
+                if row['name'] and has_next and _is_company_name(next_line):
+                    row['loan_out_company'] = next_line
+                    i += 1
+                elif not row['name'] and has_next:
+                    # No usable name line above -- fall back to the
+                    # trailing line as this row's identity (old behavior).
                     row['name'] = next_line
                     if _is_company_name(next_line):
                         row['is_agent'] = True
@@ -1330,6 +1359,7 @@ def extract_talent(
                     first_talent_seen = True
                 eff_scenario = 'A' if not inv_has_ptip else scenario
 
+                pdf_loan_out_company = tr.get('loan_out_company', '')
                 row = _build_row(
                     item_no=item_no,
                     ptip=ptip_match,
@@ -1341,11 +1371,14 @@ def extract_talent(
                     scenario=eff_scenario,
                     ptip_row_no=(inv_ptip_orig[ptip_match_local_i] + 1) if ptip_match_local_i is not None else None,
                     workbook_type=workbook_type,
+                    loan_out=bool(pdf_loan_out_company),
+                    loan_out_company=pdf_loan_out_company,
                 )
                 if ptip_match is None:
                     reason = llm_reasons.get(tr['name'], '')
                     if reason:
-                        row['notes'] = f"[LLM no match] {reason}"
+                        llm_note = f"[LLM no match] {reason}"
+                        row['notes'] = f"{row['notes']}; {llm_note}" if row.get('notes') else llm_note
                 workbook_rows.append(row)
                 item_no += 1
 
