@@ -999,7 +999,14 @@ def _llm_fuzzy_match_talent(
             "- Typos: 'Bac Talent Managment Inc' = 'Bac Talent Management Inc'\n"
             "- A cast/category code glued directly onto the name with no separator, from imperfect "
             "PDF table extraction: 'Cedric Williams 22NS' (invoice) = 'Cedric Williams' (PTIP), "
-            "'Rollie Smith 22NS' = 'Rollie Smith'\n\n"
+            "'Rollie Smith 22NS' = 'Rollie Smith'\n"
+            "- Loan-out payment: the invoice sometimes labels a performer's row with just their "
+            "loan-out corporation's name (from a PDF line the performer's own name wrapped away "
+            "from), while the PTIP entry lists the performer with their loan-out company in "
+            "parentheses on a second line: 'Aspen Kennedy Inc' (invoice) = 'Aspen K Wilson\\n"
+            "(Aspen Kennedy Inc)' (PTIP) -- match on the parenthetical company name appearing "
+            "verbatim in the PTIP entry, even though the invoice name shares no words with the "
+            "PTIP entry's own first line.\n\n"
             "Rules:\n"
             "- Only match if you are CONFIDENT they are the same person or entity.\n"
             "- Do NOT guess — if uncertain, put the name in 'unmatched' with a brief reason.\n"
@@ -1287,15 +1294,21 @@ def extract_talent(
                 ]
                 if unmatched_inv and remaining_ptip_local:
                     inv_names = [tr['name'] for tr in unmatched_inv]
+                    # Keep the full (possibly two-line) PTIP name intact here --
+                    # a loan-out's PDF row is sometimes labeled with just the
+                    # corp name (e.g. "Aspen Kennedy Inc"), which only the LLM
+                    # can recognize if it can see that same corp name already
+                    # sitting in the PTIP entry's own "First Last\n(Corp Name)"
+                    # text. Truncating to the first line hides that clue.
                     remaining_ptip_names = [
-                        str(inv_ptip_rows[li].get('Talent Name', '') or '').split('\n')[0].strip()
+                        str(inv_ptip_rows[li].get('Talent Name', '') or '').strip()
                         for li in remaining_ptip_local
                     ]
                     llm_map, llm_reasons = _llm_fuzzy_match_talent(inv_names, remaining_ptip_names, openai_key)
                     if llm_map:
                         all_llm_matches[inv_no] = llm_map
                         ptip_name_to_local = {
-                            str(inv_ptip_rows[li].get('Talent Name', '') or '').split('\n')[0].strip(): li
+                            str(inv_ptip_rows[li].get('Talent Name', '') or '').strip(): li
                             for li in remaining_ptip_local
                         }
                         for idx, (tr, pm, pm_li) in enumerate(matched_pairs):
