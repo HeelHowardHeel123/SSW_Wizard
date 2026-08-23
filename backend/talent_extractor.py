@@ -423,6 +423,14 @@ def parse_er_invoice_pdf(pdf_bytes: bytes) -> dict | None:
                 has_next = bool(next_line) and not _parse_talent_row(next_line)
                 if row['name'] and has_next and _is_company_name(next_line):
                     row['loan_out_company'] = next_line
+                    # A recovered real name paired with a loan-out company is
+                    # a genuine performer payment, not an agent's own fee --
+                    # even when the row's On/Off flag reads "Off" (confirmed
+                    # real case: Idmon S Tobal / Hector Was Entertainment,
+                    # "Off" but a real $618.30 performer payment, not a
+                    # commission line). Loan-out and agent are mutually
+                    # exclusive elsewhere in this file; keep it that way here.
+                    row['is_agent'] = False
                     i += 1
                 elif not row['name'] and has_next:
                     # No usable name line above -- fall back to the
