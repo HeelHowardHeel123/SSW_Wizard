@@ -1791,6 +1791,118 @@ def _loan_out_rows_from_ap(rows: list[dict], work_state: str) -> list[dict]:
     return out
 
 
+# ── Payroll Roster consolidation ────────────────────────────────────────────
+# Same no-upload-of-its-own pattern as Loan Out Withholding: consolidates
+# people already identified by Crew Payroll, Talent, and AP. Dedup by
+# (name, job title) -- same title across multiple weeks/invoices collapses
+# to one row (earliest date wins), a different title gets its own row --
+# happens on the frontend side, since only it sees everything accumulated
+# across every call for the job. The backend just emits one candidate per
+# source row/occurrence.
+#
+# On Payroll Report Y/N: Y means the payment is verified against its own
+# proper reconciliation system (Crew Payroll's Production Report, or
+# Talent's PTIP report). N means it's only an isolated single invoice with
+# nothing backing it up -- an AP labor invoice (no payroll-report
+# equivalent exists at all), or a Crew/Talent PDF invoice that never
+# matched anything in the Production Report / PTIP report.
+
+def _split_name_for_roster(name: str) -> tuple[str, str]:
+    """Best-effort last/first split. Most sources already format names
+    "Last, First"; Highland's Talent rows are the one exception (preserve
+    the source's own "First M. Last" order verbatim) -- fall back to
+    treating the final token as the last name when there's no comma."""
+    name = (name or "").strip()
+    if not name:
+        return "", ""
+    if "," in name:
+        last, _, first = name.partition(",")
+        return last.strip(), first.strip()
+    parts = name.split()
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[-1], " ".join(parts[:-1])
+
+
+def _roster_row(*, last_name, first_name, corp_name, job_title, work_state,
+                 state_of_residence, start_date, on_payroll_report, comment=""):
+    return {
+        "last_name":          last_name,
+        "first_name":         first_name,
+        "corp_name":          corp_name,
+        "job_title":          job_title,
+        "work_state":         work_state,
+        "state_of_residence": state_of_residence,
+        "start_date":         start_date,
+        "on_payroll_report":  "Y" if on_payroll_report else "N",
+        "vendor_name":        corp_name,
+        "comment":            comment,
+    }
+
+
+def _payroll_roster_rows_from_fringe(rows: list[dict]) -> list[dict]:
+    """Crew Payroll, FRINGE_FIELDS shape. Handles two callers: a reconciled
+    row (from /reconcile-ga-payroll) carries onProductionReport, set by the
+    person-level match; a raw row straight from /extract-ga-production-report
+    has no such key at all -- it IS the production report by definition, so
+    it's always Y with nothing to explain."""
+    out = []
+    for r in rows:
+        last, first = _split_name_for_roster(r.get("worker", ""))
+        if not last and not first:
+            continue
+        if "onProductionReport" in r:
+            on_report = bool(r["onProductionReport"])
+            comment = "" if on_report else "On invoice PDF but not on the Production Report"
+        else:
+            on_report, comment = True, ""
+        start_date = r.get("startDate") or r.get("invoiceDate") or ""
+        out.append(_roster_row(
+            last_name=last, first_name=first, corp_name=r.get("loanOutCompany", ""),
+            job_title=r.get("jobTitle", ""), work_state=r.get("workState", ""),
+            state_of_residence=r.get("resState", ""), start_date=start_date,
+            on_payroll_report=on_report, comment=comment,
+        ))
+    return out
+
+
+def _payroll_roster_rows_from_talent(rows: list[dict]) -> list[dict]:
+    """Talent rows (ER/Teams/Highland) -- shared row shape from talent_extractor.py."""
+    out = []
+    for r in rows:
+        last, first = _split_name_for_roster(r.get("talent_name", ""))
+        if not last and not first:
+            continue
+        on_ptip = bool(r.get("on_ptip"))
+        comment = "" if on_ptip else "On invoice PDF but not found in PTIP report"
+        start_date = r.get("work_dates") or r.get("invoice_date") or ""
+        out.append(_roster_row(
+            last_name=last, first_name=first, corp_name=r.get("loan_out_company", ""),
+            job_title=r.get("title", ""), work_state=r.get("work_state", ""),
+            state_of_residence=r.get("state", ""), start_date=start_date,
+            on_payroll_report=on_ptip, comment=comment,
+        ))
+    return out
+
+
+def _payroll_roster_rows_from_ap(rows: list[dict], work_state: str) -> list[dict]:
+    """GA AP rows -- only ones flagged "labor" (vs. a goods/equipment/services
+    purchase) belong on the roster. An AP invoice never has a payroll-report
+    equivalent, so these are always N."""
+    out = []
+    for r in rows:
+        if not r.get("labor"):
+            continue
+        out.append(_roster_row(
+            last_name=r.get("last_name", ""), first_name=r.get("first_name", ""),
+            corp_name=r.get("vendor_name", ""), job_title=r.get("distribution_description", ""),
+            work_state=work_state, state_of_residence=r.get("home_state", ""),
+            start_date=r.get("invoice_date", ""), on_payroll_report=False,
+            comment="Paid via AP invoice -- not on the Payroll Report",
+        ))
+    return out
+
+
 async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
@@ -2308,6 +2420,7 @@ async def extract_ga_production_report(
         # ONLY place loan-out info exists at all (a payroll company's own
         # invoice PDF often has no per-employee way to identify one).
         "loan_out_rows": _loan_out_rows_from_fringe(rows),
+        "payroll_roster_rows": _payroll_roster_rows_from_fringe(rows),
     }
 
 
@@ -2394,6 +2507,7 @@ async def reconcile_ga_payroll(
     # rows, so this reconciled set is the real, complete source for Crew
     # Payroll loan-outs.
     result["loan_out_rows"] = _loan_out_rows_from_fringe(result["rows"])
+    result["payroll_roster_rows"] = _payroll_roster_rows_from_fringe(result["rows"])
     return result
 
 
@@ -4169,6 +4283,7 @@ async def extract_talent_endpoint(
             openai_key=OPENAI_API_KEY,
         )
         result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
+        result["payroll_roster_rows"] = _payroll_roster_rows_from_talent(result["rows"])
         return result
 
     if payroll_company.lower() == 'highland':
@@ -4193,6 +4308,7 @@ async def extract_talent_endpoint(
             openai_key=OPENAI_API_KEY,
         )
         result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
+        result["payroll_roster_rows"] = _payroll_roster_rows_from_talent(result["rows"])
         return result
 
     # Default: Extreme Reach -- GA sends one PTIP report per invoice via
@@ -4219,6 +4335,7 @@ async def extract_talent_endpoint(
         openai_key=OPENAI_API_KEY,
     )
     result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
+    result["payroll_roster_rows"] = _payroll_roster_rows_from_talent(result["rows"])
     return result
 
 
@@ -4785,6 +4902,7 @@ async def extract_ga_ap(
     return {
         "rows": rows, "issues": issues, "files": file_summaries, "hotel_blocks": hotel_blocks_all,
         "loan_out_rows": _loan_out_rows_from_ap(rows, work_state),
+        "payroll_roster_rows": _payroll_roster_rows_from_ap(rows, work_state),
     }
 
 
