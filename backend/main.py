@@ -1739,6 +1739,7 @@ def _loan_out_rows_from_fringe(rows: list[dict]) -> list[dict]:
         gross = r.get("automationTotal") or r.get("corporate") or r.get("wages") or 0
         title = r.get("jobTitle", "") or ""
         address = ", ".join(p for p in (r.get("street", ""), r.get("city", "")) if p)
+        payroll_company = (r.get("payrollCompany") or "").replace("_", " ").title()
         # A person-level reconciled row (from /reconcile-ga-payroll) has no
         # single invoice number of its own -- its per-invoice breakdown lives
         # in "notes" instead (e.g. "Invoices: 330535 ($1,401.16), 332355
@@ -1747,7 +1748,7 @@ def _loan_out_rows_from_fringe(rows: list[dict]) -> list[dict]:
         # when present.
         out.append(_loan_out_row(
             name=r.get("worker", ""), title=title, company=r.get("loanOutCompany", ""),
-            gross=gross, payroll_company=(r.get("payrollCompany") or "").title(),
+            gross=gross, payroll_company=payroll_company,
             address=address, home_state=r.get("resState", ""), work_state=r.get("workState", ""),
             invoice_date=r.get("invoiceDate", ""), invoice_no=r.get("invoiceNo", ""),
             notes=r.get("notes", "") if not r.get("invoiceNo") else "",
@@ -2301,6 +2302,12 @@ async def extract_ga_production_report(
         "issues":  issues,
         "columns": FRINGE_FIELDS,
         "files":   [{"filename": file.filename, "row_count": len(rows)}],
+        # The live app reconciles Production Report + fringe PDF rows
+        # client-side rather than calling /reconcile-ga-payroll, so
+        # loan_out_rows has to be emitted here too -- this is frequently the
+        # ONLY place loan-out info exists at all (a payroll company's own
+        # invoice PDF often has no per-employee way to identify one).
+        "loan_out_rows": _loan_out_rows_from_fringe(rows),
     }
 
 
