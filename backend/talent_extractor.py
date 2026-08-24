@@ -577,10 +577,11 @@ def _build_row(
     else:
         work_state = ''
 
-    if state and work_state and state.upper() != work_state:
-        qualify = 'NO-OOS'
-    else:
-        qualify = ''
+    # Qualification is a human judgment call, not something the automation
+    # should decide -- a crew/talent member can qualify even when their home
+    # state differs from the work state under certain circumstances, so
+    # always leave this blank for the reviewer to fill in.
+    qualify = ''
 
     # ── PTIP financial columns ───────────────────────────────────────────────
     if ptip:
@@ -2820,10 +2821,11 @@ def _build_highland_row(
         loan_out_note = f"Loan-out company: {loan_out_company}"
         notes = f"{notes}; {loan_out_note}" if notes else loan_out_note
 
-    if state and work_state and state.upper() != work_state.upper():
-        qualify = 'NO-OOS'
-    else:
-        qualify = ''
+    # Qualification is a human judgment call, not something the automation
+    # should decide -- a crew/talent member can qualify even when their home
+    # state differs from the work state under certain circumstances, so
+    # always leave this blank for the reviewer to fill in.
+    qualify = ''
 
     return {
         'item_no':        item_no,
