@@ -4529,7 +4529,6 @@ async def send_run_summary_endpoint(
 
 _GA_AP_FF1_VALID  = {"HT","BX","CR","AF","GX","HF","FA1","FA2","PD1","PD2","LO","NQ",""}
 _GA_AP_FF2_VALID  = {"GS","GL","DL","NQ",""}
-_GA_AP_QUAL_VALID = {"YES","NO-GA","NO-OOS"}
 
 
 def normalize_date_iso(val: str) -> str:
@@ -4558,9 +4557,12 @@ def normalize_ga_ap_row(raw: dict) -> dict:
     if ff2 not in _GA_AP_FF2_VALID:
         ff2 = ""
 
-    qual = str(raw.get("qualified", "")).strip().upper()
-    if qual not in _GA_AP_QUAL_VALID:
-        qual = "NO-GA"
+    # Qualification is a human judgment call, not something the automation
+    # should decide -- always leave it blank for the reviewer to fill in.
+    # (Previously defaulted an unrecognized model value to "NO-GA", which
+    # silently overrode real "YES" cases whenever the model's own judgment
+    # on a line drifted from a human reviewer's.)
+    qual = ""
 
     aicp = raw.get("aicp_code")
     try:
