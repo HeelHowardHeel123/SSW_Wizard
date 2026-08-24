@@ -117,10 +117,10 @@
       </div>
       <div style="padding:38px 40px">
         <h2 style="margin:0 0 6px;font-size:26px;font-weight:500;letter-spacing:-0.02em;color:#0A0422">Active workbook templates</h2>
-        <p style="margin:0 0 12px;font-size:15px;color:#5A5770">These are the Excel workbooks the wizards populate. Replace one with a new version and every build will use it from now on. Files stay in this browser.</p>
+        <p style="margin:0 0 12px;font-size:15px;color:#5A5770">These are the Excel workbooks the wizards populate. <strong style="font-weight:600;color:#0A0422">Replace</strong> swaps the template in this browser only — good for testing a candidate. <strong style="font-weight:600;color:#0A0422">Publish</strong> pushes it to the backend so every browser uses it.</p>
         <div style="display:flex;align-items:flex-start;gap:10px;margin:0 0 26px;padding:12px 15px;border:1px solid #DDE0E0;background:#FAFBFB;border-radius:8px">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8E8CA0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg>
-          <span style="font-size:13px;color:#5A5770;line-height:1.5">A replacement must keep the same tab layout (sheet names and column positions) as the original, or the wizard will write to the wrong cells. Only the Illinois Local workbook is wired to an active wizard today.</span>
+          <span style="font-size:13px;color:#5A5770;line-height:1.5">A replacement must keep the same tab layout (sheet names and column positions) as the original, or the wizard will write to the wrong cells. A build uses your own replacement first, then the published template, then the built-in default.</span>
         </div>
         <div style="display:flex;flex-direction:column;gap:14px">
           <sc-for list="{{ templateItems }}" as="t" hint-placeholder-count="4">
@@ -134,16 +134,33 @@
                   <span style="{{ t.badgeStyle }}">{{ t.badge }}</span>
                 </div>
                 <div style="font-size:13px;color:#8E8CA0;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.detail }}</div>
-              </div>
-              <div style="display:flex;align-items:center;gap:9px;flex-shrink:0">
-                <sc-if value="{{ t.showRevert }}" hint-placeholder-val="{{ false }}">
-                  <button onClick="{{ t.onRevert }}" style="border:1px solid #DDE0E0;background:#fff;cursor:pointer;color:#5A5770;font-size:13px;font-weight:600;padding:9px 14px;border-radius:6px;transition:border-color 120ms,color 120ms" style-hover="border-color:#9b2c2c;color:#9b2c2c">Revert</button>
+                <sc-if value="{{ t.showDetail2 }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:12px;color:#A6A4B4;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.detail2 }}</div>
                 </sc-if>
-                <label style="display:inline-flex;align-items:center;gap:7px;border:1px solid #0A0422;background:#0A0422;cursor:pointer;color:#fff;font-size:13px;font-weight:600;padding:10px 15px;border-radius:6px;transition:background 120ms" style-hover="background:#221C39">
-                  <input type="file" accept=".xlsx" onChange="{{ t.onReplace }}" style="display:none">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#00CCB8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M17 8l-5-5-5 5"></path><path d="M12 3v12"></path></svg>
-                  Replace
-                </label>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0">
+                <div style="display:flex;align-items:center;justify-content:flex-end;gap:9px">
+                  <span style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#A6A4B4;margin-right:2px">This browser</span>
+                  <sc-if value="{{ t.showRevert }}" hint-placeholder-val="{{ false }}">
+                    <button onClick="{{ t.onRevert }}" style="border:1px solid #DDE0E0;background:#fff;cursor:pointer;color:#5A5770;font-size:13px;font-weight:600;padding:9px 14px;border-radius:6px;transition:border-color 120ms,color 120ms" style-hover="border-color:#9b2c2c;color:#9b2c2c">Revert</button>
+                  </sc-if>
+                  <label style="display:inline-flex;align-items:center;gap:7px;border:1px solid #DDE0E0;background:#fff;cursor:pointer;color:#0A0422;font-size:13px;font-weight:600;padding:9px 14px;border-radius:6px;transition:border-color 120ms" style-hover="border-color:#0A0422">
+                    <input type="file" accept=".xlsx" onChange="{{ t.onReplace }}" style="display:none">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8E8CA0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M17 8l-5-5-5 5"></path><path d="M12 3v12"></path></svg>
+                    Replace
+                  </label>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:flex-end;gap:9px">
+                  <span style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#A6A4B4;margin-right:2px">Everyone</span>
+                  <sc-if value="{{ t.showUnpublish }}" hint-placeholder-val="{{ false }}">
+                    <button onClick="{{ t.onUnpublish }}" style="border:1px solid #DDE0E0;background:#fff;cursor:pointer;color:#5A5770;font-size:13px;font-weight:600;padding:9px 14px;border-radius:6px;transition:border-color 120ms,color 120ms" style-hover="border-color:#9b2c2c;color:#9b2c2c">Un-publish</button>
+                  </sc-if>
+                  <label style="display:inline-flex;align-items:center;gap:7px;border:1px solid #0A0422;background:#0A0422;cursor:pointer;color:#fff;font-size:13px;font-weight:600;padding:10px 15px;border-radius:6px;transition:background 120ms" style-hover="background:#221C39">
+                    <input type="file" accept=".xlsx" onChange="{{ t.onPublish }}" style="display:none">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#00CCB8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M17 8l-5-5-5 5"></path><path d="M12 3v12"></path></svg>
+                    {{ t.publishLabel }}
+                  </label>
+                </div>
               </div>
             </div>
           </sc-for>
@@ -445,6 +462,12 @@
                       <sc-if value="{{ field.isDate }}" hint-placeholder-val="{{ false }}">
                         <input type="date" value="{{ field.value }}" onChange="{{ field.onChange }}" style="width:100%;padding:10px 13px;font-size:15px;color:#1A1530;background:#fff;border:1px solid #DDE0E0;border-radius:6px;outline:none;transition:border-color 120ms,box-shadow 120ms" style-focus="border-color:#00CCB8;box-shadow:0 0 0 3px rgba(0,204,184,0.20)">
                       </sc-if>
+                      <sc-if value="{{ field.isDerived }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;flex-direction:column;gap:5px">
+                          <div style="display:flex;align-items:center;padding:11px 13px;font-size:15px;color:#5A5770;background:#F1F2F2;border:1px solid #DDE0E0;border-radius:6px">{{ field.derivedText }}</div>
+                          <span style="font-size:12px;color:#8E8CA0">{{ field.note }}</span>
+                        </div>
+                      </sc-if>
                       <sc-if value="{{ field.isText }}" hint-placeholder-val="{{ true }}">
                         <input type="text" value="{{ field.value }}" onChange="{{ field.onChange }}" placeholder="{{ field.placeholder }}" style="width:100%;padding:11px 13px;font-size:15px;color:#1A1530;background:#fff;border:1px solid #DDE0E0;border-radius:6px;outline:none;transition:border-color 120ms,box-shadow 120ms" style-focus="border-color:#00CCB8;box-shadow:0 0 0 3px rgba(0,204,184,0.20)">
                       </sc-if>
@@ -534,6 +557,17 @@
                         <div style="{{ c.style }}" onClick="{{ c.onSelect }}">{{ c.label }}</div>
                       </sc-for>
                     </div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ section.showSortSelector }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-bottom:18px">
+                    <div style="font-size:13px;font-weight:600;color:#1A1530;margin-bottom:8px">Payroll Report row order</div>
+                    <div style="display:flex;gap:5px;padding:5px;background:#F1F2F2;border-radius:9px;max-width:640px">
+                      <sc-for list="{{ section.sortChoices }}" as="s" hint-placeholder-count="3">
+                        <div style="{{ s.style }}" onClick="{{ s.onSelect }}">{{ s.label }}</div>
+                      </sc-for>
+                    </div>
+                    <div style="font-size:12px;color:#8E8CA0;line-height:1.45;margin-top:8px">{{ section.sortHelp }}</div>
                   </div>
                 </sc-if>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
@@ -653,15 +687,18 @@ class Component extends DCLogic {
   BACKEND_SECRET = "tpcSSW201005";
 
   // Every extraction request goes through here. Two jobs:
-  //  1. Hard client-side timeout (AbortController). Railway kills a stalled
-  //     request at its proxy and the browser can otherwise sit on a socket that
-  //     never answers — an aborted fetch throws, which the callers already turn
-  //     into a visible issue instead of a silent empty result.
+  //  1. Hard client-side timeout (AbortController). This is the ONLY timeout in
+  //     the chain — Railway's edge proxy allows 15 min and uvicorn caps nothing —
+  //     so it exists purely so the browser never sits forever on a dead socket.
+  //     An aborted fetch throws, which the callers already turn into a visible
+  //     issue instead of a silent empty result. 360s: single ProdCC/AP packets
+  //     with a hotel-pass Claude retry have been observed near 120s, so this
+  //     leaves ~3x headroom while still being well under Railway's ceiling.
   //  2. Circuit breaker. A misconfigured run (bad secret, endpoint down, payload
   //     the backend rejects) used to fail once per file — 200 files meant 200
   //     instant failures and a run that "finished" with nothing extracted. After
   //     RUN_FAIL_LIMIT consecutive failures we stop trying and say so plainly.
-  REQ_TIMEOUT_MS = 180000;
+  REQ_TIMEOUT_MS = 360000;
   RUN_FAIL_LIMIT = 8;
 
   async postExtract(url, fd) {
@@ -766,7 +803,7 @@ class Component extends DCLogic {
   WORKBOOKS = [
     { id: "il_local", label: "Illinois Local", active: true },
     { id: "il_oos", label: "Illinois OOS", active: true },
-    { id: "ga", label: "Georgia", active: true, dev: true },
+    { id: "ga", label: "Georgia", active: true },
     { id: "tx", label: "Texas", active: false },
   ];
 
@@ -862,6 +899,16 @@ class Component extends DCLogic {
       { key: "aicpBid", label: "AICP Bid", type: "currency" },
       { key: "aicpBidCovid", label: "AICP Bid Covid", type: "currency" },
     ]},
+    // Writes H4 (GSA Rate) and J4 (City Tax) on the "Hotel Charges Summary" tab.
+    // State Tax and Occupancy Tax are NOT written: the template derives them in
+    // I4/K4 as =ROUND(H4*0.08,2) and =ROUND(H4*0.089,2), so they're shown here
+    // read-only and left to the sheet. Defaults match the shipped template.
+    { title: "Hotel Per Diem Rates", fields: [
+      { key: "gsaRate", label: "GSA Rate", type: "currency", default: "199.00" },
+      { key: "hotelCityTax", label: "City Tax", type: "currency", default: "5.00" },
+      { key: "hotelStateTax", label: "State Tax", type: "derived", note: "8% of GSA Rate — calculated by the sheet" },
+      { key: "hotelOccTax", label: "Occupancy Tax", type: "derived", note: "8.9% of GSA Rate — calculated by the sheet" },
+    ]},
     { title: "Documents", fields: [
       { key: "callSheet", label: "Call Sheet", type: "date" },
       { key: "preProBook", label: "Pre-Production Book", type: "date" },
@@ -876,6 +923,22 @@ class Component extends DCLogic {
   ];
 
   get SECTIONS() { return this.isGa ? this.GA_SECTIONS : this.IL_SECTIONS; }
+
+  // Hotel Charges Summary H4/J4 inputs, defaulted to the template's own values
+  // so a run with an untouched Step 3 reproduces the shipped sheet exactly.
+  HOTEL_GSA_DEFAULT = 199;
+  HOTEL_CITY_TAX_DEFAULT = 5;
+  hotelRates() {
+    const p = this.state.project || {};
+    const num = (v, d) => { const n = parseFloat(String(v ?? "").replace(/[$,\s]/g, "")); return isNaN(n) ? d : n; };
+    const gsa = num(p.gsaRate, this.HOTEL_GSA_DEFAULT);
+    return {
+      gsa,
+      cityTax: num(p.hotelCityTax, this.HOTEL_CITY_TAX_DEFAULT),
+      stateTax: Math.round(gsa * 0.08 * 100) / 100,
+      occTax: Math.round(gsa * 0.089 * 100) / 100,
+    };
+  }
 
   // Step-3 field -> cell on Georgia's "Overview" tab. Labels sit in column B for
   // the top block (rows 5-19) and in column C for the money/document block
@@ -972,16 +1035,60 @@ class Component extends DCLogic {
   }
 
   // Bytes for a workbook type: a user override if present, else the bundled file.
+  // Load the xlsx engine. Normally a relative module next to the page (the
+  // backend serves /workbook-engine.js). In the single-file build the page runs
+  // from a blob: URL, where a relative specifier can't resolve — so the build
+  // injects __OM_EMBEDDED_MODULES__ with a blob URL for the engine and we use
+  // that instead. Cached after the first load.
+  async loadEngine() {
+    if (this._engMod) return this._engMod;
+    let url = "./workbook-engine.js";
+    try {
+      const m = window.__OM_EMBEDDED_MODULES__;
+      if (m && m["./workbook-engine.js"]) url = m["./workbook-engine.js"];
+    } catch (e) {}
+    this._engMod = await import(url);
+    return this._engMod;
+  }
+
+  // Resolution chain for a workbook type's bytes:
+  //   1. this browser's own override (Wizard 04 "Replace", IndexedDB)
+  //   2. the published template on the backend (Wizard 04 "Publish", shared)
+  //   3. the bundled default in assets/workbooks/
+  // A personal override deliberately wins over the published one so someone can
+  // test a candidate template without touching what the rest of the team gets.
   async loadTemplateBytes(id, fallbackFile) {
     let override = null;
     try { override = await this.idbGet(id); } catch (e) {}
     if (override && override.bytes) return new Uint8Array(override.bytes);
+    try {
+      const pub = await fetch(this.BACKEND_URL + "/templates/" + id, { headers: { "X-App-Secret": this.BACKEND_SECRET } });
+      if (pub.ok) return new Uint8Array(await pub.arrayBuffer());
+      // 404 = nothing published; anything else is a backend problem we can still
+      // build through, so fall down to the bundled copy either way.
+    } catch (e) {}
     const res = await fetch(fallbackFile);
     if (!res.ok) throw new Error("Could not load the workbook template (" + res.status + ").");
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  // Read which templates have been overridden (meta only — no bytes in state).
+  // Headers-only peek at what's published (body is discarded — we only want the
+  // filename/date for the manager and the Review line). Cross-origin the custom
+  // headers are invisible unless the backend sends Access-Control-Expose-Headers,
+  // so `filename` may legitimately come back empty — never invent one.
+  async fetchPublishedMeta(id) {
+    const res = await fetch(this.BACKEND_URL + "/templates/" + id, { headers: { "X-App-Secret": this.BACKEND_SECRET } });
+    if (!res.ok) { try { res.body && res.body.cancel(); } catch (e) {} return null; }
+    const meta = {
+      filename: res.headers.get("X-Template-Filename") || "",
+      publishedAt: res.headers.get("X-Template-Published-At") || "",
+    };
+    try { res.body && res.body.cancel(); } catch (e) {}
+    return meta;
+  }
+
+  // Read which templates are overridden locally and which are published (meta
+  // only — no bytes in state).
   async refreshTemplateMeta() {
     const meta = {};
     for (const t of this.TEMPLATES) {
@@ -991,6 +1098,11 @@ class Component extends DCLogic {
       } catch (e) {}
     }
     this.setState({ templateMeta: meta });
+    const pub = {};
+    for (const t of this.TEMPLATES) {
+      try { const p = await this.fetchPublishedMeta(t.id); if (p) pub[t.id] = p; } catch (e) {}
+    }
+    this.setState({ publishedMeta: pub });
   }
 
   fmtDate(iso) {
@@ -1017,19 +1129,70 @@ class Component extends DCLogic {
       await this.idbPut(id, { bytes, filename: file.name, size: file.size, updatedAt: new Date().toISOString() });
       await this.refreshTemplateMeta();
       const tpl = this.TEMPLATES.find((t) => t.id === id);
-      this.setState({ templateNotice: { ok: true, msg: (tpl ? tpl.name : "Template") + " updated. New builds will use “" + file.name + "”." } });
+      this.setState({ templateNotice: { ok: true, msg: (tpl ? tpl.name : "Template") + " updated in this browser. Your builds will use “" + file.name + "”. Use Publish to change it for everyone." } });
     } catch (e) {
       this.setState({ templateNotice: { ok: false, msg: "Couldn't save that template: " + (e.message || e) } });
     }
   }
 
-  // Drop the override, reverting to the bundled default.
+  // Publish a template for the whole team (backend volume, survives redeploys).
+  // Same .xlsx validation as the local path, then PUT /templates/{id}.
+  async publishTemplate(id, file) {
+    if (!file) return;
+    const tpl = this.TEMPLATES.find((t) => t.id === id);
+    const label = tpl ? tpl.name : "Template";
+    if (!(file.name || "").toLowerCase().endsWith(".xlsx")) {
+      this.setState({ templateNotice: { ok: false, msg: "That file isn't an .xlsx workbook. Please upload the Excel template." } });
+      return;
+    }
+    try {
+      const head = new Uint8Array((await file.slice(0, 4).arrayBuffer()));
+      if (!(head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04)) {
+        this.setState({ templateNotice: { ok: false, msg: "That file doesn't look like a valid Excel workbook (not a .xlsx archive)." } });
+        return;
+      }
+      this.setState({ templatePublishing: id, templateNotice: null });
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const res = await fetch(this.BACKEND_URL + "/templates/" + id, {
+        method: "PUT",
+        headers: { "X-App-Secret": this.BACKEND_SECRET },
+        body: fd,
+      });
+      if (!res.ok) throw new Error(res.status === 401 ? "not authorized (check the app secret)" : "server returned " + res.status);
+      this.setState({ templatePublishing: null });
+      await this.refreshTemplateMeta();
+      this.setState({ templateNotice: { ok: true, msg: label + " published. Every browser will use “" + file.name + "” unless it has its own replacement." } });
+    } catch (e) {
+      this.setState({ templatePublishing: null, templateNotice: { ok: false, msg: "Couldn't publish that template: " + (e.message || e) } });
+    }
+  }
+
+  // Un-publish: everyone falls back to the bundled default again.
+  async unpublishTemplate(id) {
+    const tpl = this.TEMPLATES.find((t) => t.id === id);
+    try {
+      const res = await fetch(this.BACKEND_URL + "/templates/" + id, {
+        method: "DELETE",
+        headers: { "X-App-Secret": this.BACKEND_SECRET },
+      });
+      if (!res.ok && res.status !== 404) throw new Error("server returned " + res.status);
+      await this.refreshTemplateMeta();
+      this.setState({ templateNotice: { ok: true, msg: (tpl ? tpl.name : "Template") + " un-published. Everyone falls back to the built-in default." } });
+    } catch (e) {
+      this.setState({ templateNotice: { ok: false, msg: "Couldn't un-publish: " + (e.message || e) } });
+    }
+  }
+
+  // Drop the local override. Falls back to the published template if there is
+  // one, otherwise the bundled default.
   async revertTemplate(id) {
     try {
       await this.idbDel(id);
       await this.refreshTemplateMeta();
       const tpl = this.TEMPLATES.find((t) => t.id === id);
-      this.setState({ templateNotice: { ok: true, msg: (tpl ? tpl.name : "Template") + " reverted to the built-in default." } });
+      const pub = (this.state.publishedMeta || {})[id];
+      this.setState({ templateNotice: { ok: true, msg: (tpl ? tpl.name : "Template") + " reverted to " + (pub ? "the published template." : "the built-in default.") } });
     } catch (e) {
       this.setState({ templateNotice: { ok: false, msg: "Couldn't revert: " + (e.message || e) } });
     }
@@ -1063,6 +1226,85 @@ class Component extends DCLogic {
     ["jobTitle", "F", "text"], ["daysWorked", "H", "number"], ["loanOutCompany", "AN", "text"],
   ];
 
+  // ── GA "Payroll Report" tab ────────────────────────────────────────────────
+  // A flat pre-built table: header row 3, 571 data rows 4-574, Subtotal 575 and
+  // Total 577 below. We WRITE INTO existing rows rather than inserting, so the
+  // sheet's own SUBTOTAL/SUM ranges and the SUMIF summary block at rows 580-612
+  // (which keys off AH invoice number, AP category and AS qualify) all stay valid.
+  GA_PAYROLL_SHEET = "Payroll Report";
+  GA_PAYROLL_FIRST_ROW = 4;
+  GA_PAYROLL_LAST_ROW = 574;
+
+  // Never written. AB/AC/AD/AE/AG are SHARED formulas: the master <f> sits on
+  // the first row of each si group, so touching one master would kill the
+  // formula for up to 64 rows beneath it. AT is a per-row VLOOKUP on AS.
+  // BA is the pre-filled "PR" source code.
+  // 2026-17-10 template: B/C (source flags) and AF/AG (Automation Total/Check)
+  // were inserted, shifting old-B onward right by two and old-AD onward by four.
+  GA_PAYROLL_SKIP = ["AB", "AC", "AD", "AE", "AG", "AT", "BA"];
+
+  // Cleared on every row we write. The template ships example content on its
+  // first rows only (AS 4-6, AU 4-15, AV 4-7, AY 4-6) — without this pass a
+  // real person landing on row 5 inherits row 5's "NO-GA" / "BX" / "GL".
+  // Verified safe: all five dropdowns on this tab use inline literal lists, not
+  // cell-range sources, so clearing values cannot break a validation.
+  GA_PAYROLL_BLANK = [
+    "A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T",
+    "U","V","W","X","Y","Z","AA","AF","AH","AI","AJ","AK","AL","AM","AN","AO","AP",
+    "AQ","AR","AS","AU","AV","AW","AX","AY","AZ","BB","BC",
+  ];
+
+  // Last row carrying the template's own example content (AS 4-6, AU 4-15,
+  // AV 4-7, AY 4-6). Everything from our last written row through this one gets
+  // blanked, so a 3-person binder doesn't ship with "NO-GA" / "TPC Productions,
+  // Inc." sitting under the real crew — and so no stale "YES" survives in AS,
+  // which the SUMIFS block at 580-612 filters on.
+  GA_PAYROLL_EXAMPLE_LAST_ROW = 15;
+
+  // Structural contract for the Payroll Report tab, checked against whatever
+  // template a run actually resolves (Replace → Published → bundled) before a
+  // single cell is written. A published template with different geometry now
+  // refuses loudly instead of writing into the wrong columns.
+  GA_PAYROLL_EXPECT = {
+    headerRow: 3,
+    headerCells: {
+      A: "EMPLOYEE NAME", B: "On Production Report", C: "On Invoice PDF",
+      AB: "Total Amount", AF: "Automation Total", AO: "Timecard",
+      AS: "AICP Code", BA: "Source Code",
+    },
+    firstRow: 4,
+    lastRow: 574,
+    footerRow: 575,
+    footerFormulaCols: ["M", "AB", "AI"],   // SUBTOTAL band moved K:AE -> M:AI
+    formulaCols: ["AB", "AC", "AD", "AE", "AG", "AT"],
+    sampleRows: [4, 300, 574],
+  };
+
+  // Canonical fringe field -> GA Payroll Report column + cell type.
+  GA_PAYROLL_MAP = [
+    ["worker", "A", "text"], ["street", "D", "text"], ["city", "F", "text"],
+    ["zip", "G", "text"], ["resState", "H", "text"], ["workState", "I", "text"],
+    ["loanOutCompany", "J", "text"], ["jobTitle", "K", "text"],
+    ["rate", "M", "currency"], ["hours", "N", "number"],
+    // wages/corporate are mutually exclusive per row and share P (WAGE PAYMENT):
+    // GA has no separate loan-out wage column, J (Corp Name) is the loan-out signal.
+    // `other` is deliberately UNMAPPED: GA's U is OTHER TAXES and sits among the tax
+    // columns, but CAPS' `other` is a fringe-side bucket. Pending Steven's call on
+    // whether this tab has anywhere for other-fringe dollars to go.
+    ["wages", "P", "currency"], ["corporate", "P", "currency"],
+    ["socSec", "Q", "currency"], ["med", "R", "currency"],
+    ["futa", "S", "currency"], ["sui", "T", "currency"],
+    ["phw", "V", "currency"], ["wc", "W", "currency"], ["vacHol", "X", "currency"],
+    ["hand", "AA", "currency"], ["platFee", "AA", "currency"],  // mutually exclusive, deduped by column
+    ["corpTaxGA", "AH", "currency"], ["withholdingsGA", "AI", "currency"],
+    ["invoiceNo", "AL", "text"], ["invoiceDate", "BB", "text"],
+    // AX Notes — reconciler-supplied text, written verbatim. Two producers today:
+    // "[no Production Report match] <reason>" on an unmatched PDF-only row, and
+    // "Invoices: 330535 ($1,401.16), ..." in person-level reconciliation mode,
+    // where a matched row has no invoice number of its own. Usually absent.
+    ["notes", "AX", "text"],
+  ];
+
   // Crew Freelance invoice field -> Crew Payroll column + cell type. These are
   // 1099 invoices: no employer-side fringes (U-AC blank), no Sub_Total /
   // Automation formulas (AE/AH/AI), and Qualify (C) / Work State (D) left blank
@@ -1086,6 +1328,34 @@ class Component extends DCLogic {
     ["invoiceNo", "N", "text"], ["invoiceDate", "L", "text"], ["wages", "O", "currency"],
     ["company", "AS", "text"],
   ];
+
+  // ── Talent payroll companies ──────────────────────────────────────────────
+  // One entry per company the Talent path can run against. `id` is exactly the
+  // value posted as payroll_company. Highland is GA-only for now — IL's Talent &
+  // Extras mapping for it doesn't exist yet, so it's hidden on IL/OOS runs and
+  // effectiveTalentCo() falls back to Extreme Reach if the workbook type changes
+  // after it was picked. Highland uploads have the same shape as Teams (N invoice
+  // PDFs + N reconciliation files). Highland calls their file a Payroll Report,
+  // but the zone copy stays "PTIP Report (Excel)" for all three companies — one
+  // consistent label is less confusing than three names for the same slot.
+  TALENT_COMPANIES = [
+    { id: "er", label: "Extreme Reach", perFile: "one file per invoice",
+      sends: "Extreme Reach sends one file per invoice.", download: "Organized PTIP" },
+    { id: "teams", label: "The Team Companies", perFile: "one file per commercial",
+      sends: "Teams sends one file per commercial.", download: "Sorted PTIP" },
+    { id: "highland", label: "Highland Talent", perFile: "one or more files",
+      sends: "Highland calls this file a Payroll Report.",
+      download: "Organized PTIP", gaOnly: true },
+  ];
+  talentCo(id) {
+    return this.TALENT_COMPANIES.find((c) => c.id === id) || this.TALENT_COMPANIES[0];
+  }
+  // The company a run actually uses: the picked one, unless it's GA-only and this
+  // isn't a GA workbook.
+  effectiveTalentCo() {
+    const c = this.talentCo(this.state.talentPayrollCo || "er");
+    return (c.gaOnly && this.state.workbookType !== "ga") ? "er" : c.id;
+  }
 
   // ── Talent & Extras row model -> tab columns ─────────────────────────────
   // The /extract-talent backend returns fully-assembled rows (one per PTIP check
@@ -1177,8 +1447,9 @@ class Component extends DCLogic {
       fd.append("vendor_state", meta.state || "");
       fd.append("vendor_zip", meta.zip || "");
       fd.append("prodco_names", this.prodcoNames().join(", "));
-      fd.append("work_state", "IL");
+      fd.append("work_state", this.state.workbookType === "ga" ? "GA" : "IL");
       const j = await this.postExtract(this.BACKEND_URL + "/extract-billings", fd);
+      this.harvestLoanOuts(j);
       merged.rows.push(...(j.rows || []));
       merged.issues.push(...(j.issues || []));
       merged.files.push(...(j.files || []));
@@ -1435,7 +1706,16 @@ class Component extends DCLogic {
       const pc = st.genGaPetty
         ? " Petty Cash tab populated — " + st.genGaPetty + (st.genGaPetty === 1 ? " row" : " rows") + " written."
         : "";
-      return name + ". " + st.genWritten + " project fields written. " + ap + pc;
+      const cc = st.genGaProdCC
+        ? " ProdCC — " + st.genGaProdCC + (st.genGaProdCC === 1 ? " row" : " rows") + " written below the petty cash rows."
+        : "";
+      const ht = st.genGaHotel
+        ? " Hotel Charges Summary — " + st.genGaHotel + (st.genGaHotel === 1 ? " block" : " blocks") + " written."
+        : "";
+      const tl = st.genTalent
+        ? " Talent — " + st.genTalent + (st.genTalent === 1 ? " row" : " rows") + " written."
+        : "";
+      return name + ". " + st.genWritten + " project fields written. " + ap + pc + cc + ht + tl;
     }
     const parts = [];
     const add = (n, label) => { if (n) parts.push(n + " " + label); };
@@ -1493,6 +1773,128 @@ class Component extends DCLogic {
     ];
   }
 
+  // ── GA "Talent" tab ────────────────────────────────────────────────────────
+  // Header row 3; 31 pre-built data rows 4-34; Subtotal 35, blank 36, TOTAL 37.
+  // Below that, TWO roll-up blocks SHARE the same rows (header 43): a per-invoice
+  // block in cols F-L (data 44-58, SUM 59) keyed on G (invoice number), and an
+  // AICP-category block in cols N-Y (data 44-71, SUM 72) keyed on AG + AC.
+  // Growth: insert at FIRST+1 so the sheet's own SUBTOTAL/SUM/SUMIFS ranges bump
+  // with us, exactly like the AP and Petty Cash tabs.
+  //
+  // Column letters follow two mid-row insertions: Other Fees at S (2026-08-20)
+  // and Loanout at AE (2026-08-22, a YES/NO from the new loan_out field), each
+  // shifting everything to its right by one. So AE = Loanout, AF = AICP Code,
+  // AG = AICP category VLOOKUP, and the PTIP reconciliation columns are
+  // AH (on PTIP) / AI (on PDF) / AJ (amount) / AK (PTIP_Check).
+  GA_TALENT_SHEET = "Talent";
+  GA_TALENT_FIRST = 4;
+  GA_TALENT_PREBUILT = 31;      // rows 4-34
+  GA_TALENT_EXAMPLE_LAST_ROW = 15;   // FF1/FF2/pay-type/entity examples run 4-15
+  GA_TALENT_INV_FIRST = 44;     // per-invoice roll-up: F44:F58
+  GA_TALENT_INV_PREBUILT = 15;
+
+  // Never written, never cleared. U/V/W/AG/AK are per-row formulas (Total =
+  // SUM(J:T), Non-Qualified = T, Qualified = U-V, AICP description VLOOKUP,
+  // PTIP_Check = AJ-U) and AB is the pre-filled "PR" source code. On the
+  // pre-built rows most of these are SHARED formulas whose master sits on row 4,
+  // so touching one would kill the formula for every row beneath it.
+  GA_TALENT_SKIP = ["U", "V", "W", "AB", "AG", "AK"];
+
+  // Cleared on every row we write, and from our last row through
+  // GA_TALENT_EXAMPLE_LAST_ROW. Z/AA (FF1/FF2), X (Pay Type), Y (Payment Entity),
+  // AC (Qualified) and AD (Notes) all ship with example content on rows 4-15 —
+  // and AC is a live SUMIFS criteria range for both blocks below, so a stale
+  // "YES" there would corrupt the roll-ups.
+  GA_TALENT_BLANK = [
+    "A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T",
+    "X","Y","Z","AA","AC","AD","AE","AF","AH","AI","AJ",
+  ];
+
+  // Money columns that make up Total Amount (U = SUM(J:T)). Zero-filled on every
+  // written row so the tab reads like its own pre-built rows rather than showing
+  // gaps where the extractor had nothing.
+  GA_TALENT_ZERO_COLS = ["J","K","L","M","N","O","P","Q","R","S","T"];
+
+  // Structural contract, checked before any mutation. Header strings are
+  // compared whitespace-collapsed and case-insensitively; only single-line
+  // headers are asserted (F and X wrap mid-cell in the template).
+  GA_TALENT_EXPECT = {
+    headerRow: 3,
+    headerCells: {
+      A: "Talent Name", G: "Invoice Number", J: "Wages", K: "Misc Payment",
+      R: "Signatory Fee", S: "Other Fees", T: "Handling Fee", U: "Total Amount",
+      AE: "Loanout", AF: "AICP Code", AH: "Included on PTIP Report?",
+      AI: "Included on PDF",
+    },
+    firstRow: 4,
+    lastRow: 34,
+    footerRow: 35,
+    footerFormulaCols: ["J", "U"],
+    formulaCols: ["U", "V", "W", "AG"],
+    sampleRows: [4, 5, 34],
+  };
+
+  // /extract-talent row (snake_case) -> GA Talent column + cell type. Same
+  // endpoint and response shape as the Illinois Talent & Extras path; GA just
+  // has more columns for it, so the three withholding fields that IL summed away
+  // (state / local / disability) get their own homes here.
+  GA_TALENT_MAP = [
+    ["talent_name", "A", "text"], ["home_address", "B", "text"], ["city", "C", "text"],
+    ["zip", "D", "text"], ["state", "E", "text"], ["title", "F", "text"],
+    ["invoice_no", "G", "text"], ["invoice_date", "H", "text"], ["work_state", "I", "text"],
+    ["wages", "J", "currency"], ["misc_pymt", "K", "currency"], ["sag", "L", "currency"],
+    ["state_tax_withheld", "M", "currency"], ["local_tax_withheld", "N", "currency"],
+    ["state_disability_withheld", "O", "currency"], ["er_tax", "P", "currency"],
+    ["wc", "Q", "currency"], ["signatory_fee", "R", "currency"],
+    ["other_fees", "S", "currency"], ["handling", "T", "currency"],
+    ["type", "X", "text"], ["payment_entity", "Y", "text"], ["qualify", "AC", "text"],
+    ["notes", "AD", "text"], ["ptip_amount", "AJ", "currency"],
+  ];
+
+  // Archetype row for inserted GA "Talent" rows, matching the pre-built ones.
+  // "{R}" -> row number.
+  gaTalentFormulaRow() {
+    return [
+      { col: "AB", type: "text", value: "PR" },
+      { col: "U", type: "formula", value: "SUM(J{R}:T{R})" },
+      { col: "V", type: "formula", value: "T{R}" },
+      { col: "W", type: "formula", value: "U{R}-V{R}" },
+      { col: "AG", type: "formula", value: 'IFERROR(VLOOKUP(AF{R},Legend!$D$2:$E$26,2,0),"")' },
+      { col: "AK", type: "formula", value: "AJ{R}-U{R}" },
+    ];
+  }
+
+  // One /extract-talent row -> GA Talent cells. Booleans become the template's
+  // own YES/NO text; the AICP code is written verbatim (null leaves AF blank and
+  // that row drops out of the AICP roll-up — expected degraded mode, not a bug).
+  // The backend sends YES/NO *strings* for some flags and real booleans for
+  // others, so a bare truthiness test turns the string "NO" into a YES. Normalize
+  // both shapes to the template's YES/NO text.
+  _yesNo(v) {
+    if (typeof v === "string") {
+      const s = v.trim().toLowerCase();
+      if (["no", "n", "false", "0"].includes(s)) return "NO";
+      if (["yes", "y", "true", "1"].includes(s)) return "YES";
+      return v.trim().toUpperCase();
+    }
+    return v ? "YES" : "NO";
+  }
+
+  gaTalentRowToCells(r) {
+    const byCol = {};
+    const put = (col, type, value) => {
+      if (value != null && String(value).trim() !== "") byCol[col] = { col, type, value };
+    };
+    for (const [field, col, type] of this.GA_TALENT_MAP) put(col, type, r[field]);
+    for (const col of this.GA_TALENT_ZERO_COLS) if (!byCol[col]) byCol[col] = { col, type: "currency", value: 0 };
+    if (r.loan_out != null && String(r.loan_out) !== "") put("AE", "text", this._yesNo(r.loan_out));
+    if (r.on_ptip != null) put("AH", "text", this._yesNo(r.on_ptip));
+    if (r.received_invoice != null) put("AI", "text", this._yesNo(r.received_invoice));
+    const aicp = r.aicp_code != null ? r.aicp_code : r.aicpCode;
+    if (aicp != null && aicp !== "") put("AF", "number", aicp);
+    return Object.values(byCol);
+  }
+
   // ── GA Petty Cash row model -> Georgia "Petty Cash" tab ────────────────────
   // /extract-ga-petty-cash rows (snake_case). Confirmed against the bundled
   // assets/workbooks/georgia.xlsx: header row 3, data rows 4-34 (31 pre-built),
@@ -1540,7 +1942,7 @@ class Component extends DCLogic {
   async extractGaPettyCash(fileList) {
     const files = Array.from(fileList || []);
     const p = this.state.project;
-    const merged = { rows: [], issues: [], files: [] };
+    const merged = { rows: [], issues: [], files: [], hotel_blocks: [] };
     const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     for (const f of sorted) {
       await this.progressFile(f.name, 1);
@@ -1553,6 +1955,9 @@ class Component extends DCLogic {
         merged.rows.push(...(j.rows || []));
         merged.issues.push(...(j.issues || []));
         merged.files.push(...(j.files || []));
+        // A hotel folio can turn up in any of the three GA document streams.
+        merged.hotel_blocks.push(...(j.hotel_blocks || []));
+        this.harvestLoanOuts(j);
       } catch (e) {
         const reason = "GA petty cash extraction failed — " + (e.message || e);
         merged.issues.push({ file: f.name, reason });
@@ -1567,9 +1972,69 @@ class Component extends DCLogic {
     if (!files.length) return { rows: [], issues: [], files: [], count: 0 };
     try {
       const r = await this.extractGaPettyCash(files);
-      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], count: (r.rows || []).length };
+      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], hotelBlocks: r.hotel_blocks || [], count: (r.rows || []).length };
     } catch (e) {
-      return { rows: [], issues: ["GA petty cash extraction unavailable — " + (e.message || e)], files: [], count: 0 };
+      return { rows: [], issues: ["GA petty cash extraction unavailable — " + (e.message || e)], files: [], hotelBlocks: [], count: 0 };
+    }
+  }
+
+  // ── GA ProdCC (Production Credit Card reimbursement) ───────────────────────
+  // Distinct from Petty Cash: petty cash is money fronted to a crew member;
+  // ProdCC is a crew member paying with their own card (or cash) and being
+  // reimbursed. Same row shape as GA petty cash — GA_PETTY_MAP covers every
+  // shared field — plus one new field, payment_method ("CREDIT CARD" / "CASH" /
+  // ""), which is per-receipt and lands in W (Payment Method) where petty cash
+  // writes the constant "PETTY CASH". Source Code (K) is the constant "CC".
+  // po_number and env_number are often blank here (many packets have no cover
+  // sheet) — put() already clears empties, so nothing extra is needed.
+  // GA-only for now; IL gets ProdCC later.
+  gaProdCCFormulaRow() {
+    return [
+      { col: "K", type: "text", value: "CC" },
+      { col: "S", type: "text", value: "US" },
+      { col: "V", type: "formula", value: "T{R}-U{R}" },
+      { col: "AF", type: "formula", value: 'IFERROR(VLOOKUP(AE{R},Legend!$D$2:$E$26,2,0),"")' },
+    ];
+  }
+
+  // POST the ProdCC packets to /extract-ga-prodcc, ONE FILE PER REQUEST —
+  // identical request contract to /extract-ga-petty-cash.
+  async extractGaProdCC(fileList) {
+    const files = Array.from(fileList || []);
+    const p = this.state.project;
+    const merged = { rows: [], issues: [], files: [], hotel_blocks: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    for (const f of sorted) {
+      await this.progressFile(f.name, 1);
+      try {
+        const fd = new FormData();
+        fd.append("files", f);
+        fd.append("prodco_name", p.prodCompany || "");
+        fd.append("work_state", "GA");
+        const j = await this.postExtract(this.BACKEND_URL + "/extract-ga-prodcc", fd);
+        merged.rows.push(...(j.rows || []));
+        merged.issues.push(...(j.issues || []));
+        merged.files.push(...(j.files || []));
+        // A hotel folio can turn up in any of the three GA document streams.
+        merged.hotel_blocks.push(...(j.hotel_blocks || []));
+        this.harvestLoanOuts(j);
+      } catch (e) {
+        const reason = "GA ProdCC extraction failed — " + (e.message || e);
+        merged.issues.push({ file: f.name, reason });
+        merged.files.push({ file: f.name, rows: 0, error: reason });
+      }
+    }
+    return merged;
+  }
+
+  async parseGaProdCC() {
+    const files = this.files.gaProdCC || [];
+    if (!files.length) return { rows: [], issues: [], files: [], count: 0 };
+    try {
+      const r = await this.extractGaProdCC(files);
+      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], hotelBlocks: r.hotel_blocks || [], count: (r.rows || []).length };
+    } catch (e) {
+      return { rows: [], issues: ["GA ProdCC extraction unavailable — " + (e.message || e)], files: [], hotelBlocks: [], count: 0 };
     }
   }
 
@@ -1581,7 +2046,7 @@ class Component extends DCLogic {
   async extractGaAp(fileList) {
     const files = Array.from(fileList || []);
     const p = this.state.project;
-    const merged = { rows: [], issues: [], files: [] };
+    const merged = { rows: [], issues: [], files: [], hotel_blocks: [] };
     const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     for (let fi = 0; fi < sorted.length; fi++) {
       const f = sorted[fi];
@@ -1598,6 +2063,9 @@ class Component extends DCLogic {
         merged.rows.push(...(j.rows || []));
         merged.issues.push(...(j.issues || []));
         merged.files.push(...(j.files || []));
+        // A hotel folio can turn up in any of the three GA document streams.
+        merged.hotel_blocks.push(...(j.hotel_blocks || []));
+        this.harvestLoanOuts(j);
       } catch (e) {
         const reason = "GA AP extraction failed — " + (e.message || e);
         merged.issues.push({ file: f.name, reason });
@@ -1612,10 +2080,180 @@ class Component extends DCLogic {
     if (!files.length) return { rows: [], issues: [], files: [], count: 0 };
     try {
       const r = await this.extractGaAp(files);
-      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], count: (r.rows || []).length };
+      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], hotelBlocks: r.hotel_blocks || [], count: (r.rows || []).length };
     } catch (e) {
-      return { rows: [], issues: ["GA AP extraction unavailable — " + (e.message || e)], files: [], count: 0 };
+      return { rows: [], issues: ["GA AP extraction unavailable — " + (e.message || e)], files: [], hotelBlocks: [], count: 0 };
     }
+  }
+
+  // ── Hotel Charges Summary (Georgia) ────────────────────────────────────────
+  // hotel_blocks ride on the SAME response envelope as rows/issues/files from
+  // /extract-ga-petty-cash, /extract-ga-prodcc and /extract-ga-ap (a folio can be
+  // buried in any of the three), so each extractor collects them and
+  // buildGeorgiaBlob flattens the lot into one list in processing order.
+  //
+  // Sheet geometry — verified against the PUBLISHED GA template (Template GA -
+  // State Submission Workbook - MAY 2026 08 10), pulled from GET /templates/ga.
+  // The tab now holds ONE hotel section and nothing below it (last row 26).
+  //
+  // Rows 1-5 are fixed chrome, written once, never repeated: title B1, the GSA
+  // rate config H3:K4 that every block references absolutely ($H$4..$K$4), and
+  // Shoot Date(s) B5 (=Overview!C9).
+  //
+  // Section archetype, rows 6-26 — cloned once per additional hotel:
+  //   6      "Summary of <hotel> Charges"
+  //   8      sub-headers            10     NAME / DATE STAYED labels
+  //   11-24  ONE guest block (14 rows): 11 name/date/PO, 12-15 room + the three
+  //          taxes, 16 meals, 17 Total, 19 # of Nights, 21 disallow, 23 meal sums
+  //   25-26  TOTALS footer — H26/I26/J26 point at this section's own Total row
+  // Row 27 doesn't exist in the template; including it in the clone range gives
+  // every section a blank spacer row under its footer.
+  //
+  // Two axes of growth: a section per distinct hotel, and (inside a section) a
+  // 14-row guest block per person at that hotel. Both are clones of real
+  // template rows, so styles and formulas come along and relative refs rebase.
+  HOTEL_SHEET = "Hotel Charges Summary";
+  HOTEL_BLOCK_LEN = 14;                       // one guest block, rows 11-24
+  HOTEL_SEC_LEN = 22;                         // section 6-26 plus the spacer row
+  HOTEL_SEC_ARCH = { start: 6, end: 27 };
+  HOTEL_BLOCK_OFF = 5;                        // first guest block = section start + 5
+  HOTEL_FOOTER_OFF = 20;                      // TOTALS row = section start + 20, before block growth
+  // The only relabelable right-half rows. Lodging (+1) is a formula off room
+  // charge x nights and Meals (+5) carries meals_amount, so these three are the
+  // free slots for extra fees.
+  HOTEL_FEE_SLOTS = [
+    { off: 2, label: "Parking" },
+    { off: 3, label: "Laundry" },
+    { off: 4, label: "Internet" },
+  ];
+
+  // One section per distinct hotel, in first-appearance order; every folio for
+  // that hotel becomes a guest block inside it.
+  hotelSections(blocks) {
+    const order = [], byName = new Map();
+    for (const b of blocks) {
+      const n = String(b.hotel_name || "").trim() || "Unknown Hotel";
+      if (!byName.has(n)) { byName.set(n, []); order.push(n); }
+      byName.get(n).push(b);
+    }
+    return order.map((n) => ({ name: n, blocks: byName.get(n) }));
+  }
+
+  hotelPersonName(b) {
+    const last = String(b.last_name || "").trim(), first = String(b.first_name || "").trim();
+    return last && first ? last + ", " + first : (last || first || "");
+  }
+
+  // Turn the flat hotel_blocks list into cell patches (pushed onto `cellPatches`)
+  // plus the row clones that grow the sheet to fit. Returns { blockClones, written }.
+  planHotelTab(blocks, cellPatches) {
+    const S = this.HOTEL_SHEET, LEN = this.HOTEL_BLOCK_LEN, SEC = this.HOTEL_SEC_LEN;
+    const secs = this.hotelSections(blocks);
+    const arch = this.HOTEL_SEC_ARCH;
+    const blockClones = [];
+    // 1. A whole section (header, sub-headers, one block, footer, spacer) per
+    //    hotel past the first, appended below the archetype.
+    if (secs.length > 1)
+      blockClones.push({ sheetName: S, srcStart: arch.start, srcEnd: arch.end, at: arch.end + 1, count: secs.length - 1 });
+    // 2. Extra guest blocks inside each section. Coordinates are POST step 1, and
+    //    the jobs run bottom-up so an earlier insert never moves a later one's
+    //    target rows. Each clones that section's OWN block, so the copies carry
+    //    its formulas with the relative refs rebased.
+    const secStart = (i) => arch.start + i * SEC;
+    for (let i = secs.length - 1; i >= 0; i--) {
+      const extra = secs[i].blocks.length - 1;
+      if (extra > 0) {
+        const b0 = secStart(i) + this.HOTEL_BLOCK_OFF;
+        blockClones.push({ sheetName: S, srcStart: b0, srcEnd: b0 + LEN - 1, at: b0 + LEN, count: extra });
+      }
+    }
+
+    const put = (addr, type, val) => {
+      if (val != null && String(val).trim() !== "") cellPatches.push({ sheetName: S, addr, value: val, type });
+      else cellPatches.push({ sheetName: S, addr, clear: true });
+    };
+    const num = (v) => { const n = parseFloat(String(v ?? "").replace(/[$,\s]/g, "")); return isNaN(n) ? 0 : n; };
+    const clear = (addr) => cellPatches.push({ sheetName: S, addr, clear: true });
+    const noNights = [];
+
+    const writeBlock = (R, b) => {
+      put("B" + R, "text", this.hotelPersonName(b));
+      put("C" + R, "text", b.date_stayed);
+      put("G" + R, "text", b.po_number);
+      // Left half: per-NIGHT rates only. The sheet's own formulas do the GSA
+      // allow/disallow split (D/E off $H$4..$K$4) and the rate x nights math.
+      put("C" + (R + 1), "currency", num(b.room_charge));
+      put("C" + (R + 2), "currency", num(b.state_tax));
+      put("C" + (R + 3), "currency", num(b.city_tax));
+      put("C" + (R + 4), "currency", num(b.occupancy_tax));
+      // Nights drives H (=room x nights); a blank would zero the whole block's
+      // qualified spend, so fall back to 1 and flag it in the run log.
+      const nights = parseInt(b.nights, 10);
+      if (!(nights > 0)) noNights.push(this.hotelPersonName(b) || "(no name)");
+      put("C" + (R + 8), "number", nights > 0 ? nights : 1);
+      // Extra fees -> the three relabelable slots, 100% qualified.
+      const fees = (b.extra_fees || []).filter((f) => f && num(f.amount) !== 0);
+      const slots = this.HOTEL_FEE_SLOTS;
+      const norm = (s) => String(s || "").trim().toLowerCase();
+      // A fee whose label matches a slot takes that slot (a Laundry charge lands
+      // on the Laundry row, not on Parking); the rest fill whatever's left over
+      // in order. Anything still unplaced merges into the last slot as
+      // "Other Fees" with the breakdown written to the notes cell — never dropped.
+      const placed = new Array(slots.length).fill(null);
+      const rest = [];
+      for (const f of fees) {
+        const i = slots.findIndex((s, k) => !placed[k] && norm(s.label) === norm(f.label));
+        if (i >= 0) placed[i] = f; else rest.push(f);
+      }
+      const spill = [];
+      for (const f of rest) {
+        const i = placed.findIndex((p) => !p);
+        if (i >= 0) placed[i] = f; else spill.push(f);
+      }
+      if (spill.length) {
+        const last = slots.length - 1;
+        if (placed[last]) spill.unshift(placed[last]);
+        placed[last] = { label: "Other Fees", amount: spill.reduce((t, f) => t + num(f.amount), 0) };
+      }
+      slots.forEach((s, i) => {
+        const f = placed[i];
+        put("G" + (R + s.off), "text", f ? (String(f.label || "").trim() || s.label) : s.label);
+        put("H" + (R + s.off), "currency", f ? num(f.amount) : 0);
+      });
+      put("H" + (R + 5), "currency", num(b.meals_amount));   // Meals subtotal
+      const note = [
+        String(b.notes || "").trim(),
+        spill.length ? "Other Fees = " + spill.map((f) => (f.label || "fee") + " $" + num(f.amount).toFixed(2)).join(", ") : "",
+      ].filter(Boolean).join(" \u00b7 ");
+      put("R" + R, "text", note);
+    };
+
+    let written = 0, grow = 0;   // `grow` = rows added by guest blocks in earlier sections
+    secs.forEach((sec, i) => {
+      const start = secStart(i) + grow;
+      put("B" + start, "text", "Summary of " + sec.name + " Charges");
+      const totalRows = [];
+      sec.blocks.forEach((b, j) => {
+        const R = start + this.HOTEL_BLOCK_OFF + j * LEN;
+        writeBlock(R, b);
+        written++;
+        totalRows.push(R + 6);     // the block's own Total row
+      });
+      // The footer's H/I/J are hardcoded to the archetype's single block; point
+      // them at every block that actually landed in this section.
+      const footer = start + this.HOTEL_FOOTER_OFF + (sec.blocks.length - 1) * LEN;
+      for (const col of ["H", "I", "J"])
+        cellPatches.push({ sheetName: S, addr: col + footer, value: totalRows.map((r) => col + r).join("+"), type: "formula" });
+      grow += (sec.blocks.length - 1) * LEN;
+    });
+
+    this.runLog("res", "Hotel Charges Summary · " + written + (written === 1 ? " block" : " blocks") + " across " +
+      secs.length + (secs.length === 1 ? " hotel" : " hotels"));
+    if (secs.length > 1)
+      this.runLog("detail", "  one section per hotel: " + secs.map((s) => s.name + " (" + s.blocks.length + ")").join(", "));
+    if (noNights.length)
+      this.runLog("warn", "  # of Nights missing on " + noNights.length + " block(s), defaulted to 1: " + [...new Set(noNights)].join(", "));
+    return { blockClones, written };
   }
 
   // Build the Georgia workbook. Georgia has no comm summary, so none of the
@@ -1626,7 +2264,7 @@ class Component extends DCLogic {
     const file = this.WORKBOOK_FILES.ga;
     await this.logStep("Loading workbook template");
     const buf = await this.loadTemplateBytes("ga", file);
-    const eng = await import("./workbook-engine.js");
+    const eng = await this.loadEngine();
     const inserts = [], cellPatches = [];
 
     // Step-3 project fields -> Overview tab. Shoot Date(s) collapses to a single
@@ -1656,6 +2294,15 @@ class Component extends DCLogic {
       : R === GA_PRODCO_ROW ? R + Ea
       : R + Ea + Ep + Es;
     const shiftAddr = (addr) => addr.replace(/([A-Z]+)(\d+)/, (m, c, r) => c + shiftRow(+r));
+    // Hotel Charges Summary constants. Only H4 (GSA Rate) and J4 (City Tax) are
+    // written — I4/K4 are the template's own =ROUND(H4*0.08,2) / =ROUND(H4*0.089,2)
+    // formulas and must be left intact so they re-derive off the new H4.
+    const hr = this.hotelRates();
+    cellPatches.push(
+      { sheetName: "Hotel Charges Summary", addr: "H4", value: hr.gsa, type: "currency" },
+      { sheetName: "Hotel Charges Summary", addr: "J4", value: hr.cityTax, type: "currency" },
+    );
+
     const values = [], clears = [];
     for (const [key, addr0] of Object.entries(this.GA_CELL_MAP)) {
       const addr = shiftAddr(addr0);
@@ -1705,6 +2352,16 @@ class Component extends DCLogic {
     this._ptipB64 = null;
     this._gaApCount = 0;
     this._gaPettyCount = 0;
+    this._gaProdCCCount = 0;
+    this._gaHotelCount = 0;
+    this._gaLoanOutCount = 0;
+    this._gaRosterCount = 0;
+    this._gaPayrollCount = 0;
+    this._hotelBlocks = [];
+    this._loanOutRows = [];
+    this._rosterRows = [];
+    this._glBillingRows = [];
+    this._glProdcoRows = [];
     for (const k of ["_fringeCount", "_payrollCount", "_billingCount", "_subVendorCount",
                      "_agencyHoursCount", "_retainerCount", "_residencyCount",
                      "_talentCount", "_talentFreelanceCount"]) this[k] = 0;
@@ -1719,6 +2376,7 @@ class Component extends DCLogic {
       apRowsWritten = rows.length;
       this._gaApCount = rows.length;
       this._runData.ga_ap = { files: ap.files || [], issues: ap.issues || [] };
+      this._hotelBlocks.push(...(ap.hotelBlocks || []));
       this._fringeIssues = ap.issues || [];
 
       // Call sheet pass (optional). The call sheet outranks the invoice on crew
@@ -1833,22 +2491,49 @@ class Component extends DCLogic {
     }
 
     // ── Petty Cash tab. Same geometry as AP: header row 3, 31 pre-built data
-    //    rows 4-34, Subtotal row 35. Grows by insertion before the subtotal. ──
+    //    rows 4-34, Subtotal row 35. Grows by insertion before the subtotal.
+    //    TWO sections share this tab: Petty Cash rows first, then — only if both
+    //    exist — exactly one fully blank spacer row, then ProdCC rows. Sequence
+    //    Number (A) runs continuously across both and skips the spacer. A
+    //    ProdCC-only run starts at the top of the table with no spacer; a run
+    //    with no ProdCC files is byte-identical to before. ────────────────────
     const nPetty = (this.files.gaPettyCash || []).length;
+    const nProdCC = (this.files.gaProdCC || []).length;
     const PC_FIRST = 4, PC_PREBUILT = 31, PC_LAST_PREBUILT = 34;
     let pcRowsWritten = 0;
-    if (nPetty) {
-      await this.logStep("Extracting petty cash — " + nPetty + (nPetty === 1 ? " file" : " files"), false, this.beginProgress("gaPettyCash"));
-      const pc = await this.parseGaPettyCash();
-      const pcRows = pc.rows.slice(0, 500);
-      pcRowsWritten = pcRows.length;
-      this._gaPettyCount = pcRows.length;
-      this._runData.ga_petty_cash = { files: pc.files || [], issues: pc.issues || [] };
-      this._fringeIssues = [...(this._fringeIssues || []), ...(pc.issues || [])];
-      const pcInsert = Math.max(0, pcRows.length - PC_PREBUILT);
+    if (nPetty || nProdCC) {
+      let pcRows = [], ccRows = [];
+      if (nPetty) {
+        await this.logStep("Extracting petty cash — " + nPetty + (nPetty === 1 ? " file" : " files"), false, this.beginProgress("gaPettyCash"));
+        const pc = await this.parseGaPettyCash();
+        pcRows = pc.rows.slice(0, 500);
+        this._gaPettyCount = pcRows.length;
+        this._runData.ga_petty_cash = { files: pc.files || [], issues: pc.issues || [] };
+        this._hotelBlocks.push(...(pc.hotelBlocks || []));
+        this._fringeIssues = [...(this._fringeIssues || []), ...(pc.issues || [])];
+        await this.logStep("Petty cash — " + pcRows.length + (pcRows.length === 1 ? " row" : " rows") + " read", true);
+      }
+      if (nProdCC) {
+        await this.logStep("Extracting ProdCC — " + nProdCC + (nProdCC === 1 ? " file" : " files"), false, this.beginProgress("gaProdCC"));
+        const cc = await this.parseGaProdCC();
+        ccRows = cc.rows.slice(0, 500);
+        this._gaProdCCCount = ccRows.length;
+        this._runData.ga_prodcc = { files: cc.files || [], issues: cc.issues || [] };
+        this._hotelBlocks.push(...(cc.hotelBlocks || []));
+        this._fringeIssues = [...(this._fringeIssues || []), ...(cc.issues || [])];
+        await this.logStep("ProdCC — " + ccRows.length + (ccRows.length === 1 ? " row" : " rows") + " read", true);
+      }
+      const tabRows = [
+        ...pcRows.map((r) => ({ kind: "pc", r })),
+        ...(pcRows.length && ccRows.length ? [{ kind: "gap" }] : []),
+        ...ccRows.map((r) => ({ kind: "cc", r })),
+      ];
+      pcRowsWritten = tabRows.length;
+      const pcInsert = Math.max(0, tabRows.length - PC_PREBUILT);
       if (pcInsert) inserts.push({ sheetName: "Petty Cash", at: PC_FIRST + 1, rows: Array.from({ length: pcInsert }, () => this.gaPettyFormulaRow()) });
       const prodcoName = (this.state.project.prodCompany || "").trim();
-      pcRows.forEach((r, idx) => {
+      let seq = 0;
+      tabRows.forEach((row, idx) => {
         const R = PC_FIRST + idx;
         const put = (col, type, val) => {
           if (val != null && String(val).trim() !== "")
@@ -1856,12 +2541,19 @@ class Component extends DCLogic {
           else
             cellPatches.push({ sheetName: "Petty Cash", addr: col + R, clear: true });
         };
-        put("A", "number", idx + 1);   // Sequence Number
-        for (const c of this.gaPettyFormulaRow()) put(c.col, c.type, c.value);
+        // Spacer between the two sections: blank across A..AO, formulas included.
+        if (row.kind === "gap") {
+          for (let n = 1; n <= 41; n++) cellPatches.push({ sheetName: "Petty Cash", addr: this.colLetter(n) + R, clear: true });
+          return;
+        }
+        const isCC = row.kind === "cc";
+        put("A", "number", ++seq);   // Sequence Number — continuous across sections
+        for (const c of (isCC ? this.gaProdCCFormulaRow() : this.gaPettyFormulaRow())) put(c.col, c.type, c.value);
         if (prodcoName) put("Z", "text", prodcoName);   // Payment Entity/Billed under?
-        for (const [f, col, type] of this.GA_PETTY_MAP) put(col, type, r[f]);
+        for (const [f, col, type] of this.GA_PETTY_MAP) put(col, type, row.r[f]);
+        // ProdCC only: Payment Method (W) is per-receipt, not the PC constant.
+        if (isCC) put("W", "text", row.r.payment_method);
       });
-      await this.logStep("Petty cash — " + pcRows.length + (pcRows.length === 1 ? " row" : " rows") + " read", true);
     }
 
     // Blank the leftover pre-built petty cash rows for the same reason as AP:
@@ -1877,8 +2569,282 @@ class Component extends DCLogic {
       for (const col of pcCols) cellPatches.push({ sheetName: "Petty Cash", addr: col + R, clear: true });
     }
 
+    // ── Hotel Charges Summary. hotel_blocks were harvested by whichever of the
+    //    three GA extractors saw a folio; nothing is touched when there are none.
+    let blockClones = [];
+    const hb = this._hotelBlocks || [];
+    if (hb.length) {
+      await this.logStep("Writing hotel charges — " + hb.length + (hb.length === 1 ? " folio" : " folios"), false);
+      const plan = this.planHotelTab(hb, cellPatches);
+      blockClones = plan.blockClones;
+      this._gaHotelCount = plan.written;
+      await this.logStep("Hotel Charges Summary — " + plan.written + (plan.written === 1 ? " block" : " blocks") + " written", true);
+    }
+
+    // ── Payroll Report. Written into the template's pre-built rows 4-574, so
+    //    nothing shifts and the Subtotal/Total footers keep their ranges.
+    const rowWrites = [];
+    // Only assert the Payroll Report contract when this run actually writes to
+    // that tab — a GA run with no payroll files shouldn't fail on a tab it never
+    // touches.
+    const preconditions = [];
+    const nGaPay = (this.files.payroll || []).length + (this.files.prodReport || []).length +
+      (this.files.timecards || []).length;
+    if (nGaPay) await this.logStep("Extracting payroll — " + nGaPay + (nGaPay === 1 ? " file" : " files"),
+      false, this.beginProgress("payroll", "prodReport", "timecards"));
+    const gaPay = await this.parseGaPayrollRows();
+    if (gaPay.count) {
+      rowWrites.push({
+        sheetName: this.GA_PAYROLL_SHEET,
+        startRow: this.GA_PAYROLL_FIRST_ROW,
+        rows: gaPay.rows,
+        blankCols: this.GA_PAYROLL_BLANK,
+        skipCols: this.GA_PAYROLL_SKIP,
+        clearThroughRow: this.GA_PAYROLL_EXAMPLE_LAST_ROW,
+      });
+      preconditions.push({ sheetName: this.GA_PAYROLL_SHEET, expect: this.GA_PAYROLL_EXPECT });
+      this._gaPayrollCount = gaPay.count;
+      this.runLog("res", "Payroll Report · " + gaPay.count + " row" + (gaPay.count === 1 ? "" : "s") +
+        " written to rows " + this.GA_PAYROLL_FIRST_ROW + "-" + (this.GA_PAYROLL_FIRST_ROW + gaPay.count - 1));
+    }
+    if (nGaPay) {
+      // Outside the count check on purpose: a run can come back with zero rows
+      // and a full issues list (a rejected .xls, a backend that only complained),
+      // and that is exactly the run where the user needs to be told why.
+      this._runData.ga_payroll_report = { files: gaPay.files || [], issues: gaPay.issues || [] };
+      // _fringeIssues is what the success screen's "Files needing attention"
+      // panel and its .txt read — the run log alone isn't user-facing enough for
+      // a rejected .xls or a >571-row overflow that silently drops people.
+      this._fringeIssues = [...(this._fringeIssues || []), ...(gaPay.issues || [])];
+      if (gaPay.overflow) this.runLog("warn", "  " + gaPay.overflow + " row(s) did NOT fit and were dropped");
+      for (const iss of gaPay.issues) this.runLog("warn", "  " + iss);
+      await this.logStep("Payroll Report — " + gaPay.count + (gaPay.count === 1 ? " row" : " rows") + " written", true);
+    }
+
+    // ── Talent. Same /extract-talent call the Illinois path uses (invoice PDFs +
+    //    N PTIP reports in one request); GA writes it to the "Talent" tab, which
+    //    has its own wider column set. Rows land in the 31 pre-built rows, with
+    //    extra rows inserted at FIRST+1 so every range below grows with them.
+    const nGaTalent = (this.files.talentPdfs || []).length + (this.files.talentPtip || []).length;
+    if (nGaTalent) await this.logStep("Extracting talent — " + nGaTalent + (nGaTalent === 1 ? " file" : " files"),
+      false, this.beginProgress("talentPdfs", "talentPtip"));
+    const gaTal = nGaTalent
+      ? await this.parseTalent()
+      : { rows: [], ptipB64: null, summary: null, count: 0, issues: [] };
+    // The Talent tab's column letters come from the 2026-08 PUBLISHED template
+    // (Misc Payment at K, Signatory Fee at R, PTIP block at AF-AI). The bundled
+    // assets/workbooks/georgia.xlsx is still the older layout, so this geometry
+    // is checked SOFTLY here rather than as a hard precondition: a mismatch skips
+    // the Talent tab with a visible issue instead of aborting the whole workbook
+    // and leaving a first-time user on the bundled default with no output at all.
+    let talSkip = null;
+    if (gaTal.rows.length) {
+      const found = await eng.inspectStructure(buf, [{ sheetName: this.GA_TALENT_SHEET, expect: this.GA_TALENT_EXPECT }]);
+      const problems = found[this.GA_TALENT_SHEET];
+      if (problems && problems.length) talSkip = problems.join("; ");
+    }
+    if (talSkip) {
+      const msg = "Talent tab was SKIPPED — the template in use does not match the expected 2026-08 layout (" +
+        talSkip + "). Publish the current GA template in Wizard 04, or upload it as a Replace, and re-run. " +
+        "Every other tab in this workbook was written normally.";
+      gaTal.issues = [...(gaTal.issues || []), msg];
+      this.runLog("warn", msg);
+    }
+    if (gaTal.rows.length && !talSkip) {
+      const S = this.GA_TALENT_SHEET, FIRST = this.GA_TALENT_FIRST;
+      const talCells = gaTal.rows.map((r) => this.gaTalentRowToCells(r));
+      const grow = Math.max(0, talCells.length - this.GA_TALENT_PREBUILT);
+      if (grow) inserts.push({ sheetName: S, at: FIRST + 1, rows: Array.from({ length: grow }, () => this.gaTalentFormulaRow()) });
+      rowWrites.push({
+        sheetName: S,
+        startRow: FIRST,
+        rows: talCells,
+        blankCols: this.GA_TALENT_BLANK,
+        skipCols: this.GA_TALENT_SKIP,
+        clearThroughRow: this.GA_TALENT_EXAMPLE_LAST_ROW,
+      });
+      preconditions.push({ sheetName: S, expect: this.GA_TALENT_EXPECT });
+      // (Also asserted hard here so the geometry can't change between the soft
+      // check above and the write — same bytes, negligible cost, atomic refusal.)
+      // Per-invoice roll-up: the SUMIFs key off a hardcoded invoice list in F,
+      // so without this the whole block reads zero. Post-insert coordinates.
+      // Capped at the 15 pre-built rows on purpose — the AICP-category block
+      // occupies the SAME rows in cols N-Y, so inserting rows here to fit a 16th
+      // invoice would push blank rows into the middle of the category list.
+      const invFirst = this.GA_TALENT_INV_FIRST + grow;
+      const invs = [...new Set(gaTal.rows.map((r) => String(r.invoice_no == null ? "" : r.invoice_no).trim()).filter(Boolean))];
+      for (let i = 0; i < this.GA_TALENT_INV_PREBUILT; i++) {
+        const addr = "F" + (invFirst + i);
+        if (i < invs.length) cellPatches.push({ sheetName: S, addr, value: invs[i], type: "text" });
+        else cellPatches.push({ sheetName: S, addr, clear: true });
+      }
+      if (invs.length > this.GA_TALENT_INV_PREBUILT) {
+        const dropped = invs.slice(this.GA_TALENT_INV_PREBUILT);
+        gaTal.issues = [...(gaTal.issues || []),
+          "Talent tab: the per-invoice summary block only has " + this.GA_TALENT_INV_PREBUILT +
+          " rows, so these invoices were left out of it (their talent rows ARE written): " + dropped.join(", ")];
+      }
+      this._talentCount = talCells.length;
+      this.runLog("res", "Talent · " + talCells.length + " row" + (talCells.length === 1 ? "" : "s") +
+        " written to rows " + FIRST + "-" + (FIRST + talCells.length - 1) +
+        (grow ? " (" + grow + " row(s) inserted)" : "") + " · " + invs.length + " invoice(s) in the summary block");
+    }
+    if (nGaTalent) {
+      this._talentIssues = [...(this._talentIssues || []), ...(gaTal.issues || [])];
+      this._talentSummary = gaTal.summary || null;
+      this._ptipB64 = gaTal.ptipB64 || null;
+      this._ptipCompany = this.effectiveTalentCo();
+      const talentCoLabel = this.talentCo(this._ptipCompany).label;
+      this._runData.talent = {
+        files: (this.files.talentPdfs || []).map((f) => ({ filename: f.name, company: talentCoLabel, rows: null, issues: [] })),
+        issues: gaTal.issues || [],
+      };
+      for (const iss of gaTal.issues || []) this.runLog("warn", "  " + iss);
+      await this.logStep("Talent — " + (this._talentCount || 0) + ((this._talentCount || 0) === 1 ? " row" : " rows") + " written", true);
+    }
+
+    // ── Loan Out Withholding. Rows were harvested off the payroll / talent / AP
+    //    extractions above; nothing is touched when the run found no loan-outs.
+    //    Checked softly for the same reason as Talent — the bundled default may
+    //    predate this tab, and one missing tab shouldn't cost the whole workbook.
+    const lo = this._loanOutRows || [];
+    if (lo.length) {
+      const S = this.GA_LOANOUT_SHEET, FIRST = this.GA_LOANOUT_FIRST;
+      const found = await eng.inspectStructure(buf, [{ sheetName: S, expect: this.GA_LOANOUT_EXPECT }]);
+      const problems = (found[S] || []);
+      if (problems.length) {
+        const msg = "Loan Out Withholding tab was SKIPPED — the template in use does not match the " +
+          "expected layout (" + problems.join("; ") + "). " + lo.length +
+          " loan-out payment(s) were found and are NOT recorded on that tab. " +
+          "Publish the current GA template in Wizard 04 and re-run.";
+        this._fringeIssues = [...(this._fringeIssues || []), msg];
+        this.runLog("warn", msg);
+      } else {
+        const loCells = lo.map((r) => this.gaLoanOutRowToCells(r));
+        const grow = Math.max(0, loCells.length - this.GA_LOANOUT_PREBUILT);
+        if (grow) inserts.push({ sheetName: S, at: FIRST + 1, rows: Array.from({ length: grow }, () => this.gaLoanOutFormulaRow()) });
+        rowWrites.push({
+          sheetName: S,
+          startRow: FIRST,
+          rows: loCells,
+          blankCols: this.GA_LOANOUT_BLANK,
+          skipCols: this.GA_LOANOUT_SKIP,
+          clearThroughRow: this.GA_LOANOUT_EXAMPLE_LAST_ROW,
+        });
+        preconditions.push({ sheetName: S, expect: this.GA_LOANOUT_EXPECT });
+        this._gaLoanOutCount = loCells.length;
+        this._fringeIssues = [...(this._fringeIssues || []),
+          "Loan Out Withholding: the Job Code column (A) was left blank on all " + loCells.length +
+          " row(s) — there is no Job Code field on the Overview step for us to stamp it from. " +
+          "Fill it in by hand, or ask for the field to be added."];
+        this.runLog("res", "Loan Out Withholding · " + loCells.length + " row" + (loCells.length === 1 ? "" : "s") +
+          " written to rows " + FIRST + "-" + (FIRST + loCells.length - 1) + (grow ? " (" + grow + " row(s) inserted)" : ""));
+        await this.logStep("Loan Out Withholding — " + loCells.length + (loCells.length === 1 ? " row" : " rows") + " written", true);
+      }
+    }
+
+    // ── Payroll Roster. Consolidated from the roster entries the reconciler,
+    //    talent and AP extractions reported. Deduped by (person, job title) at
+    //    write time — across everything accumulated, not as entries arrive.
+    const rosterRaw = this._rosterRows || [];
+    if (rosterRaw.length) {
+      const S = this.GA_ROSTER_SHEET, FIRST = this.GA_ROSTER_FIRST;
+      const found = await eng.inspectStructure(buf, [{ sheetName: S, expect: this.GA_ROSTER_EXPECT }]);
+      const problems = (found[S] || []);
+      if (problems.length) {
+        const msg = "Payroll Roster tab was SKIPPED — the template in use does not match the expected " +
+          "layout (" + problems.join("; ") + "). Publish the current GA template in Wizard 04 and re-run.";
+        this._fringeIssues = [...(this._fringeIssues || []), msg];
+        this.runLog("warn", msg);
+      } else {
+        const people = this.dedupeRoster(rosterRaw);
+        const rosterCells = people.map((r, i) => this.gaRosterRowToCells(r, i));
+        const grow = Math.max(0, rosterCells.length - this.GA_ROSTER_PREBUILT);
+        if (grow) inserts.push({ sheetName: S, at: FIRST + 1, rows: Array.from({ length: grow }, () => []) });
+        rowWrites.push({
+          sheetName: S,
+          startRow: FIRST,
+          rows: rosterCells,
+          blankCols: this.GA_ROSTER_BLANK,
+          skipCols: this.GA_ROSTER_SKIP,
+        });
+        preconditions.push({ sheetName: S, expect: this.GA_ROSTER_EXPECT });
+        this._gaRosterCount = rosterCells.length;
+        this.runLog("res", "Payroll Roster · " + rosterCells.length + " person-role row" +
+          (rosterCells.length === 1 ? "" : "s") + " from " + rosterRaw.length + " appearance" +
+          (rosterRaw.length === 1 ? "" : "s") + " written to rows " + FIRST + "-" +
+          (FIRST + rosterCells.length - 1) + (grow ? " (" + grow + " row(s) inserted)" : ""));
+        await this.logStep("Payroll Roster — " + rosterCells.length + (rosterCells.length === 1 ? " person" : " people") + " written", true);
+      }
+    }
+
+    // ── ProdCo lump-sum production-fee invoices. Reuses the existing "Production
+    //    Company Billings" upload zone (already shown on GA) and the existing
+    //    /extract-billings endpoint with vendor_type=prodco — the only vendor_type
+    //    that returns gl_billing_rows. The rows themselves are harvested inside
+    //    extractBillings; nothing here writes to a Billings tab (GA has none).
+    const prodInv = this.files.prodBillings || [];
+    if (prodInv.length) {
+      await this.logStep("Extracting ProdCo invoices — " + prodInv.length + (prodInv.length === 1 ? " file" : " files"),
+        false, this.beginProgress("prodBillings"));
+      const p = this.state.project;
+      try {
+        const bi = await this.extractBillings(prodInv, "prodco", { name: p.prodCompany, address: p.prodCompanyAddress });
+        const iss = bi.issues || [];
+        if (iss.length) {
+          this._fringeIssues = [...(this._fringeIssues || []), ...iss];
+          for (const m of iss) this.runLog("warn", "  " + m);
+        }
+        await this.logStep("ProdCo invoices — " + prodInv.length + (prodInv.length === 1 ? " file" : " files") + " read", true);
+      } catch (e) {
+        const msg = "ProdCo invoice extraction failed — " + (e.message || e) +
+          ". Those production-fee invoices are NOT on the GL(BILLING) tab.";
+        this._fringeIssues = [...(this._fringeIssues || []), msg];
+        this.runLog("warn", msg);
+      }
+    }
+
+    // ── GL(BILLING) / GL (PRODCO). Literal ledgers, no dedupe. Both share one
+    //    column layout, so one helper writes either tab.
+    for (const gl of [
+      { sheet: this.GL_BILLING_SHEET, rows: this._glBillingRows || [], label: "GL(BILLING)" },
+      { sheet: this.GL_PRODCO_SHEET, rows: this._glProdcoRows || [], label: "GL (PRODCO)" },
+    ]) {
+      if (!gl.rows.length) continue;
+      const found = await eng.inspectStructure(buf, [{ sheetName: gl.sheet, expect: this.GL_EXPECT }]);
+      const problems = (found[gl.sheet] || []);
+      if (problems.length) {
+        const msg = gl.label + " tab was SKIPPED — the template in use does not match the expected " +
+          "layout (" + problems.join("; ") + "). " + gl.rows.length +
+          " ledger row(s) were built and are NOT recorded. Publish the current GA template in Wizard 04 and re-run.";
+        this._fringeIssues = [...(this._fringeIssues || []), msg];
+        this.runLog("warn", msg);
+        continue;
+      }
+      const rows = gl.rows;
+      if (rows.length > this.GL_PREBUILT) {
+        // Growth by insertion is safe here — no formulas and no merges anywhere
+        // below the data block — but say so, since the ledger outgrew the sheet.
+        inserts.push({ sheetName: gl.sheet, at: this.GL_FIRST + 1, rows: Array.from({ length: rows.length - this.GL_PREBUILT }, () => []) });
+        this.runLog("warn", "  " + gl.label + " grew past its " + this.GL_PREBUILT +
+          " pre-built rows — " + (rows.length - this.GL_PREBUILT) + " row(s) inserted");
+      }
+      rowWrites.push({
+        sheetName: gl.sheet,
+        startRow: this.GL_FIRST,
+        rows: rows.map((r, i) => this.glRowToCells(r, i)),
+        blankCols: this.GL_BLANK,
+        skipCols: this.GL_SKIP,
+        clearThroughRow: this.GL_EXAMPLE_LAST_ROW,
+      });
+      preconditions.push({ sheetName: gl.sheet, expect: this.GL_EXPECT });
+      this.runLog("res", gl.label + " · " + rows.length + " ledger row" + (rows.length === 1 ? "" : "s") +
+        " written to rows " + this.GL_FIRST + "-" + (this.GL_FIRST + rows.length - 1));
+      await this.logStep(gl.label + " — " + rows.length + (rows.length === 1 ? " row" : " rows") + " written", true);
+    }
+
     const { blob, written, deleted } = await eng.generateWorkbook(
-      buf, this.GA_ANCHOR_SHEET, values, [], { inserts, cellPatches, columnInserts });
+      buf, this.GA_ANCHOR_SHEET, values, [], { inserts, cellPatches, columnInserts, blockClones, rowWrites, preconditions });
     this._deleted = deleted;
     const title = (this.state.project.projectTitle || "Production Binder").trim();
     const fname = title.replace(/[^\w \-]+/g, "").replace(/\s+/g, " ").trim() +
@@ -1888,6 +2854,293 @@ class Component extends DCLogic {
     // receives non-blank Overview fields, so `fieldCount` (captured before the
     // extra-company rows are appended) is the real count.
     return { blob, written, fname, fields: fieldCount };
+  }
+
+  // ── Loan Out Withholding tab (Georgia) ─────────────────────────────────────
+  // No upload of its own. /extract-fringe (Crew Payroll), /extract-talent (all
+  // three payroll companies), /extract-ga-ap and /extract-ga-production-report
+  // each append a loan_out_rows
+  // array to their EXISTING response whenever that extraction meets a loan-out
+  // payment, as does /extract-ga-production-report (often the only place a crew
+  // loan-out is identifiable); harvestLoanOuts() accumulates across every call and
+  // the tab is written from the pile. Same granularity as the source tabs — one
+  // appearance, one row, never consolidated.
+  //
+  // Geometry (verified against the published GA template, NOT the row 4/5 the
+  // backend brief assumed): title A1, Job Code A3/B3, Shoot Date A4/B4,
+  // header row 6, six pre-built data rows 7-12 carrying example content.
+  GA_LOANOUT_SHEET = "Loan Out Withholding";
+  GA_LOANOUT_FIRST = 7;
+  GA_LOANOUT_PREBUILT = 6;              // rows 7-12
+  GA_LOANOUT_EXAMPLE_LAST_ROW = 12;     // the six example rows all carry content
+
+  // J (Amount Withheld) is the template's own =I*4.99% formula, shared down the
+  // column from row 7, and B (WTH Remitted?) is a manual checkbox the accountant
+  // ticks once withholding is actually paid. Never written, never cleared.
+  GA_LOANOUT_SKIP = ["B", "J"];
+
+  // Everything else on a row we touch, so an example row never shows through
+  // under real data. F/G/H (Federal Tax Classification / SSN / FEIN) and R
+  // (Payment Date) are not collected by any pipeline yet — they are blanked, not
+  // written, so the example SSNs and dates don't survive.
+  GA_LOANOUT_BLANK = [
+    "A","C","D","E","F","G","H","I","K","L","M","N","O","P","Q","R","S",
+  ];
+
+  GA_LOANOUT_EXPECT = {
+    headerRow: 6,
+    headerCells: {
+      A: "Job Code", B: "WTH Remitted?", E: "Loan Out Name",
+      I: "Invoice/ Gross Amount", J: "Amount Witheld", K: "Crew Position",
+      L: "Payroll Company", Q: "Invoice #", S: "Notes",
+    },
+    firstRow: 7,
+    lastRow: 12,
+    formulaCols: ["J"],
+    sampleRows: [7, 8, 12],
+  };
+
+  GA_LOANOUT_MAP = [
+    ["crew_employee_name", "C", "text"], ["position_title", "D", "text"],
+    ["loan_out_name", "E", "text"], ["invoice_gross_amount", "I", "currency"],
+    ["crew_position", "K", "text"], ["payroll_company", "L", "text"],
+    ["address", "M", "text"], ["home_state", "N", "text"],
+    ["work_state", "O", "text"], ["invoice_date", "P", "text"],
+    ["invoice_number", "Q", "text"], ["notes", "S", "text"],
+  ];
+
+  // Collect loan_out_rows off any extraction envelope that carries them. Called
+  // from all three extractors; a response without the key is the normal case
+  // while the backend is still being built.
+  harvestLoanOuts(j) {
+    const lo = (j && (j.loan_out_rows || j.loanOutRows)) || [];
+    if (lo.length) (this._loanOutRows = this._loanOutRows || []).push(...lo);
+    // Payroll Roster entries ride the same envelopes; accumulate raw here and
+    // dedupe once at write time (see dedupeRoster).
+    const ros = (j && (j.payroll_roster_rows || j.payrollRosterRows)) || [];
+    if (ros.length) (this._rosterRows = this._rosterRows || []).push(...ros);
+    // GL ledger rows ride the same envelopes. Only Talent and the prodco-typed
+    // /extract-billings call return gl_billing_rows; AP / Petty Cash / ProdCC
+    // return gl_prodco_rows. Harvesting both unconditionally is safe — an
+    // envelope without the key contributes nothing.
+    const glb = (j && (j.gl_billing_rows || j.glBillingRows)) || [];
+    if (glb.length) (this._glBillingRows = this._glBillingRows || []).push(...glb);
+    const glp = (j && (j.gl_prodco_rows || j.glProdcoRows)) || [];
+    if (glp.length) (this._glProdcoRows = this._glProdcoRows || []).push(...glp);
+  }
+
+  // Archetype for inserted rows: only J, the withholding formula. Everything
+  // else is either written from the row or deliberately left blank.
+  gaLoanOutFormulaRow() {
+    return [{ col: "J", type: "formula", value: "I{R}*0.0499" }];
+  }
+
+  gaLoanOutRowToCells(r) {
+    const byCol = {};
+    const put = (col, type, val) => { if (val != null && String(val) !== "") byCol[col] = { col, type, value: val }; };
+    for (const [field, col, type] of this.GA_LOANOUT_MAP) put(col, type, r[field]);
+    // Job Code (A) is ours to stamp — the backend doesn't know it. But there is no
+    // Job Code field on the Overview step today (the template's own B3 chrome cell
+    // carries an example value), so there is nothing truthful to write and A is
+    // left blank rather than filled with the project title. Add the field, map it
+    // here, and this becomes one line. See the issue raised in buildGaBlob.
+    return Object.values(byCol);
+  }
+
+  // ── Payroll Roster tab (Georgia) ───────────────────────────────────────────
+  // No upload of its own, like Loan Out Withholding: it consolidates people the
+  // Crew Payroll reconciler, /extract-talent and /extract-ga-ap already
+  // identified, each appending a payroll_roster_rows array to its response
+  // (one entry per person-role APPEARANCE). Crew rows come off
+  // /reconcile-ga-payroll rather than an extractor, because the Y/N flag depends
+  // on whether the payment matched the Production Report.
+  //
+  // Unlike Loan Out Withholding this tab is DEDUPED, not raw-accumulated — see
+  // dedupeRoster().
+  //
+  // Geometry (verified against the published template): title A1, header row 3,
+  // 67 pre-built data rows 4-70. Column A is the sheet's own 1..67 item number
+  // and I ships pre-filled "Y" on every row. No formulas, no merges.
+  GA_ROSTER_SHEET = "Payroll Roster";
+  GA_ROSTER_FIRST = 4;
+  GA_ROSTER_PREBUILT = 67;           // rows 4-70
+
+  // Nothing is skipped: A is the item number, which we renumber for the rows we
+  // write, and I must be overwritten because the template pre-fills "Y".
+  GA_ROSTER_SKIP = [];
+  GA_ROSTER_BLANK = ["B","C","D","E","F","G","H","I","J","K"];
+
+  GA_ROSTER_EXPECT = {
+    headerRow: 3,
+    headerCells: {
+      B: "Last Name", C: "First Name", D: "Corp Name", E: "Job Title",
+      G: "State of Residence", H: "Start Date", I: "On the Payroll Report?",
+      K: "Comment",
+    },
+    firstRow: 4,
+    lastRow: 70,
+    sampleRows: [4, 5, 70],
+  };
+
+  // NOTE: last_name is B, not A — A is the sheet's row-number column.
+  GA_ROSTER_MAP = [
+    ["last_name", "B", "text"], ["first_name", "C", "text"],
+    ["corp_name", "D", "text"], ["job_title", "E", "text"],
+    ["work_state", "F", "text"], ["state_of_residence", "G", "text"],
+    ["start_date", "H", "text"], ["on_payroll_report", "I", "text"],
+    ["vendor_name", "J", "text"], ["comment", "K", "text"],
+  ];
+
+  // Best-effort date -> sortable number, for picking the earliest start_date in a
+  // group. Handles ISO ("2026-03-02") and US ("3/2/2026") shapes; anything
+  // unparseable sorts last so a real date always wins over a junk one.
+  _rosterDateKey(v) {
+    const s = String(v == null ? "" : v).trim();
+    if (!s) return Infinity;
+    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+    if (m) return +m[1] * 10000 + +m[2] * 100 + +m[3];
+    m = /^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})/.exec(s);
+    if (m) {
+      const y = +m[3] < 100 ? 2000 + +m[3] : +m[3];
+      return y * 10000 + +m[1] * 100 + +m[2];
+    }
+    const t = Date.parse(s);
+    return isNaN(t) ? Infinity : t;
+  }
+
+  // Collapse appearances to one row per (person, job title). Same person with a
+  // different title stays a separate row. The surviving row keeps the earliest
+  // start_date and, for everything else, the values from that earliest
+  // appearance. On the Payroll Report is Y when ANY appearance was verified
+  // against its proper source — one matched payment proves the person is on the
+  // report — and the comment is kept only while the group is still N, since a
+  // Y row has nothing to explain.
+  dedupeRoster(rows) {
+    const norm = (v) => String(v == null ? "" : v).trim().replace(/\s+/g, " ").toUpperCase();
+    const groups = new Map();
+    for (const r of rows || []) {
+      const key = norm(r.last_name) + "|" + norm(r.first_name) + "|" + norm(r.job_title);
+      const k = this._rosterDateKey(r.start_date);
+      const yes = norm(r.on_payroll_report) === "Y";
+      const g = groups.get(key);
+      if (!g) {
+        groups.set(key, { row: { ...r }, key: k, yes, comment: yes ? "" : (r.comment || "") });
+        continue;
+      }
+      if (k < g.key) { g.row = { ...r }; g.key = k; }
+      if (yes) g.yes = true;
+      else if (!g.comment) g.comment = r.comment || "";
+    }
+    return [...groups.values()].map((g) => ({
+      ...g.row,
+      on_payroll_report: g.yes ? "Y" : "N",
+      comment: g.yes ? "" : g.comment,
+    }));
+  }
+
+  gaRosterRowToCells(r, i) {
+    const byCol = {};
+    const put = (col, type, val) => { if (val != null && String(val) !== "") byCol[col] = { col, type, value: val }; };
+    for (const [field, col, type] of this.GA_ROSTER_MAP) put(col, type, r[field]);
+    put("A", "number", i + 1);   // the sheet's own item number, renumbered for our rows
+    return Object.values(byCol);
+  }
+
+  // ── GL(BILLING) / GL (PRODCO) tabs (Georgia) ───────────────────────────────
+  // Two transaction ledgers with the SAME column layout. Literal ledgers: one row
+  // per source occurrence, never deduplicated (unlike Payroll Roster).
+  //   GL(BILLING)  — costs billed to TPC Productions itself: Talent/SAG payments
+  //     (gl_billing_rows off every /extract-talent call) and the ProdCo's own
+  //     lump-sum production-fee invoices (/extract-billings with
+  //     vendor_type=prodco, which is the only vendor_type that returns them).
+  //   GL (PRODCO)  — the job's own itemized production-cost ledger: gl_prodco_rows
+  //     off /extract-ga-ap, /extract-ga-petty-cash and /extract-ga-prodcc, PLUS
+  //     crew payroll rows built HERE from the reconciled Payroll Report rows.
+  //     Crew is built client-side on purpose: reconciliation happens in this app,
+  //     so neither raw source can emit these without double-counting the crew.
+  //
+  // Sheet names are exact and NOT symmetrical — "GL(BILLING)" has no space,
+  // "GL (PRODCO)" does.
+  //
+  // Geometry (verified against the published template): title A1, header row 3,
+  // 95 pre-built data rows 4-98, no formulas, no merges. Rows 4-9 carry example
+  // content in A/K/L.
+  GL_BILLING_SHEET = "GL(BILLING)";
+  GL_PRODCO_SHEET = "GL (PRODCO)";
+  GL_FIRST = 4;
+  GL_PREBUILT = 95;              // rows 4-98
+  GL_EXAMPLE_LAST_ROW = 9;       // example FF2 / Source Code values run 4-9
+
+  // Nothing skipped: A is the sequence number, which we own. B (Account Number),
+  // C (Reference Number), D (Effective Date) and M (JE Number) are manual
+  // accounting-system fields with no source-document equivalent, and W has no
+  // header at all — all four are blanked, never written.
+  GL_SKIP = [];
+  GL_BLANK = [
+    "B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X",
+  ];
+
+  GL_EXPECT = {
+    headerRow: 3,
+    headerCells: {
+      A: "Sequence Number", B: "Account Number", E: "Check Number",
+      F: "Invoice Number", I: "Vendor/Employee", L: "Source Code",
+      M: "JE Number", N: "Distribution Description", U: "Amount", V: "Qualify",
+    },
+    firstRow: 4,
+    lastRow: 98,
+    sampleRows: [4, 5, 98],
+  };
+
+  // Backend returns gl_billing_rows / gl_prodco_rows as flat dicts with these
+  // exact keys, identical for both tabs.
+  GL_MAP = [
+    ["check_number", "E", "text"], ["invoice_number", "F", "text"],
+    ["invoice_date", "G", "text"], ["po_number", "H", "text"],
+    ["vendor_employee", "I", "text"], ["ff1", "J", "text"], ["ff2", "K", "text"],
+    ["source_code", "L", "text"], ["distribution_description", "N", "text"],
+    ["last_name", "O", "text"], ["first_name", "P", "text"],
+    ["home_state", "Q", "text"], ["episode", "R", "text"], ["nights", "S", "number"],
+    ["org_cur", "T", "text"], ["amount", "U", "currency"],
+    ["qualify", "V", "text"], ["notes", "X", "text"],
+  ];
+
+  glRowToCells(r, i) {
+    const byCol = {};
+    const put = (col, type, val) => { if (val != null && String(val) !== "") byCol[col] = { col, type, value: val }; };
+    for (const [field, col, type] of this.GL_MAP) put(col, type, r[field]);
+    put("A", "number", i + 1);   // sequence number, 1..N across the whole tab
+    return Object.values(byCol);
+  }
+
+  // "First Last" / "Last, First" -> "LAST,FIRST" for the crew ledger's
+  // Vendor/Employee cell, which carries the whole name with no last/first split.
+  _lastFirst(name) {
+    const s = String(name == null ? "" : name).trim().replace(/\s+/g, " ");
+    if (!s) return "";
+    if (s.includes(",")) return s.split(",").map((x) => x.trim()).filter(Boolean).join(",");
+    const parts = s.split(" ");
+    if (parts.length < 2) return s;
+    return parts[parts.length - 1] + "," + parts.slice(0, -1).join(" ");
+  }
+
+  // One reconciled Payroll Report row -> a GL (PRODCO) ledger row. Same
+  // granularity as the Payroll Report tab: one payroll row in, one ledger row
+  // out, so a person's separate invoices / pay periods / line items each keep
+  // their own row and nothing is summed across them.
+  crewRowToGlProdco(r) {
+    // wages and corporate are mutually exclusive per row (both feed WAGE PAYMENT
+    // on the Payroll Report); whichever is present is this row's wage amount.
+    const amount = r.wages != null && r.wages !== "" ? r.wages : r.corporate;
+    return {
+      check_number: "", po_number: "", ff1: "", ff2: "",   // FF2: GA-resident GL/DL logic comes later
+      invoice_number: r.invoiceNo, invoice_date: r.invoiceDate,
+      vendor_employee: this._lastFirst(r.worker),
+      last_name: "", first_name: "",
+      source_code: "PR", distribution_description: r.jobTitle,
+      home_state: r.resState, episode: "", nights: "",
+      org_cur: "USD", amount, qualify: "", notes: "",
+    };
   }
 
   // ── Residency docs row model -> "Residency - Callsheet" tab columns ─────────
@@ -1935,8 +3188,9 @@ class Component extends DCLogic {
   }
 
   // Split a list into fixed-size chunks (residency/diversity extraction is
-  // chunked at 5 files so each backend call stays under Railway's 30s proxy
-  // timeout).
+  // chunked at 5 files). Chunking is about per-call payload size, steady
+  // progress reporting and blast radius on a failure — NOT a proxy deadline;
+  // Railway allows 15 min per request.
   chunkArray(arr, size) {
     const chunks = [];
     for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
@@ -2044,8 +3298,8 @@ class Component extends DCLogic {
     if (!cf.length) return { crew: [], shootDates: [], issues: [] };
     const url = this.BACKEND_URL + "/extract-call-sheet";
     // Chunked at 5 like the other document endpoints: a whole call-sheet folder
-    // in one multipart POST blows past the proxy timeout once it's more than a
-    // handful of files. Crew and shoot dates accumulate across chunks, deduped.
+    // in one multipart POST is too large a payload and too coarse a failure
+    // unit. Crew and shoot dates accumulate across chunks, deduped.
     const sorted = [...cf].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     const chunks = this.chunkArray(sorted, 5);
     const crew = [], shootDates = [], issues = [];
@@ -2485,16 +3739,21 @@ class Component extends DCLogic {
   UPLOAD_SECTIONS = [
     { title: "Crew", zones: [
       { id: "payroll", label: "Crew Payroll PDFs", accept: [".pdf"], hint: "Multiple files · .pdf" },
-      { id: "crewFreelance", label: "Crew Freelance Invoices", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200 },
-      { id: "crewHours", label: "Crew Hours Letter", accept: [".pdf"], hint: "Multiple files · .pdf" },
-      { id: "residency", label: "Residency PDFs", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "One document per file · up to 200", max: 200 },
-      { id: "diversityForms", label: "Diversity Forms", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "Multiple files · up to 200", max: 200 },
+      { id: "prodReport", label: "Production Report", accept: [".xlsx", ".xls", ".csv"], hint: "Payroll company or accounting export · .xlsx / .csv", gaOnly: true },
+      { id: "timecards", label: "Timecards", accept: [".pdf"], hint: "Multiple files · .pdf · use when there are no invoice PDFs", gaOnly: true },
+      // notGa: these four feed Illinois tabs only (Crew Payroll freelance/hours
+      // rows, Residency - Callsheet, Diversity). GA has no destination for them,
+      // so they are hidden there rather than deleted — the IL wizards still use them.
+      { id: "crewFreelance", label: "Crew Freelance Invoices", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200, notGa: true },
+      { id: "crewHours", label: "Crew Hours Letter", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
+      { id: "residency", label: "Residency PDFs", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "One document per file · up to 200", max: 200, notGa: true },
+      { id: "diversityForms", label: "Diversity Forms", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "Multiple files · up to 200", max: 200, notGa: true },
       { id: "callSheets", label: "Call Sheets", accept: [".pdf"], hint: "One multi-day PDF or several · up to 200", max: 200, notGa: true },
     ]},
     { title: "Talent & Extras", zones: [
       { id: "talentPdfs", label: "Talent Invoice PDFs", accept: [".pdf"], hint: "Multiple files · .pdf · payroll & agent invoices" },
-      { id: "talentFreelance", label: "Talent Freelance Invoices", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200 },
-      { id: "talentPtip", label: "PTIP Report", accept: [".xlsx"], hint: "One raw PTIP export · .xlsx", max: 1 },
+      { id: "talentFreelance", label: "Talent Freelance Invoices", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200, notGa: true },
+      { id: "talentPtip", label: "PTIP Report (Excel)", accept: [".xlsx"], hint: "Multiple files · .xlsx · one per invoice/commercial" },
     ]},
     { title: "Production Company", zones: [
       { id: "prodBillings", label: "Production Company Billings", accept: [".pdf"], hint: "Multiple files · .pdf" },
@@ -2504,19 +3763,22 @@ class Component extends DCLogic {
       { id: "gaAp", label: "AP", accept: [".pdf"], hint: "Vendor & crew invoices · .pdf · up to 200", max: 200, gaOnly: true },
       { id: "gaCallSheet", label: "Call Sheet", accept: [".pdf"], hint: "Crew positions for AP descriptions · .pdf · up to 200", max: 200, gaOnly: true },
       { id: "gaPettyCash", label: "Petty Cash", accept: [".pdf"], hint: "Custodian envelope packets · .pdf · up to 200", max: 200, gaOnly: true },
+      { id: "gaProdCC", label: "ProdCC", accept: [".pdf"], hint: "Crew card / cash reimbursements · .pdf · up to 200", max: 200, gaOnly: true },
     ]},
     { title: "Agency", zones: [
-      { id: "agencyBillings", label: "Agency Billings", accept: [".pdf"], hint: "Multiple files · .pdf" },
-      { id: "agencyHours", label: "Agency Hours Letter", accept: [".pdf"], hint: "Multiple files · .pdf" },
-      { id: "agencySubVendors", label: "Agency Sub Vendors", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200 },
-      { id: "retainerBillings", label: "Retainer Billings", accept: [".pdf"], hint: "Multiple files · .pdf" },
+      { id: "agencyBillings", label: "Agency Billings", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
+      // notGa: no destination tab on the Georgia workbook. Hidden there, not
+      // deleted — the Illinois wizards still write all four.
+      { id: "agencyHours", label: "Agency Hours Letter", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
+      { id: "agencySubVendors", label: "Agency Sub Vendors", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200, notGa: true },
+      { id: "retainerBillings", label: "Retainer Billings", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
     ]},
     { title: "Reports", zones: [
-      { id: "taxIncentiveSummary", label: "Tax Incentive Summary Report", accept: [".pdf"], hint: "Multiple files · .pdf" },
+      { id: "taxIncentiveSummary", label: "Tax Incentive Summary Report", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
     ]},
     { title: "Documents & Financials", zones: [
-      { id: "aicpBid", label: "AICP Bid", accept: [".pdf"], hint: "Multiple files · .pdf" },
-      { id: "poLog", label: "PO Log", accept: [".pdf"], hint: "Multiple files · .pdf" },
+      { id: "aicpBid", label: "AICP Bid", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
+      { id: "poLog", label: "PO Log", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
     ]},
   ];
   get UPLOADS() { return this.UPLOAD_SECTIONS.flatMap((s) => s.zones); }
@@ -2569,6 +3831,7 @@ class Component extends DCLogic {
     project: {},
     uploads: {},
     payrollHints: "",
+    gaSortOption: "name_invoice",
     talentPayrollHints: "",
     talentPayrollCo: "er",
     dragZone: null,
@@ -2579,6 +3842,8 @@ class Component extends DCLogic {
     genWritten: 0,
     genGaAp: 0,
     genGaPetty: 0,
+    genGaProdCC: 0,
+    genGaHotel: 0,
     genFringe: 0,
     genPayroll: 0,
     genFiles: [],
@@ -2591,6 +3856,8 @@ class Component extends DCLogic {
     genSubVendor: 0,
     parserNoticeDismissed: false,
     templateMeta: {},
+    publishedMeta: {},
+    templatePublishing: null,
     templateNotice: null,
   };
 
@@ -2607,6 +3874,7 @@ class Component extends DCLogic {
           project: saved.project || {},
           uploads: saved.uploads || {},
           payrollHints: saved.payrollHints || "",
+          gaSortOption: saved.gaSortOption || "name_invoice",
           talentPayrollHints: saved.talentPayrollHints || "",
           talentPayrollCo: saved.talentPayrollCo || "er",
           generated: !!saved.generated,
@@ -2795,9 +4063,10 @@ class Component extends DCLogic {
     const arr = Array.from(fileList || []);
     const meta = this.UPLOADS.find((u) => u.id === which);
     let max = meta && meta.max;
-    // Teams sends one PTIP .xlsx per commercial ID, so lift the single-file cap
-    // on the PTIP zone when The Team Companies is the selected payroll company.
-    if (which === "talentPtip" && this.state.talentPayrollCo === "teams") max = null;
+    // Both payroll companies can send more than one PTIP report now — Teams one
+    // per commercial ID, Extreme Reach one per invoice (GA) — so the PTIP zone
+    // has no single-file cap regardless of company.
+    if (which === "talentPtip") max = null;
     this.files[which] = [...(this.files[which] || []), ...arr];
     if (max) this.files[which] = this.files[which].slice(0, max);
     const incoming = arr.map((f) => ({ name: f.name, size: this.fmtSize(f.size) }));
@@ -2836,7 +4105,7 @@ class Component extends DCLogic {
     try { localStorage.removeItem(this.KEY); } catch (e) {}
     this.files = {};
     this._downloaded = false;
-    this.setState({ step: 1, workbookType: null, commSummary: null, project: {}, uploads: {}, payrollHints: "", talentPayrollHints: "", talentPayrollCo: "er", generated: false, confirmRestart: false });
+    this.setState({ step: 1, workbookType: null, commSummary: null, project: {}, uploads: {}, payrollHints: "", gaSortOption: "name_invoice", talentPayrollHints: "", talentPayrollCo: "er", generated: false, confirmRestart: false });
   }
 
   // Captured for use in Step 4 (residency matching) — intentionally NOT written to the workbook.
@@ -2927,8 +4196,9 @@ class Component extends DCLogic {
     return "";
   }
 
-  // POST payroll PDFs to the backend in batches of 15 (Railway ~60s timeout),
-  // concatenating rows / issues / per-file summaries across batches.
+  // POST payroll PDFs to the backend in batches of 15 (payload size + progress
+  // granularity, not a proxy deadline), concatenating rows / issues / per-file
+  // summaries across batches.
   async extractFringe(fileList, hints) {
     const files = Array.from(fileList || []);
     const CHUNK = 15;
@@ -2946,6 +4216,7 @@ class Component extends DCLogic {
       merged.rows.push(...(j.rows || []));
       merged.issues.push(...(j.issues || []));
       merged.files.push(...(j.files || []));
+      this.harvestLoanOuts(j);
     }
     return merged;
   }
@@ -3072,6 +4343,234 @@ class Component extends DCLogic {
     return { rows, issues: issues || [], files: fileSummary || [], count: rows.length };
   }
 
+  // ── GA Payroll Report pipeline ────────────────────────────────────────────
+  // Two sources, one canonical shape (FRINGE_FIELDS): the existing payroll PDFs
+  // (/extract-fringe) and the Production Report spreadsheet
+  // (/extract-ga-production-report). Row order is decided backend-side; we write
+  // the array in the order it arrives — no reordering, no dedupe, one source row
+  // = one output row.
+
+  // POST a single Production Report spreadsheet. Unlike the PDF endpoints this
+  // one takes ONE file per call under the field name "file", so several uploads
+  // are sequential calls whose rows concatenate in filename order.
+  async extractProdReport(fileList) {
+    const files = Array.from(fileList || []);
+    const merged = { rows: [], issues: [], files: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    for (const f of sorted) {
+      if (/\.xls$/i.test(f.name)) {
+        merged.issues.push(f.name + ": legacy .xls isn't supported — re-save as .xlsx or .csv");
+        await this.progressFile(f.name, 1);   // still counts against the step total
+        continue;
+      }
+      await this.progressFile(f.name, 1);
+      const fd = new FormData();
+      fd.append("file", f);
+      const j = await this.postExtract(this.BACKEND_URL + "/extract-ga-production-report", fd);
+      merged.rows.push(...(j.rows || []));
+      merged.issues.push(...(j.issues || []));
+      merged.files.push(...(j.files || []));
+      // Crew loan-outs are often ONLY identifiable here — a payroll company's own
+      // invoice PDF frequently has no loan-out marker at all, while the Production
+      // Report has a real Loan Out Name column.
+      this.harvestLoanOuts(j);
+    }
+    return merged;
+  }
+
+  // POST timecard PDFs (a production's "Payroll Batches"). Same multipart shape
+  // as /extract-fringe — files[] — and the same {rows, issues, files} envelope,
+  // but the rows are their own shape (worker/ssn/weekStart/weekEnd/total/
+  // batchNo/tcId), not FRINGE_FIELDS: they never become output rows on their
+  // own, they only feed the reconciler's timecard match.
+  async extractGaTimecards(fileList) {
+    const files = Array.from(fileList || []);
+    const CHUNK = 15;
+    const merged = { rows: [], issues: [], files: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    for (let i = 0; i < sorted.length; i += CHUNK) {
+      const batch = sorted.slice(i, i + CHUNK);
+      await this.progressFile(batch[batch.length - 1].name, batch.length);
+      const fd = new FormData();
+      batch.forEach((f) => fd.append("files", f));
+      const j = await this.postExtract(this.BACKEND_URL + "/extract-ga-timecards", fd);
+      merged.rows.push(...(j.rows || []));
+      merged.issues.push(...(j.issues || []));
+      merged.files.push(...(j.files || []));
+    }
+    return merged;
+  }
+
+  // Row-layout options for the Payroll Report. Each needs a source to be
+  // meaningful, so a choice whose source wasn't uploaded silently falls back
+  // rather than erroring — the run is never blocked by the selector.
+  GA_SORT_OPTIONS = [
+    { id: "name_invoice", label: "Name, Invoice Number", needs: null },
+    { id: "invoice_pdf_layout", label: "Invoice Number, Invoice Layout", needs: "pdf" },
+    { id: "production_report_layout", label: "Production Report Layout", needs: "report" },
+  ];
+
+  resolveGaSort() {
+    const want = this.state.gaSortOption || "name_invoice";
+    const has = { pdf: (this.files.payroll || []).length > 0, report: (this.files.prodReport || []).length > 0 };
+    const opt = this.GA_SORT_OPTIONS.find((o) => o.id === want);
+    if (opt && (!opt.needs || has[opt.needs])) return want;
+    if (want === "production_report_layout" && has.pdf) return "invoice_pdf_layout";
+    if (want === "invoice_pdf_layout" && has.report) return "production_report_layout";
+    return "name_invoice";
+  }
+
+  // POST /reconcile-ga-payroll — no new uploads, just the rows both extractors
+  // already returned. Returns null (not throws) on any failure so a reconciler
+  // outage degrades to the un-matched concatenation instead of killing the run.
+  async reconcileGaPayroll(pdfRows, reportRows, timecardRows) {
+    if (!pdfRows.length && !reportRows.length) return null;
+    try {
+      const res = await fetch(this.BACKEND_URL + "/reconcile-ga-payroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Secret": this.BACKEND_SECRET },
+        body: JSON.stringify({
+          pdf_rows: pdfRows, production_report_rows: reportRows,
+          timecard_rows: timecardRows || [], sort_option: this.resolveGaSort(),
+        }),
+      });
+      if (!res.ok) return null;
+      const j = await res.json();
+      // Crew Payroll Roster entries come from HERE, not from an extractor: the
+      // Y/N flag depends on whether the payment matched the Production Report,
+      // which is only known after reconciliation.
+      this.harvestLoanOuts(j);
+      return Array.isArray(j && j.rows) ? { rows: j.rows, issues: j.issues || [] } : null;
+    } catch (e) { return null; }
+  }
+
+  // Map one canonical fringe row -> cells for the GA Payroll Report tab.
+  // Deduped by column so hand/platFee can't both claim Y.
+  gaPayrollToCells(r) {
+    const byCol = {};
+    const put = (col, type, val) => { if (val != null && String(val) !== "") byCol[col] = { col, type, value: val }; };
+    for (const [field, col, type] of this.GA_PAYROLL_MAP) put(col, type, r[field]);
+    // AICP code (AS) is the reconciler's per-row classification, 1-25 or null.
+    // Null is an expected degraded outcome (classification call failed) — AS then
+    // stays genuinely blank, which makes AT's VLOOKUP return "" and drops that row
+    // out of the category SUMIFs below the table. Never substitute a default.
+    const aicp = Number(r.aicpCode);
+    if (Number.isFinite(aicp) && aicp >= 1 && aicp <= 25) put("AS", "number", aicp);
+    // B/C source flags. The reconciler sets them per person; when it is
+    // unavailable we fall back to `_src`, stamped on each row at extraction.
+    const onPR = r.onProductionReport ?? r.on_production_report ?? (r._src === "report");
+    const onPdf = r.onInvoicePdf ?? r.on_invoice_pdf ?? (r._src === "pdf");
+    put("B", "text", onPR ? "YES" : "NO");
+    put("C", "text", onPdf ? "YES" : "NO");
+    // AO Timecard — set only when timecards were actually reconciled. Left blank
+    // (not "NO") when hasTimecard is absent, since with no timecard source a "NO"
+    // would read as "this person has no timecard" rather than "we didn't look".
+    if (r.hasTimecard !== undefined && r.hasTimecard !== null)
+      put("AO", "text", r.hasTimecard ? "YES" : "NO");
+    // AF Automation Total — the PDF-parsed person's own stated total, used only
+    // as a cross-check against AB (AG = AB-AF). Never a source for the money
+    // columns; those come from the Production Report when both sides matched.
+    put("AF", "currency", r.automationTotal ?? r.automation_total ?? r.pdfTotal ?? r.pdf_total);
+    // First / Last W/E from the extracted work-date range.
+    const wd = String(r.workDates || "").trim();
+    if (wd) {
+      const parts = wd.split(/\s*(?:-|–|to|through)\s*/i).filter(Boolean);
+      put("AJ", "text", parts[0] || wd);
+      put("AK", "text", parts.length > 1 ? parts[parts.length - 1] : (parts[0] || wd));
+    }
+    put("AM", "text", (r.loanOut === true || /loan/i.test(r.type || "")) ? "YES" : "NO");
+    const entity = r.payrollCompany === "caps" ? "CAPS"
+      : r.payrollCompany === "wrapbook" ? "Wrapbook"
+      : (r.payrollCompany || "");
+    put("BC", "text", entity);
+    return Object.values(byCol);
+  }
+
+  // Collect both sources into one ordered row list for the Payroll Report tab.
+  // Production Report rows come first when present (more authoritative order),
+  // then payroll-PDF rows.
+  async parseGaPayrollRows() {
+    const pdfs = this.files.payroll || [];
+    const reports = this.files.prodReport || [];
+    const timecards = this.files.timecards || [];
+    if (!pdfs.length && !reports.length && !timecards.length)
+      return { rows: [], issues: [], files: [], count: 0, overflow: 0 };
+    const issues = [], fileSummary = [];
+    let reportRows = [], pdfRows = [], timecardRows = [];
+    if (reports.length) {
+      const rep = await this.extractProdReport(reports);
+      reportRows = (rep.rows || []).map((r) => ({ ...r, _src: "report" }));
+      issues.push(...(rep.issues || []));
+      fileSummary.push(...(rep.files || []));
+    }
+    if (pdfs.length) {
+      const fr = await this.extractFringe(pdfs, this.state.payrollHints);
+      pdfRows = (fr.rows || []).map((r) => ({ ...r, _src: "pdf" }));
+      issues.push(...(fr.issues || []));
+      fileSummary.push(...(fr.files || []));
+    }
+    // Timecards are a supporting source only — they never produce output rows,
+    // they just let the reconciler set hasTimecard / timecardTotal on the rows
+    // the other two sources produced.
+    if (timecards.length) {
+      const tc = await this.extractGaTimecards(timecards);
+      timecardRows = tc.rows || [];
+      issues.push(...(tc.issues || []));
+      fileSummary.push(...(tc.files || []));
+    }
+    // Reconcile the sources into one flagged, sorted list. Production Report
+    // wins on money; the PDF's own total only ever feeds AF. If the endpoint is
+    // unavailable the run still completes on the concatenated rows — flags then
+    // come from `_src` and nobody is matched across sources.
+    let raw = null;
+    // Timecards are a supporting source: they annotate rows the other two
+    // sources produced, so with neither of those present there is nothing to
+    // reconcile and nothing to write. Say exactly that instead of running the
+    // outage path, which would blame the reconciler for a call never made.
+    if (!pdfRows.length && !reportRows.length) {
+      issues.push(
+        "Timecards were uploaded, but no Crew Payroll PDFs or Production Report — timecards only add " +
+        "to crew rows those sources produce, so there was nothing to attach them to and the Payroll " +
+        "Report tab was left empty.");
+      return { rows: [], issues, files: fileSummary, count: 0, overflow: 0 };
+    }
+    const rec = await this.reconcileGaPayroll(pdfRows, reportRows, timecardRows);
+    if (rec) { raw = rec.rows || []; issues.push(...(rec.issues || [])); }
+    if (!raw) {
+      raw = reportRows.concat(pdfRows);
+      // The reconciler is our only source of AICP codes, so losing it means the
+      // AICP Code column is blank for EVERY row and the category totals below the
+      // table read zero. Always surface that, source count notwithstanding.
+      issues.push(
+        "Could not reach the payroll reconciler, so no AICP codes were assigned — the AICP Code " +
+        "column is blank on every crew row and the AICP category totals will read zero. " +
+        "Fill those in by hand before submitting.");
+      if (reportRows.length && pdfRows.length) issues.push(
+        "The Production Report was also not matched against the payroll PDFs, so both were written " +
+        "as-is. Anyone appearing in both sources now has two rows — check for duplicates before filing.");
+      if (timecardRows.length) issues.push(
+        "Timecards were uploaded but could not be matched, so the Timecard column is blank on every " +
+        "crew row — it does not mean those people have no timecard.");
+    }
+    // The tab holds exactly 571 pre-built rows. Writing past 574 would land on
+    // the Subtotal row, so overflow is refused loudly instead of silently
+    // truncating or corrupting the footer.
+    const CAP = this.GA_PAYROLL_LAST_ROW - this.GA_PAYROLL_FIRST_ROW + 1;
+    let overflow = 0;
+    if (raw.length > CAP) {
+      overflow = raw.length - CAP;
+      issues.push("Payroll Report holds " + CAP + " rows; " + raw.length +
+        " people were extracted. The last " + overflow + " were not written — split this into two runs.");
+      raw = raw.slice(0, CAP);
+    }
+    // GL (PRODCO) gets one crew ledger row per Payroll Report row. Built here,
+    // from the RECONCILED set, because that set only exists client-side — emitting
+    // it from either raw source would double-count almost the whole crew.
+    (this._glProdcoRows = this._glProdcoRows || []).push(...raw.map((r) => this.crewRowToGlProdco(r)));
+    const rows = raw.map((r) => this.gaPayrollToCells(r));
+    return { rows, issues, files: fileSummary, count: rows.length, overflow };
+  }
+
   // ══ Talent & Extras pipeline (mirrors the crew payroll pipeline) ══════════
   // Backend endpoints are being built; each talent extractor degrades gracefully
   // to the issues list (surfaced on the success screen) rather than aborting the
@@ -3120,16 +4619,20 @@ class Component extends DCLogic {
   // the whole set must go together (no batching). Returns { rows, ptip_excel_b64,
   // summary }.
   async extractTalent(pdfFiles, ptipFiles) {
-    const company = this.state.talentPayrollCo === "teams" ? "teams" : "er";
+    const company = this.effectiveTalentCo();
     const fd = new FormData();
     Array.from(pdfFiles || []).forEach((f) => fd.append("pdf_files", f));
     const ptips = Array.from(ptipFiles || []).filter(Boolean);
-    if (company === "teams") {
-      // Teams: one PTIP .xlsx per commercial ID, all sent together.
+    if (company !== "er") {
+      // Teams: one PTIP .xlsx per commercial ID. Highland: one or more Payroll
+      // Reports. Either way, all files sent together as ptip_files.
       ptips.forEach((f) => fd.append("ptip_files", f));
     } else if (ptips[0]) {
-      // Extreme Reach: single organized PTIP export (existing behavior).
-      fd.append("ptip_file", ptips[0]);
+      // Extreme Reach: GA issues one PTIP report per invoice, so ER is multi-file
+      // too. Sent as ptip_files (the Teams field name); ptip_file is also set on a
+      // single-file upload so an older backend that only reads ptip_file still works.
+      ptips.forEach((f) => fd.append("ptip_files", f));
+      if (ptips.length === 1) fd.append("ptip_file", ptips[0]);
     }
     fd.append("payroll_company", company);
     fd.append("project_title", this.state.project.projectTitle || "");
@@ -3138,8 +4641,11 @@ class Component extends DCLogic {
     const inFlight = [...Array.from(pdfFiles || []), ...ptips];
     if (inFlight.length) await this.progressFile(inFlight[inFlight.length - 1].name, inFlight.length);
     // Talent can't be chunked — the PTIP report has to be reconciled against the
-    // whole invoice set in one pass — so it gets the timeout wrapper only.
-    return await this.postExtract(this.BACKEND_URL + "/extract-talent", fd);
+    // whole invoice set in one pass — so it gets the timeout wrapper only. This
+    // is the endpoint most likely to need the full 360s budget.
+    const j = await this.postExtract(this.BACKEND_URL + "/extract-talent", fd);
+    this.harvestLoanOuts(j);
+    return j;
   }
 
   // Run the talent automation for this binder. Returns assembled rows plus the
@@ -3279,7 +4785,7 @@ class Component extends DCLogic {
     // workbook has its own set; don't touch sheet names from the other workbook).
     const wbCommSheets = (this.COMMS_BY_WB[this.state.workbookType] || []).map((c) => this.SHEET_BY_COMM[c.id]);
     const deleteSheets = wbCommSheets.filter((n) => n && n !== sheetName);
-    const eng = await import("./workbook-engine.js");
+    const eng = await this.loadEngine();
 
     // Parse payroll PDFs -> Crew Payroll fringe rows, and Crew Freelance
     // invoices -> freelance rows (both via the backend). Insert as one block,
@@ -3375,13 +4881,13 @@ class Component extends DCLogic {
     this._talentIssues = [...(talent.issues || []), ...(talentFreelance.issues || [])];
     this._talentSummary = talent.summary || null;
     this._ptipB64 = talent.ptipB64 || null;
-    this._ptipCompany = this.state.talentPayrollCo;   // company used for this run (drives PTIP labels)
+    this._ptipCompany = this.effectiveTalentCo();   // company used for this run (drives report labels)
     // Talent run entry for the summary email. The main /extract-talent call does
     // not return a per-file breakdown, so we list each uploaded talent PDF with
     // the run's payroll company; talent-freelance carries its own exact per-file
     // summaries ({filename, company, rows, issues}). Per-PDF row counts for the
     // main talent extraction aren't attributable client-side -> rows: null.
-    const talentCoLabel = this._ptipCompany === "teams" ? "Teams" : "Extreme Reach";
+    const talentCoLabel = this.talentCo(this._ptipCompany).label;
     const talentFiles = (this.files.talentPdfs || []).map((f) => ({ filename: f.name, company: talentCoLabel, rows: null, issues: [] }));
     talentFiles.push(...(talentFreelance.files || []));
     this._runData.talent = { files: talentFiles, issues: [...(talent.issues || []), ...(talentFreelance.issues || [])] };
@@ -3733,7 +5239,7 @@ class Component extends DCLogic {
         issues: Array.isArray(f.issues) ? f.issues : [],
       });
       const runs = [];
-      for (const key of ["fringe", "freelance", "hours_letters", "talent", "billings", "agency_subvendors", "prodco_subvendors", "petty_cash", "ga_ap", "ga_petty_cash", "agency_hours", "retainer_billings", "residency"]) {
+      for (const key of ["fringe", "freelance", "hours_letters", "talent", "billings", "agency_subvendors", "prodco_subvendors", "petty_cash", "ga_ap", "ga_petty_cash", "ga_prodcc", "agency_hours", "retainer_billings", "residency"]) {
         const sec = rd[key];
         if (!sec || !(sec.files || []).length) continue;   // skip sections with no files
         runs.push({ endpoint: key, files: sec.files.map(mapFile), issues: sec.issues || [] });
@@ -3778,7 +5284,7 @@ class Component extends DCLogic {
       this.unhookConsole();
       this.sendRunSummary();   // fire-and-forget summary email — never blocks the download
       await new Promise((res) => setTimeout(res, 450));
-      this.setState({ generating: false, generated: true, genBilling: this._billingCount || 0, genSubVendor: this._subVendorCount || 0, genAgencyHours: this._agencyHoursCount || 0, genRetainer: this._retainerCount || 0, genResidency: this._residencyCount || 0, genGaAp: this._gaApCount || 0, genGaPetty: this._gaPettyCount || 0, genWritten: r.fields != null ? r.fields : r.written, genFringe: this._fringeCount || 0, genPayroll: this._payrollCount || 0, genFiles: this._fringeFiles || [], genIssues: this._fringeIssues || [], genTalent: this._talentCount || 0, genTalentFreelance: this._talentFreelanceCount || 0, genTalentIssues: this._talentIssues || [], genTalentSummary: this._talentSummary || null, genTalentPtip: !!this._ptipB64 });
+      this.setState({ generating: false, generated: true, genBilling: this._billingCount || 0, genSubVendor: this._subVendorCount || 0, genAgencyHours: this._agencyHoursCount || 0, genRetainer: this._retainerCount || 0, genResidency: this._residencyCount || 0, genGaAp: this._gaApCount || 0, genGaPetty: this._gaPettyCount || 0, genGaProdCC: this._gaProdCCCount || 0, genGaHotel: this._gaHotelCount || 0, genWritten: r.fields != null ? r.fields : r.written, genFringe: this._fringeCount || 0, genPayroll: this._payrollCount || 0, genFiles: this._fringeFiles || [], genIssues: this._fringeIssues || [], genTalent: this._talentCount || 0, genTalentFreelance: this._talentFreelanceCount || 0, genTalentIssues: this._talentIssues || [], genTalentSummary: this._talentSummary || null, genTalentPtip: !!this._ptipB64 });
     } catch (e) {
       this.logRunDataDump();
       this.runLog("error", "── Run FAILED — " + (e && e.message ? e.message : String(e)) + " ──");
@@ -3799,7 +5305,7 @@ class Component extends DCLogic {
       const url = URL.createObjectURL(blob);
       const title = (this.state.project.projectTitle || "Production Binder").trim().replace(/[^\w \-]+/g, "").replace(/\s+/g, " ").trim();
       const a = document.createElement("a");
-      const ptipLabel = this.state.talentPayrollCo === "teams" ? "Sorted PTIP" : "Organized PTIP";
+      const ptipLabel = this.talentCo(this.effectiveTalentCo()).download;
       a.href = url; a.download = title + " - " + ptipLabel + ".xlsx";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
@@ -4024,12 +5530,16 @@ class Component extends DCLogic {
     });
 
     // step 3
+    const hotelRates = this.hotelRates();
     const sections = this.SECTIONS.map((sec) => ({
       title: sec.title,
       fields: (sec.dynamic ? this.companyFields() : sec.fields).map((f) => ({
         label: f.label,
         placeholder: "",
-        value: f.type === "int" ? (st.project[f.key] ?? f.intDefault) : (st.project[f.key] || ""),
+        note: f.note || "",
+        value: f.type === "int" ? (st.project[f.key] ?? f.intDefault) : (st.project[f.key] ?? f.default ?? ""),
+        isDerived: f.type === "derived",
+        derivedText: f.type === "derived" ? "$" + (f.key === "hotelStateTax" ? hotelRates.stateTax : hotelRates.occTax).toFixed(2) : "",
         isText: f.type === "text",
         isDate: f.type === "date",
         isCurrency: f.type === "currency",
@@ -4059,14 +5569,16 @@ class Component extends DCLogic {
         ((has || dragging) ? "background:rgba(0,204,184,0.20);" : "background:#F1F2F2;");
       const accept = u.accept;
       const filterAccepted = (list) => Array.from(list || []).filter((f) => accept.some((ext) => f.name.toLowerCase().endsWith(ext)));
-      // Talent PTIP zone adapts to the selected payroll company: Extreme Reach
-      // takes one organized PTIP; Teams takes one .xlsx per commercial (multiple).
+      // The reconciliation-file zone adapts to the selected payroll company. All
+      // three are multi-file: Teams one .xlsx per commercial, Extreme Reach one per
+      // invoice, Highland one or more Payroll Reports. Either way every file goes
+      // in one request, so the copy is company-specific but the plumbing isn't.
       let label = u.label, hint = u.hint, help = "";
       if (which === "talentPtip") {
-        const isTeams = st.talentPayrollCo === "teams";
-        label = isTeams ? "PTIP Reports from Teams" : "PTIP Report (Excel)";
-        hint = isTeams ? "Multiple .xlsx \u00b7 one file per commercial" : "One raw PTIP export \u00b7 .xlsx";
-        help = isTeams ? "Upload all PTIP files together \u2014 Teams sends one file per commercial." : "";
+        const co = this.talentCo(this.effectiveTalentCo());
+        label = "PTIP Report (Excel)";
+        hint = "Multiple .xlsx \u00b7 " + co.perFile;
+        help = "Upload all PTIP files together \u2014 " + co.sends;
       }
       return {
         id: which,
@@ -4088,11 +5600,12 @@ class Component extends DCLogic {
         onDrop: (e) => { e.preventDefault(); this.setState({ dragZone: null }); this.addFiles(which, filterAccepted(e.dataTransfer.files)); },
       };
     };
-    const talentCoChoices = [
-      { id: "er", label: "Extreme Reach" },
-      { id: "teams", label: "The Team Companies" },
-    ].map((c) => {
-      const active = st.talentPayrollCo === c.id || (c.id === "er" && st.talentPayrollCo !== "teams");
+    // Highland is GA-only until its IL mapping exists.
+    const effCo = this.effectiveTalentCo();
+    const talentCoChoices = this.TALENT_COMPANIES
+      .filter((c) => !c.gaOnly || st.workbookType === "ga")
+      .map((c) => {
+      const active = effCo === c.id;
       return {
         id: c.id,
         label: c.label,
@@ -4103,15 +5616,39 @@ class Component extends DCLogic {
     });
     const isOos = st.workbookType === "il_oos";
     const isGa = st.workbookType === "ga";
+    // GA Payroll Report row order. Options whose source isn't uploaded stay
+    // pickable but read as unavailable — the run falls back silently rather
+    // than blocking, so the selector never becomes a gate.
+    const gaSel = st.gaSortOption || "name_invoice";
+    const gaHas = { pdf: (this.files.payroll || []).length > 0, report: (this.files.prodReport || []).length > 0 };
+    const gaSortChoices = this.GA_SORT_OPTIONS.map((o) => {
+      const active = gaSel === o.id;
+      const ready = !o.needs || gaHas[o.needs];
+      return {
+        id: o.id,
+        label: o.label,
+        style: "flex:1;text-align:center;cursor:pointer;font-size:13.5px;font-weight:600;padding:10px 12px;border-radius:7px;line-height:1.25;transition:background 120ms,color 120ms;" +
+          (active ? "background:#0A0422;color:#fff;" : ready ? "background:transparent;color:#5A5770;" : "background:transparent;color:#B4B2C0;"),
+        onSelect: () => { if (this.state.gaSortOption !== o.id) this.setState({ gaSortOption: o.id }); },
+      };
+    });
+    const gaSelOpt = this.GA_SORT_OPTIONS.find((o) => o.id === gaSel);
+    const gaSortHelp = (gaSelOpt && gaSelOpt.needs && !gaHas[gaSelOpt.needs])
+      ? "That layout needs " + (gaSelOpt.needs === "pdf" ? "Crew Payroll PDFs" : "a Production Report") +
+        ", which hasn't been uploaded \u2014 rows will fall back to the next available order."
+      : "Sets the order people are written into the Payroll Report tab.";
     const uploadSections = this.UPLOAD_SECTIONS.map((sec) => ({
       title: sec.title,
       showPayrollSelector: sec.title === "Talent & Extras",
       payrollChoices: talentCoChoices,
+      showSortSelector: isGa && sec.title === "Crew",
+      sortChoices: gaSortChoices,
+      sortHelp: gaSortHelp,
       showHints: sec.title === "Crew",
       hintsValue: st.payrollHints || "",
       onHintsChange: (e) => this.setState({ payrollHints: e.target.value }),
       zones: sec.zones.filter((u) => (!u.oosOnly || isOos) && (!u.gaOnly || isGa) && (!u.notGa || !isGa)).map((u) => makeZone(u)),
-    }));
+    })).filter((sec) => sec.zones.length > 0);   // a section whose every zone is hidden drops out entirely
 
     // step 5
     const wb = this.WORKBOOKS.find((w) => w.id === st.workbookType);
@@ -4120,9 +5657,16 @@ class Component extends DCLogic {
     const uploadCounts = this.UPLOADS.map((u) => (st.uploads[u.id] || []).length);
     const totalDocs = uploadCounts.reduce((a, b) => a + b, 0);
     const tplMeta = st.templateMeta && st.templateMeta[st.workbookType];
+    const tplPub = st.publishedMeta && st.publishedMeta[st.workbookType];
+    const tplInUse = tplMeta
+      ? "Uploaded · " + (tplMeta.filename || "custom.xlsx") + " (this browser)"
+      : tplPub
+        ? "Published" + (tplPub.filename ? " · " + tplPub.filename : " · filename unavailable") +
+          (tplPub.publishedAt ? " · " + this.fmtDate(tplPub.publishedAt) : "")
+        : "Built-in default";
     const reviewData = [
       ["Workbook Type", wb ? wb.label : dash],
-      ["Template In Use", tplMeta ? ("Uploaded · " + (tplMeta.filename || "custom.xlsx")) : "Built-in default"],
+      ["Template In Use", tplInUse],
       ["Comm Summary", cs ? cs.label : dash],
       ["Project Title", st.project.projectTitle || dash],
       ["Production Company", st.project.prodCompany || dash],
@@ -4130,7 +5674,7 @@ class Component extends DCLogic {
       ["Client", st.project.client || dash],
       ["Crew Payroll Files", String((st.uploads.payroll || []).length)],
       ["Talent Invoice PDFs", String((st.uploads.talentPdfs || []).length)],
-      ["PTIP Report", (st.uploads.talentPtip || []).length ? "Attached" : "—"],
+      ["PTIP Reports", (st.uploads.talentPtip || []).length ? String((st.uploads.talentPtip || []).length) : "—"],
       ["Documents Uploaded", String(totalDocs)],
     ];
     const reviewItems = reviewData.map(([label, value], i) => ({
@@ -4183,21 +5727,35 @@ class Component extends DCLogic {
 
     // template manager (Wizard 04)
     const tMeta = st.templateMeta || {};
+    const tPub = st.publishedMeta || {};
     const templateItems = this.TEMPLATES.map((t) => {
       const meta = tMeta[t.id];
+      const pub = tPub[t.id];
       const custom = !!meta;
+      const badge = custom ? "Yours" : pub ? "Published" : "Default";
+      const accent = custom || pub;
       const badgeStyle = "font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;white-space:nowrap;" +
-        (custom ? "background:rgba(0,204,184,0.20);color:#00A694;" : "background:#F1F2F2;color:#8E8CA0;");
+        (accent ? "background:rgba(0,204,184,0.20);color:#00A694;" : "background:#F1F2F2;color:#8E8CA0;");
       const detail = custom
-        ? (meta.filename || "custom.xlsx") + " · " + this.fmtSize(meta.size || 0) + " · updated " + this.fmtDate(meta.updatedAt)
-        : (t.wired ? "Built-in default · used by the Production Binder Wizard" : "Built-in default · no active wizard yet");
+        ? "In your builds: " + (meta.filename || "custom.xlsx") + " · " + this.fmtSize(meta.size || 0) + " · updated " + this.fmtDate(meta.updatedAt)
+        : pub
+          ? "In everyone's builds: " + (pub.filename || "published template (filename unavailable)") +
+            (pub.publishedAt ? " · published " + this.fmtDate(pub.publishedAt) : "")
+          : (t.wired ? "Built-in default · used by the Production Binder Wizard" : "Built-in default · no active wizard yet");
+      const detail2 = custom && pub
+        ? "Published for everyone else: " + (pub.filename || "a published template")
+        : custom ? "Nothing published — everyone else gets the built-in default." : "";
       return {
-        name: t.name, badge: custom ? "Updated" : "Default", badgeStyle, detail,
-        iconBg: custom ? "rgba(0,204,184,0.14)" : "#F1F2F2",
-        iconColor: custom ? "#00A694" : "#8E8CA0",
+        name: t.name, badge, badgeStyle, detail, detail2, showDetail2: !!detail2,
+        iconBg: accent ? "rgba(0,204,184,0.14)" : "#F1F2F2",
+        iconColor: accent ? "#00A694" : "#8E8CA0",
         showRevert: custom,
+        showUnpublish: !!pub,
+        publishLabel: st.templatePublishing === t.id ? "Publishing…" : pub ? "Republish" : "Publish",
         onReplace: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; this.replaceTemplate(t.id, f); },
+        onPublish: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; this.publishTemplate(t.id, f); },
         onRevert: () => this.revertTemplate(t.id),
+        onUnpublish: () => this.unpublishTemplate(t.id),
       };
     });
     const tn = st.templateNotice;
@@ -4272,8 +5830,8 @@ class Component extends DCLogic {
       showTalentSummary: talentStatRows.length > 0,
       talentStatRows,
       showTalentPtip: !!st.genTalentPtip,
-      ptipReadyTitle: (this._ptipCompany === "teams" ? "Sorted PTIP" : "Organized PTIP") + " is ready",
-      ptipButtonLabel: this._ptipCompany === "teams" ? "Download Sorted PTIP" : "Download Organized PTIP",
+      ptipReadyTitle: this.talentCo(this._ptipCompany).download + " is ready",
+      ptipButtonLabel: "Download " + this.talentCo(this._ptipCompany).download,
       onDownloadPtip: () => this.downloadPtip(),
       showTalentIssues: talentIssuesRaw.length > 0,
       talentIssues: talentIssuesRaw,

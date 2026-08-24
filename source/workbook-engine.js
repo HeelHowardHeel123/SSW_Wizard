@@ -245,6 +245,22 @@ function buildDataRow(R, cells, styleMap) {
   return `<row r="${R}" spans="1:70" ht="15.6">${parts.map((p) => p.xml).join("")}</row>`;
 }
 
+// Shift <mergeCells> row refs for an insertion of N rows at row `at`.
+// mergeCell refs are absolute strings, so without this a merged range that sits
+// BELOW the insertion point (chrome above a roll-up block, a merged label) stays
+// on its old row number and lands on top of freshly written data rows — the cells
+// swallowed by the merge then read as empty in Excel even though we wrote values
+// into them. A range that straddles `at` is stretched rather than moved.
+function shiftMergeCells(sheetXml, at, N) {
+  if (!N) return sheetXml;
+  return sheetXml.replace(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\s*\/>/g,
+    (m, c1, r1, c2, r2) => {
+      let s = +r1, e = +r2;
+      if (s >= at) { s += N; e += N; } else if (e >= at) { e += N; } else return m;
+      return `<mergeCell ref="${c1}${s}:${c2}${e}"/>`;
+    });
+}
+
 // Insert N data rows starting at row `at`, shifting all existing rows >= at
 // down by N. New rows inherit cell styles from the template row currently at
 // `at` (so number formats look right). Returns the modified sheet XML.
@@ -272,9 +288,65 @@ function insertRowsIntoSheet(sheetXml, at, rows) {
   for (let i = 0; i < N; i++) out.push({ r: at + i, xml: buildDataRow(at + i, rows[i], styleMap) });
   out.sort((a, b) => a.r - b.r);
   sheetXml = sheetXml.replace(sd[0], sd[1] + out.map((o) => o.xml).join("") + sd[3]);
+  sheetXml = shiftMergeCells(sheetXml, at, N);
   // extend the sheet dimension's end row
   sheetXml = sheetXml.replace(/(<dimension ref="[A-Z]+\d+:[A-Z]+)(\d+)("\s*\/>)/, (m, a, d, b) => a + (+d + N) + b);
   return sheetXml;
+}
+
+// Clone a contiguous run of rows (srcStart..srcEnd) `count` times and insert the
+// copies starting at row `at`, pushing everything at/below `at` down. Unlike
+// insertRowsIntoSheet — which applies ONE archetype row's style map to N uniform
+// data rows — this copies the source rows' XML verbatim (styles, constants and
+// formulas), so a heterogeneous multi-row block archetype (the Hotel Charges
+// Summary 14-row block) reproduces exactly. Every RELATIVE row reference that
+// points inside the source range is rebased by the clone's offset; absolute row
+// refs ($4 in $H$4, i.e. the GSA rate header) are left alone, as are refs to
+// rows outside the block. Cached <v> values are dropped from cloned formula
+// cells so Excel recalculates them. Requires `at` > srcEnd.
+function cloneRowBlock(sheetXml, srcStart, srcEnd, at, count) {
+  const len = srcEnd - srcStart + 1;
+  const N = len * count;
+  if (count <= 0 || len <= 0) return sheetXml;
+  const src = [];
+  for (let r = srcStart; r <= srcEnd; r++) {
+    const m = sheetXml.match(new RegExp(`<row r="${r}"[\\s\\S]*?</row>`));
+    src.push(m ? m[0] : `<row r="${r}" spans="1:70" ht="15.6"></row>`);
+  }
+  sheetXml = bumpFormulaRefs(sheetXml, at, N);
+  const sd = sheetXml.match(/(<sheetData[^>]*>)([\s\S]*?)(<\/sheetData>)/);
+  const out = [];
+  for (const rs of (sd[2].match(/<row\b[\s\S]*?<\/row>/g) || [])) {
+    const oldR = +rs.match(/<row r="(\d+)"/)[1];
+    if (oldR >= at) {
+      const nr = oldR + N;
+      out.push({ r: nr, xml: rs.replace(/\br="([A-Z]*)\d+"/g, (m, c) => `r="${c}${nr}"`) });
+    } else out.push({ r: oldR, xml: rs });
+  }
+  for (let i = 0; i < count; i++) {
+    const delta = at + i * len - srcStart;
+    for (let k = 0; k < len; k++) {
+      const nr = at + i * len + k;
+      let xml = src[k].replace(/\br="([A-Z]*)\d+"/g, (m, c) => `r="${c}${nr}"`);
+      xml = xml.replace(/<f\b[^>]*>[\s\S]*?<\/f>/g, (seg) => {
+        const held = [];
+        const masked = seg.replace(QUALIFIED_REF, (ref) => { held.push(ref); return "\u0000" + (held.length - 1) + "\u0000"; });
+        const moved = masked.replace(/(?<![!A-Za-z0-9])(\$?[A-Z]{1,3})(\$?)(\d+)/g, (m, c, abs, d) => {
+          const n = +d;
+          return (!abs && n >= srcStart && n <= srcEnd) ? c + (n + delta) : m;
+        });
+        return moved.replace(/\u0000(\d+)\u0000/g, (m, j) => held[+j]);
+      });
+      // drop stale cached results on cloned formula cells
+      xml = xml.replace(/(<c\b[^>]*>)([\s\S]*?)(<\/c>)/g, (full, open, inner, close) =>
+        /<f\b/.test(inner) ? open + inner.replace(/<v>[\s\S]*?<\/v>/g, "") + close : full);
+      out.push({ r: nr, xml });
+    }
+  }
+  out.sort((a, b) => a.r - b.r);
+  sheetXml = sheetXml.replace(sd[0], sd[1] + out.map((o) => o.xml).join("") + sd[3]);
+  sheetXml = shiftMergeCells(sheetXml, at, N);
+  return sheetXml.replace(/(<dimension ref="[A-Z]+\d+:[A-Z]+)(\d+)("\s*\/>)/, (m, a, d, b) => a + (+d + N) + b);
 }
 
 // Style attr (s="..") of a cell, or "" if none.
@@ -322,6 +394,122 @@ function insertPartialRows(sheetXml, at, N, maxCol) {
   sheetXml = sheetXml.replace(sd[0], sd[1] + body + sd[3]);
   sheetXml = sheetXml.replace(/(<dimension ref="[A-Z]+\d+:[A-Z]+)(\d+)("\s*\/>)/, (mm, a, d, b) => a + (+d + N) + b);
   return sheetXml;
+}
+
+// Write data into rows that ALREADY EXIST in the template (no insertion, no
+// cloning) — the GA "Payroll Report" pattern: 571 pre-built rows, each carrying
+// shared formulas and pre-filled defaults.
+//
+// Two rules make this safe:
+//  - skipCols are never touched. Z/AA/AB/AC hold SHARED formulas whose master
+//    <f> lives on the first row of each si group (Z4:Z13, Z14:Z68, ...), so
+//    blanking one master silently kills the formula for up to 64 rows below it.
+//  - blankCols are cleared (value dropped, style kept) on every row we write,
+//    so leftover example content on the template's first rows can't survive
+//    under a real person's data.
+// Scoped per row: each row is located once and patched as a substring, so cost
+// is O(rows) scans of the sheet rather than O(cells).
+//
+// The row matcher is LAZY with an explicit self-closing branch: a greedy
+// [^>]* would eat the "/" of an empty <row r="N"/> and run the match on into
+// the next row, swallowing it whole — that row would then never be written and
+// nothing would report it.
+function writeRowsIntoSheet(sheetXml, job) {
+  const { startRow, rows, blankCols = [], skipCols = [], clearThroughRow = 0 } = job;
+  if (!rows || !rows.length) return sheetXml;
+  const skip = new Set(skipCols);
+  const byRow = {};
+  rows.forEach((cells, i) => { byRow[startRow + i] = cells; });
+  // Rows past our data that still carry the template's own example content.
+  // The blank pass alone only covers rows we write, so a run with 1 person left
+  // rows 5-15's example Qualify / FF1 / FF2 / Payment-Entity values sitting
+  // directly under the real data — and AS is a live SUMIFS criteria range.
+  const clearOnly = new Set();
+  for (let R = startRow + rows.length; R <= clearThroughRow; R++) clearOnly.add(R);
+  const blankRow = (rx, R) => {
+    let out = rx;
+    for (const col of blankCols) {
+      if (skip.has(col)) continue;
+      out = out.replace(new RegExp(`<c r="${col}${R}"([^>]*?)(?:/>|>[\\s\\S]*?</c>)`), (full, attrs) => {
+        const s = (attrs.match(/\s+s="\d+"/) || [""])[0];
+        return `<c r="${col}${R}"${s}/>`;
+      });
+    }
+    return out;
+  };
+  return sheetXml.replace(/<row r="(\d+)"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g, (rx, rs) => {
+    const R = +rs;
+    if (clearOnly.has(R)) return blankRow(rx, R);
+    const cells = byRow[R];
+    if (!cells) return rx;
+    let out = blankRow(rx, R);
+    for (const c of cells) {
+      if (skip.has(c.col)) continue;
+      if (c.value == null || String(c.value).trim() === "") continue;
+      out = patchCellInSheet(out, c.col + R, c.value, c.type, null);
+    }
+    return out;
+  });
+}
+
+// ---------- structural preconditions ----------
+// Publishing a template changes the file this code writes into WITHOUT a code
+// deploy, so "the bundled geometry is fixed" stopped being true. Every row-write
+// and clone assumption is checked against the actual sheet before we mutate
+// anything. Both untrapped failure modes are worse than refusing: writing into
+// the wrong cells produces a plausible-looking wrong workbook, and the
+// row-matchers' no-op path produces a workbook that's silently missing people.
+//
+// expect: { headerRow, headerCells:{COL:"text"}, firstRow, lastRow, footerRow,
+//           footerFormulaCols:[COL], formulaCols:[COL], sampleRows:[N] }
+// Returns an array of human-readable problems (empty = good).
+function checkSheetStructure(sheetXml, expect, ss) {
+  const problems = [];
+  const rowXml = (R) => (sheetXml.match(new RegExp(`<row r="${R}"[^>]*?(?:/>|>[\\s\\S]*?</row>)`)) || [])[0] || null;
+  const cellXml = (rx, col, R) =>
+    rx ? ((rx.match(new RegExp(`<c r="${col}${R}"[^>]*?(?:/>|>[\\s\\S]*?</c>)`)) || [])[0] || null) : null;
+  const cellText = (cx) => {
+    if (!cx) return "";
+    const inline = cx.match(/<t[^>]*>([\s\S]*?)<\/t>/);
+    if (inline) return inline[1];
+    const v = cx.match(/<v>([\s\S]*?)<\/v>/);
+    if (!v) return "";
+    return /t="s"/.test(cx) ? (ss[+v[1]] ?? "") : v[1];
+  };
+  const norm = (s) => String(s).replace(/\s+/g, " ").trim().toLowerCase();
+
+  if (expect.headerRow != null) {
+    const hr = rowXml(expect.headerRow);
+    if (!hr) problems.push(`header row ${expect.headerRow} is missing`);
+    else for (const [col, want] of Object.entries(expect.headerCells || {})) {
+      const got = cellText(cellXml(hr, col, expect.headerRow));
+      if (norm(got) !== norm(want)) {
+        problems.push(`${col}${expect.headerRow} reads "${got.trim()}" (expected "${want}")`);
+      }
+    }
+  }
+  for (const R of [expect.firstRow, expect.lastRow]) {
+    if (R != null && !rowXml(R)) problems.push(`data row ${R} is missing`);
+  }
+  if (expect.footerRow != null) {
+    const fr = rowXml(expect.footerRow);
+    if (!fr) problems.push(`footer row ${expect.footerRow} is missing`);
+    else for (const col of expect.footerFormulaCols || []) {
+      const cx = cellXml(fr, col, expect.footerRow);
+      if (!cx || !/<f[\s>]/.test(cx)) problems.push(`footer ${col}${expect.footerRow} has no formula`);
+    }
+  }
+  // A formula column that has become a literal means the template's own math
+  // changed; writing our values in would be wrong either way.
+  for (const R of expect.sampleRows || []) {
+    const rx = rowXml(R);
+    if (!rx) continue;
+    for (const col of expect.formulaCols || []) {
+      const cx = cellXml(rx, col, R);
+      if (!cx || !/<f[\s>/]/.test(cx)) problems.push(`${col}${R} is not a formula`);
+    }
+  }
+  return problems;
 }
 
 // Build the inner of a populated <c>, preserving the existing style attr (s="..").
@@ -417,6 +605,37 @@ function resolveSheet(wbXml, relsXml, name) {
 //               rows down. Used to write the Crew Payroll fringe rows.
 // opts.cellPatches: optional [{ sheetName, addr, value, type }] to patch single
 //               cells on any sheet (e.g. 1st/Last Shoot Day on Crew Payroll).
+// Read-only structural check against a template, WITHOUT generating anything.
+// Same contract shape as opts.preconditions, but returns the problems instead of
+// throwing, so a caller can degrade one tab (skip it, raise an issue) rather than
+// abort the whole workbook. checks: [{ sheetName, expect }]
+// Returns { [sheetName]: [problem, ...] } — a sheet with no problems is omitted.
+export async function inspectStructure(templateBuf, checks) {
+  const out = {};
+  if (!checks || !checks.length) return out;
+  const entries = parseZip(templateBuf);
+  const wbXml = await readText(entries, "xl/workbook.xml");
+  const relsXml = await readText(entries, "xl/_rels/workbook.xml.rels");
+  if (!wbXml || !relsXml) {
+    for (const c of checks) out[c.sheetName] = ["workbook.xml missing"];
+    return out;
+  }
+  const ssXml = await readText(entries, "xl/sharedStrings.xml");
+  const ss = ssXml
+    ? [...ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) =>
+        [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((x) => x[1]).join(""))
+    : [];
+  for (const c of checks) {
+    const t = resolveSheet(wbXml, relsXml, c.sheetName);
+    if (!t) { out[c.sheetName] = ["tab not found"]; continue; }
+    const xml = await readText(entries, t.path);
+    if (xml == null) { out[c.sheetName] = ["tab is unreadable"]; continue; }
+    const problems = checkSheetStructure(xml, c.expect, ss);
+    if (problems.length) out[c.sheetName] = problems;
+  }
+  return out;
+}
+
 export async function generateWorkbook(templateBuf, sheetName, values, deleteSheets = [], opts = {}) {
   const entries = parseZip(templateBuf);
   const enc = new TextEncoder();
@@ -429,6 +648,33 @@ export async function generateWorkbook(templateBuf, sheetName, values, deleteShe
   let wbXml = await readText(entries, "xl/workbook.xml");
   let relsXml = await readText(entries, "xl/_rels/workbook.xml.rels");
   if (!wbXml || !relsXml) throw new Error("workbook.xml missing");
+
+  // --- 0a. structural preconditions. Checked BEFORE any mutation so a
+  //         mismatched published template refuses cleanly instead of producing
+  //         a plausible-looking workbook written into the wrong cells. ---
+  if (opts.preconditions && opts.preconditions.length) {
+    const ssXml = await readText(entries, "xl/sharedStrings.xml");
+    const ss = ssXml
+      ? [...ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) =>
+          [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((x) => x[1]).join(""))
+      : [];
+    const failures = [];
+    for (const pre of opts.preconditions) {
+      const t = resolveSheet(wbXml, relsXml, pre.sheetName);
+      if (!t) { failures.push(`"${pre.sheetName}" tab not found`); continue; }
+      const xml = await readText(entries, t.path);
+      if (xml == null) { failures.push(`"${pre.sheetName}" tab is unreadable`); continue; }
+      const problems = checkSheetStructure(xml, pre.expect, ss);
+      if (problems.length) failures.push(`"${pre.sheetName}": ` + problems.join("; "));
+    }
+    if (failures.length) {
+      throw new Error(
+        "This template's structure doesn't match what the wizard expects, so nothing was written.\n\n" +
+        failures.join("\n") +
+        "\n\nIf the template was intentionally changed, the wizard's mapping constants need updating to match before it can be used."
+      );
+    }
+  }
 
   // --- 1. patch the values into the chosen sheet ---
   const keep = resolveSheet(wbXml, relsXml, sheetName);
@@ -476,6 +722,38 @@ function styleOfCell(xml, addr) {
     setText(ins.path, insXml);
     // stale calcChain would point at pre-shift cells; drop it to force recalc
     if (entries.some((e) => e.name === "xl/calcChain.xml")) dropped.add("xl/calcChain.xml");
+  }
+
+  // --- 1b2. clone whole row blocks on arbitrary sheets (Hotel Charges Summary
+  //          grows past its 12 pre-built blocks). Jobs must be supplied
+  //          bottom-up — each one shifts every row below its insertion point,
+  //          so a later job's `at` would otherwise be stale. ---
+  if (opts.blockClones && opts.blockClones.length) {
+    for (const job of opts.blockClones) {
+      if (!job.count) continue;
+      const target = resolveSheet(wbXml, relsXml, job.sheetName);
+      if (!target) continue;
+      let bx = await curText(target.path);
+      if (bx == null) continue;
+      setText(target.path, cloneRowBlock(bx, job.srcStart, job.srcEnd, job.at, job.count));
+      if (entries.some((e) => e.name === "xl/calcChain.xml")) dropped.add("xl/calcChain.xml");
+    }
+  }
+
+  // --- 1b3. write into pre-built rows on arbitrary sheets (GA Payroll Report).
+  //          No row insertion, so nothing below shifts and the sheet's own
+  //          SUBTOTAL / SUMIF ranges stay valid. ---
+  if (opts.rowWrites && opts.rowWrites.length) {
+    for (const job of opts.rowWrites) {
+      if (!job.rows || !job.rows.length) continue;
+      const target = resolveSheet(wbXml, relsXml, job.sheetName);
+      if (!target) continue;
+      let rw = await curText(target.path);
+      if (rw == null) continue;
+      setText(target.path, writeRowsIntoSheet(rw, job));
+      written += job.rows.length;
+      if (entries.some((e) => e.name === "xl/calcChain.xml")) dropped.add("xl/calcChain.xml");
+    }
   }
 
   // --- 1c. patch individual cells on arbitrary sheets (e.g. 1st/Last Shoot Day
