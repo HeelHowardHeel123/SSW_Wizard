@@ -121,6 +121,23 @@ Then extract:
 Return ONLY a JSON object with exactly these keys: {"document_type": "...", "last_name": "...", "first_name": "...", "state": "...", "expiration_date": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
+RESIDENCY_MULTI_SYSTEM_PROMPT = """You are analyzing a multi-page PDF that was batch-scanned by a film production crew coordinator. It contains one or more separate people's identification documents -- each is a Driver's License, a State ID card, or a USCIS Form I-9 (Employment Eligibility Verification). A single person's card is sometimes 2 consecutive pages (front then back -- the back has no photo, just barcodes/restrictions/small print) and sometimes just 1 page (front only, no back scanned). Different people's documents never share a page.
+
+Look at every page, in the order given, and group them into documents -- one group per person. For each document, report which pages belong to it and extract its fields.
+
+For each document:
+- pages: a list of the page numbers belonging to this document (1-indexed, in the order given -- e.g. [1, 2] for a front+back pair, or [3] for a front-only page).
+- document_type: "drivers_license" / "state_id" / "i9" / "unknown".
+- last_name: the person's last/family name, exactly as printed, title case. If a generational suffix (Jr, Sr, II, III, 3rd, etc.) is printed as part of that same name, keep it attached to last_name -- never treat the suffix as first_name or as the whole last_name by itself.
+- first_name: the person's FIRST/given name ONLY -- never include a middle name.
+- state: ONLY for drivers_license or state_id, the 2-letter issuing state abbreviation exactly as printed on the card (e.g. "IL", "CA"). Empty string for i9 or unknown.
+- expiration_date: ONLY for drivers_license or state_id, in exactly MM/DD/YYYY as printed next to "EXP" or field "4b". Empty string for i9 or unknown.
+
+Every page must belong to exactly one document's "pages" list -- never omit a page and never assign one page to two documents.
+
+Return ONLY a JSON object with exactly this key: {"documents": [{"pages": [...], "document_type": "...", "last_name": "...", "first_name": "...", "state": "...", "expiration_date": "..."}, ...]}
+No explanation. No markdown. No code fences. JSON object only."""
+
 DIVERSITY_SYSTEM_PROMPT = """You are analyzing an Illinois Department of Commerce & Economic Opportunity (DCEO) "Illinois Film Tax Credit Tracking Sheet" submitted by a film production crew member.
 
 Extract:
@@ -222,6 +239,24 @@ def render_pdf_bytes_to_images_b64(pdf_bytes: bytes, dpi_scale: float = 2.0, max
         images.append(base64.b64encode(pix.tobytes("png")).decode())
     doc.close()
     return images
+
+
+MAX_RESIDENCY_PAGES = 30
+
+
+def extract_pages_as_pdf(pdf_bytes: bytes, page_numbers_1indexed: list) -> bytes:
+    """Slices specific pages (1-indexed, in the given order) out of a PDF
+    into a new standalone PDF -- used when one uploaded file contains
+    multiple people's residency documents (e.g. a batch-scanned stack of
+    licenses), so each person ends up as their own output file."""
+    src = fitz.open(stream=pdf_bytes, filetype="pdf")
+    out = fitz.open()
+    for pn in page_numbers_1indexed:
+        out.insert_pdf(src, from_page=pn - 1, to_page=pn - 1)
+    result = out.tobytes()
+    out.close()
+    src.close()
+    return result
 
 
 def looks_like_refusal(raw: str) -> bool:
@@ -494,51 +529,96 @@ def check_sender_mismatch(bill_to_name: str, batch: BatchContext) -> str:
 
 # ── Per-family extraction ─────────────────────────────────────────────────────
 
-async def _extract_residency(images_b64, openai_client, anthropic_client, loop):
+async def _extract_residency_multi(pdf_bytes, openai_client, anthropic_client, loop):
+    """Residency is the one family that can't assume "one uploaded file = one
+    person" -- a coordinator batch-scanning a stack of physical IDs produces a
+    single multi-page PDF containing several different people's cards, each
+    spanning 1 page (front only) or 2 (front+back). This renders every page
+    (up to MAX_RESIDENCY_PAGES) and asks the model to group them by person in
+    one call, then physically splits the PDF so each person becomes their own
+    output file -- one uploaded file can produce many DocResults here, unlike
+    every other family."""
+    images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_RESIDENCY_PAGES)
+    if not images:
+        return [DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="residency", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+            reason_detail="No renderable pages found",
+        )]
+
     user_text = (
-        "Identify this document and extract the fields described in the system prompt. "
-        "If a second page is present, it is the back of the same card."
+        "Identify every person's ID document across all pages of this PDF and group "
+        "pages accordingly, as described in the system prompt."
     )
     parsed, provider = await classify_document(
-        images_b64, user_text, RESIDENCY_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
+        images, user_text, RESIDENCY_MULTI_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
     )
-    if parsed is None:
-        return DocResult(
+    documents = (parsed or {}).get("documents") if parsed else None
+    if not isinstance(documents, list) or not documents:
+        return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="residency", subfolder=FOLDER_NOT_READABLE,
-            output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
             reason_detail="Could not read document (both providers failed)", provider=provider,
-        )
+        )]
 
-    doc_type = str(parsed.get("document_type", "unknown")).strip().lower()
-    if doc_type not in ("drivers_license", "state_id", "i9"):
-        return DocResult(
+    total_pages = len(images)
+    results = []
+    for doc in documents:
+        page_nums = [p for p in (doc.get("pages") or []) if isinstance(p, int) and 1 <= p <= total_pages]
+        if not page_nums:
+            continue  # nothing usable to split out for this group
+
+        try:
+            sub_pdf_bytes = extract_pages_as_pdf(pdf_bytes, page_nums)
+        except Exception as e:
+            results.append(DocResult(
+                bucket=BUCKET_NOT_READABLE, doc_type="residency", subfolder=FOLDER_NOT_READABLE,
+                output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+                reason_detail=f"Could not split page(s) {page_nums} into their own file: {e}", provider=provider,
+            ))
+            continue
+
+        doc_type = str(doc.get("document_type", "unknown")).strip().lower()
+        if doc_type not in ("drivers_license", "state_id", "i9"):
+            results.append(DocResult(
+                bucket=BUCKET_NOT_READABLE, doc_type="residency", subfolder=FOLDER_NOT_READABLE,
+                output_pdf_bytes=sub_pdf_bytes, reason_code=REASON_UNCLASSIFIED,
+                reason_detail=f"Unrecognized document type ({doc_type!r}) on page(s) {page_nums}", provider=provider,
+            ))
+            continue
+
+        last, first = doc.get("last_name", ""), doc.get("first_name", "")
+        state = doc.get("state", "")
+        exp_date = doc.get("expiration_date", "")
+        new_name = build_residency_filename(doc_type, last, first, state, exp_date)
+        if not new_name:
+            if not last or not first:
+                missing = REASON_MISSING_NAME
+            elif doc_type in ("drivers_license", "state_id") and not state:
+                missing = REASON_MISSING_STATE
+            else:
+                missing = REASON_MISSING_DATE
+            results.append(DocResult(
+                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="residency", subfolder=FOLDER_RESIDENCY,
+                output_pdf_bytes=sub_pdf_bytes, reason_code=missing,
+                reason_detail=(f"Missing/unreadable name, state, or expiration date on page(s) {page_nums} "
+                                f"(type={doc_type}, last={last!r}, first={first!r}, state={state!r}, exp={exp_date!r})"),
+                provider=provider,
+            ))
+            continue
+
+        results.append(DocResult(
+            bucket=BUCKET_RENAMED, doc_type="residency", subfolder=FOLDER_RESIDENCY,
+            output_pdf_bytes=sub_pdf_bytes, new_filename=new_name, provider=provider,
+        ))
+
+    if not results:
+        return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="residency", subfolder=FOLDER_NOT_READABLE,
-            output_pdf_bytes=b"", reason_code=REASON_UNCLASSIFIED,
-            reason_detail=f"Unrecognized document type ({doc_type!r})", provider=provider,
-        )
-
-    last, first = parsed.get("last_name", ""), parsed.get("first_name", "")
-    state = parsed.get("state", "")
-    exp_date = parsed.get("expiration_date", "")
-    new_name = build_residency_filename(doc_type, last, first, state, exp_date)
-    if not new_name:
-        if not last or not first:
-            missing = REASON_MISSING_NAME
-        elif doc_type in ("drivers_license", "state_id") and not state:
-            missing = REASON_MISSING_STATE
-        else:
-            missing = REASON_MISSING_DATE
-        return DocResult(
-            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="residency", subfolder=FOLDER_RESIDENCY,
-            output_pdf_bytes=b"", reason_code=missing,
-            reason_detail=(f"Missing/unreadable name, state, or expiration date "
-                            f"(type={doc_type}, last={last!r}, first={first!r}, state={state!r}, exp={exp_date!r})"),
-            provider=provider,
-        )
-    return DocResult(
-        bucket=BUCKET_RENAMED, doc_type="residency", subfolder=FOLDER_RESIDENCY,
-        output_pdf_bytes=b"", new_filename=new_name, provider=provider,
-    )
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNCLASSIFIED,
+            reason_detail="Model returned no usable page groupings", provider=provider,
+        )]
+    return results
 
 
 async def _extract_diversity(images_b64, openai_client, anthropic_client, loop, orig_filename_hint):
@@ -684,57 +764,70 @@ async def process_one_document(
     openai_client,
     anthropic_client,
     loop,
-) -> DocResult:
+) -> list:
     """The single entry point the job layer calls per uploaded file. Converts
-    to PDF if needed (local, no LLM cost), renders once, classifies the
-    document family, then dispatches to that family's extraction. Any
-    unexpected exception is caught here so one bad file never kills a job."""
+    to PDF if needed (local, no LLM cost), classifies the document family
+    from a quick look at the first few pages, then dispatches to that
+    family's extraction. Any unexpected exception is caught here so one bad
+    file never kills a job.
+
+    Returns a LIST of DocResult, not one -- for every family except
+    Residency this is always a single-element list (one uploaded file, one
+    output file), but Residency can legitimately split one uploaded file
+    into several (a batch-scanned stack of different people's IDs)."""
     try:
         pdf_bytes = load_source_as_pdf_bytes(raw_bytes, filename)
     except Exception as e:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
             output_pdf_bytes=raw_bytes, reason_code=REASON_UNREADABLE,
             reason_detail=f"Could not open/convert file: {e}",
-        )
+        )]
 
     try:
-        images = render_pdf_bytes_to_images_b64(pdf_bytes)
-        if not images:
-            return DocResult(
+        # A quick, cheap look (first few pages) is enough to tell the family
+        # -- Residency's own extraction re-renders up to MAX_RESIDENCY_PAGES
+        # separately once we know that's what we're dealing with, since a
+        # batch-scanned stack can run well past this classification cap.
+        classify_images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=3)
+        if not classify_images:
+            return [DocResult(
                 bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
                 output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
                 reason_detail="No renderable pages found",
-            )
+            )]
 
         parsed, provider = await classify_document(
-            images, "Identify the broad family of this document as described in the system prompt.",
+            classify_images, "Identify the broad family of this document as described in the system prompt.",
             TYPE_CLASSIFIER_PROMPT, openai_client, anthropic_client, loop,
         )
         family = str((parsed or {}).get("document_family", "unknown")).strip().lower()
 
         if family == "residency":
-            result = await _extract_residency(images, openai_client, anthropic_client, loop)
+            results = await _extract_residency_multi(pdf_bytes, openai_client, anthropic_client, loop)
         elif family == "diversity":
-            result = await _extract_diversity(images, openai_client, anthropic_client, loop, filename)
+            result = await _extract_diversity(classify_images, openai_client, anthropic_client, loop, filename)
+            result.output_pdf_bytes = pdf_bytes
+            results = [result]
         elif family == "vendor":
-            result = await _extract_vendor(images, openai_client, anthropic_client, loop, batch)
+            result = await _extract_vendor(classify_images, openai_client, anthropic_client, loop, batch)
+            result.output_pdf_bytes = pdf_bytes
+            results = [result]
         else:
-            result = DocResult(
+            results = [DocResult(
                 bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
-                output_pdf_bytes=b"", reason_code=REASON_UNCLASSIFIED,
+                output_pdf_bytes=pdf_bytes, reason_code=REASON_UNCLASSIFIED,
                 reason_detail="Could not confidently classify this document into a known type" if parsed is not None
                               else "Could not read document (both providers failed)",
                 provider=provider,
-            )
-        result.output_pdf_bytes = pdf_bytes
-        return result
+            )]
+        return results
     except Exception as e:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
             output_pdf_bytes=pdf_bytes, reason_code=REASON_PROVIDER_ERROR,
             reason_detail=f"Unexpected error: {e}",
-        )
+        )]
 
 
 # ── Naming conventions, exposed as data (GET /wizard01/conventions) ──────────
@@ -747,6 +840,11 @@ NAMING_CONVENTIONS = [
             {"pattern": "{Last}, {First} ({State}) {YYYY_MM_DD}.pdf", "description": "Driver's License / State ID, named by issuing state + expiration date"},
             {"pattern": "{Last}, {First} - I9.pdf", "description": "USCIS Form I-9"},
         ],
+        "notes": (
+            "If one uploaded PDF contains several different people's ID documents "
+            "(a batch-scanned stack), each person is split out into their own "
+            "renamed output file -- one upload can produce multiple results here."
+        ),
     },
     {
         "type_id": "diversity",

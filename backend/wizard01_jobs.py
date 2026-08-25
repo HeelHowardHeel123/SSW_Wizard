@@ -177,17 +177,24 @@ async def run_job(job_id: str, uploaded: list[tuple[str, str]]) -> None:
     batch = BatchContext(**status["batch_context"])
     unable_counters: dict[str, int] = {}
 
-    async def _update(entry: dict, result: DocResult):
+    async def _update(entries: list[dict]):
+        """One call per UPLOADED file, regardless of how many output
+        documents it produced -- processed increments once (it tracks
+        upload progress), while renamed/not_readable/needs_review and the
+        log each get one entry per OUTPUT document, since Residency can
+        split one upload into several (a batch-scanned stack of IDs)."""
         async with lock:
             s = read_status(job_id)
             s["processed"] += 1
-            if result.bucket == pdf_namer.BUCKET_RENAMED:
-                s["renamed"] += 1
-            elif result.bucket == pdf_namer.BUCKET_NOT_READABLE:
-                s["not_readable"] += 1
-            else:
-                s["needs_review"] += 1
-            s["log"].append(entry)
+            for entry in entries:
+                bucket = entry["bucket"]
+                if bucket == pdf_namer.BUCKET_RENAMED:
+                    s["renamed"] += 1
+                elif bucket == pdf_namer.BUCKET_NOT_READABLE:
+                    s["not_readable"] += 1
+                else:
+                    s["needs_review"] += 1
+                s["log"].append(entry)
             _write_status(job_id, s)
 
     async def _process_one(file_id: str, original_filename: str):
@@ -196,15 +203,12 @@ async def run_job(job_id: str, uploaded: list[tuple[str, str]]) -> None:
             src_path = os.path.join(_uploads_dir(job_id), f"{file_id}__{original_filename}")
             if ext not in pdf_namer._SUPPORTED_EXTENSIONS:
                 entry = {
-                    "file_id": file_id, "filename": original_filename,
+                    "file_id": uuid.uuid4().hex, "filename": original_filename,
                     "bucket": pdf_namer.BUCKET_NOT_READABLE, "doc_type": "unknown",
                     "new_name": None, "reason_code": "unreadable",
                     "reason_detail": f"Unsupported file type ({ext or 'no extension'})",
                 }
-                await _update(entry, DocResult(
-                    bucket=pdf_namer.BUCKET_NOT_READABLE, doc_type="unknown",
-                    subfolder=pdf_namer.FOLDER_NOT_READABLE, output_pdf_bytes=b"",
-                ))
+                await _update([entry])
                 try:
                     _write_not_readable(job_id, src_path, original_filename)
                 except Exception:
@@ -216,42 +220,42 @@ async def run_job(job_id: str, uploaded: list[tuple[str, str]]) -> None:
                     raw_bytes = f.read()
             except Exception as e:
                 entry = {
-                    "file_id": file_id, "filename": original_filename,
+                    "file_id": uuid.uuid4().hex, "filename": original_filename,
                     "bucket": pdf_namer.BUCKET_NOT_READABLE, "doc_type": "unknown",
                     "new_name": None, "reason_code": "unreadable",
                     "reason_detail": f"Could not read uploaded file: {e}",
                 }
-                await _update(entry, DocResult(
-                    bucket=pdf_namer.BUCKET_NOT_READABLE, doc_type="unknown",
-                    subfolder=pdf_namer.FOLDER_NOT_READABLE, output_pdf_bytes=b"",
-                ))
+                await _update([entry])
                 return
 
-            result = await pdf_namer.process_one_document(
+            results = await pdf_namer.process_one_document(
                 raw_bytes, original_filename, batch, openai_client, anthropic_client, loop,
             )
 
-            final_name = None
-            try:
-                if result.bucket == pdf_namer.BUCKET_RENAMED:
-                    final_name = _write_output(job_id, result.subfolder, result.new_filename, result.output_pdf_bytes)
-                elif result.bucket == pdf_namer.BUCKET_UNABLE_TO_RENAME:
-                    async with lock:
-                        n = unable_counters.get(result.subfolder, 0) + 1
-                        unable_counters[result.subfolder] = n
-                    final_name = _write_output(job_id, result.subfolder, f"Unable_To_Rename_{n:03d}.pdf", result.output_pdf_bytes)
-                else:
-                    final_name = _write_not_readable(job_id, None, original_filename, data=result.output_pdf_bytes or raw_bytes)
-            except Exception as e:
-                result.reason_detail = f"{result.reason_detail} (also failed to write output: {e})".strip()
+            entries = []
+            for result in results:
+                final_name = None
+                try:
+                    if result.bucket == pdf_namer.BUCKET_RENAMED:
+                        final_name = _write_output(job_id, result.subfolder, result.new_filename, result.output_pdf_bytes)
+                    elif result.bucket == pdf_namer.BUCKET_UNABLE_TO_RENAME:
+                        async with lock:
+                            n = unable_counters.get(result.subfolder, 0) + 1
+                            unable_counters[result.subfolder] = n
+                        final_name = _write_output(job_id, result.subfolder, f"Unable_To_Rename_{n:03d}.pdf", result.output_pdf_bytes)
+                    else:
+                        final_name = _write_not_readable(job_id, None, original_filename, data=result.output_pdf_bytes or raw_bytes)
+                except Exception as e:
+                    result.reason_detail = f"{result.reason_detail} (also failed to write output: {e})".strip()
 
-            entry = {
-                "file_id": file_id, "filename": original_filename,
-                "bucket": result.bucket, "doc_type": result.doc_type,
-                "new_name": final_name, "reason_code": result.reason_code,
-                "reason_detail": result.reason_detail,
-            }
-            await _update(entry, result)
+                entries.append({
+                    "file_id": uuid.uuid4().hex, "filename": original_filename,
+                    "bucket": result.bucket, "doc_type": result.doc_type,
+                    "new_name": final_name, "reason_code": result.reason_code,
+                    "reason_detail": result.reason_detail,
+                })
+
+            await _update(entries)
 
             try:
                 os.remove(src_path)

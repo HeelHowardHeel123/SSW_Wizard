@@ -132,7 +132,12 @@ Endpoints
                                      immediately.
   GET    /wizard01/jobs/{id}       → status JSON: state (running/done/error), total,
                                      processed, renamed, not_readable, needs_review, log[],
-                                     batch_context. 404 once expired.
+                                     batch_context. 404 once expired. total/processed track
+                                     UPLOADED files; log[] can have MORE entries than total,
+                                     since one upload can produce several output files --
+                                     Residency splits a batch-scanned stack of different
+                                     people's IDs into one file per person. Every log entry
+                                     (even a non-split one) gets its own fresh file_id.
   GET    /wizard01/jobs/{id}/download → result zip once state=="done"; 409 if still running,
                                      404 if expired/unknown. Zip has one folder per type
                                      (renamed + unable_to_rename files together) plus
