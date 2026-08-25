@@ -787,15 +787,27 @@ async def _extract_diversity(images_b64, openai_client, anthropic_client, loop, 
     if looks_like_person:
         last, first = split_person_name(employee_name)
     else:
+        # The Employee Name field reads as a company (a common real case:
+        # a loan-out entity named after its owner, e.g. "Nolis Anderson
+        # Photography LLC" for a photographer named Nolis Anderson) -- a
+        # signature reading "Nolis Anderson" confirms this directly, and
+        # doesn't need the existing filename to agree too. Checking the
+        # company name FIRST also covers the common case of a generic/
+        # uninformative original filename ("a.pdf", "scan001.pdf") that
+        # was never going to match any real name to begin with.
         filename_guess = _guess_name_from_filename(orig_filename_hint)
-        if signature_guess and names_overlap(signature_guess, filename_guess):
+        confirmed = bool(signature_guess) and (
+            names_overlap(signature_guess, employee_name) or names_overlap(signature_guess, filename_guess)
+        )
+        if confirmed:
             last, first = split_person_name(signature_guess)
         else:
             return DocResult(
                 bucket=BUCKET_UNABLE_TO_RENAME, doc_type="diversity", subfolder=FOLDER_DIVERSITY,
                 output_pdf_bytes=b"", reason_code=REASON_LOW_CONFIDENCE,
                 reason_detail=(f"Employee Name field looks like a company ({employee_name!r}) and signature "
-                               f"({signature_guess!r}) didn't confirm the existing filename"),
+                               f"({signature_guess!r}) didn't confirm it against either the company name "
+                               f"or the existing filename"),
                 provider=provider,
             )
 
