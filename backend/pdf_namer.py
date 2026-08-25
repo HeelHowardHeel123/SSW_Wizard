@@ -408,6 +408,44 @@ async def classify_document(images_b64, user_text, system_prompt, openai_client,
             return None, "anthropic"
 
 
+def has_form_fields(pdf_bytes: bytes) -> bool:
+    """Cheap, local check (no LLM call) for whether this PDF has interactive
+    AcroForm fields at all -- used to decide whether flatten_form_fields is
+    worth running."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return any(next(page.widgets(), None) is not None for page in doc)
+    finally:
+        doc.close()
+
+
+def flatten_form_fields(pdf_bytes: bytes, dpi_scale: float = 3.0) -> bytes:
+    """Rebuilds a PDF by rendering each page to a flat image and embedding
+    it into a brand-new PDF -- the same effect as "Print to PDF". Some of
+    the standard fillable forms submitted here (confirmed real case: the
+    Illinois DCEO diversity form) have been seen with badly-scrambled
+    AcroForm field name/value pairs internally -- e.g. a field literally
+    named "Zip" holding the city, and a field named "Date" holding the
+    signature -- while each widget still renders correctly at its own
+    on-page position regardless of its internal name. Flattening only
+    removes the broken interactive structure; the page's actual appearance
+    (what get_pixmap() already renders, and what a human sees) is
+    unaffected, so nothing downstream that reads the rendered page is
+    fixing anything real -- this exists purely so the OUTPUT file itself
+    doesn't carry the same scrambled structure forward for some other tool
+    to trip over later."""
+    src = fitz.open(stream=pdf_bytes, filetype="pdf")
+    out = fitz.open()
+    for page in src:
+        pix = page.get_pixmap(matrix=fitz.Matrix(dpi_scale, dpi_scale))
+        new_page = out.new_page(width=page.rect.width, height=page.rect.height)
+        new_page.insert_image(new_page.rect, pixmap=pix)
+    result = out.tobytes()
+    out.close()
+    src.close()
+    return result
+
+
 async def correct_page_orientations(pdf_bytes: bytes, openai_client, anthropic_client, loop) -> bytes:
     """Detects and fixes any page that's sideways or upside-down (a phone
     photo taken in the wrong orientation, or a scanner fed the page wrong)
@@ -894,7 +932,19 @@ async def process_one_document(
         )]
 
     try:
-        # Fix orientation FIRST, before anything else looks at this file --
+        # Flatten any interactive form fields into plain static content
+        # ("Print to PDF") before anything else -- some fillable forms
+        # submitted here have badly-scrambled AcroForm field name/value
+        # pairs internally, even though the on-page rendering is unaffected.
+        # This doesn't fix anything our own vision-based reading needed
+        # fixed; it just keeps that broken structure out of the output file.
+        if has_form_fields(pdf_bytes):
+            pdf_bytes = flatten_form_fields(pdf_bytes)
+    except Exception:
+        pass
+
+    try:
+        # Fix orientation next, before anything else looks at this file --
         # a sideways/upside-down scan (phone photo, misfed scanner page)
         # would otherwise confuse classification/extraction too. A failure
         # here is never fatal to the rest of the pipeline; just proceed with
