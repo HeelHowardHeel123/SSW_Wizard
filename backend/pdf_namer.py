@@ -104,6 +104,14 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "unknown"}
 No explanation. No markdown. No code fences. JSON object only."""
 
+ORIENTATION_PROMPT = """You are looking at page images from a single PDF document -- a scan or phone photo submitted as part of a film/TV production crew paperwork batch. For each page, determine how many degrees it needs to be rotated CLOCKWISE for its content (text, photos) to appear upright/right-side-up. Common causes: a phone photo taken in landscape when the document is portrait (or vice versa), or a scanner fed the page sideways or upside-down.
+
+Return one entry per page, in the same order given (page 1 first).
+- rotation: one of 0, 90, 180, 270 -- how many degrees clockwise this page needs to be rotated to become upright. 0 if it's already upright.
+
+Return ONLY a JSON object with exactly this key: {"pages": [{"rotation": 0 | 90 | 180 | 270}, ...]}
+No explanation. No markdown. No code fences. JSON object only."""
+
 RESIDENCY_SYSTEM_PROMPT = """You are analyzing a scanned identification or employment eligibility document submitted by a film production crew member. It will be one of: a Driver's License, a State ID card, or a USCIS Form I-9 (Employment Eligibility Verification). If a second page is included, it is almost always just the BACK of the same card (blood type, restrictions, barcodes) -- treat all pages together as ONE document, never two.
 
 Determine which type this is:
@@ -241,7 +249,7 @@ def render_pdf_bytes_to_images_b64(pdf_bytes: bytes, dpi_scale: float = 2.0, max
     return images
 
 
-MAX_RESIDENCY_PAGES = 30
+MAX_PAGES_TO_INSPECT = 30
 
 
 def extract_pages_as_pdf(pdf_bytes: bytes, page_numbers_1indexed: list) -> bytes:
@@ -283,12 +291,12 @@ def parse_json_object(raw: str):
     return None
 
 
-def call_gpt_json(client, images_b64, system_prompt, user_text, max_tokens=500):
+def call_gpt_json(client, images_b64, system_prompt, user_text, max_tokens=500, detail="high"):
     content = [{"type": "text", "text": user_text}]
     for img in images_b64:
         content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"},
+            "image_url": {"url": f"data:image/png;base64,{img}", "detail": detail},
         })
     resp = client.chat.completions.create(
         model="gpt-4o",
@@ -320,15 +328,18 @@ def call_claude_json(client, images_b64, system_prompt, user_text, max_tokens=50
     return text_block.text.strip() if text_block else ""
 
 
-async def classify_document(images_b64, user_text, system_prompt, openai_client, anthropic_client, loop):
+async def classify_document(images_b64, user_text, system_prompt, openai_client, anthropic_client, loop, detail="high"):
     """Tries GPT-4o first; falls back to Claude if GPT refuses/errors/comes
     back empty. Returns (parsed_dict_or_None, provider_used). Runs the
     (synchronous) SDK calls in the executor so this can be awaited alongside
-    other files' calls under a semaphore."""
+    other files' calls under a semaphore. detail="low" is worth passing for
+    a coarse judgment call (e.g. orientation) made over many images at
+    once, where GPT-4o's high-detail mode would multiply token cost for no
+    real accuracy benefit."""
     import functools
     try:
         raw = await loop.run_in_executor(
-            None, functools.partial(call_gpt_json, openai_client, images_b64, system_prompt, user_text),
+            None, functools.partial(call_gpt_json, openai_client, images_b64, system_prompt, user_text, detail=detail),
         )
         if looks_like_refusal(raw):
             raise ValueError("refusal")
@@ -347,6 +358,56 @@ async def classify_document(images_b64, user_text, system_prompt, openai_client,
             return (parsed, "anthropic") if parsed is not None else (None, "anthropic")
         except Exception:
             return None, "anthropic"
+
+
+async def correct_page_orientations(pdf_bytes: bytes, openai_client, anthropic_client, loop) -> bytes:
+    """Detects and fixes any page that's sideways or upside-down (a phone
+    photo taken in the wrong orientation, or a scanner fed the page wrong)
+    before any classification/extraction happens -- everything downstream
+    just sees an upright document, no matter how it was actually scanned.
+
+    Sets the PDF's own per-page /Rotate attribute rather than baking in a
+    pixel-level transform: every standard PDF viewer honors it, and so does
+    our own get_pixmap() rendering used everywhere else in this file, so
+    the fix propagates for free through classification, extraction, and
+    (for Residency) the page-splitting step -- none of that code needs to
+    know this ever happened."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    n = min(doc.page_count, MAX_PAGES_TO_INSPECT)
+    if n == 0:
+        doc.close()
+        return pdf_bytes
+
+    images = []
+    for i in range(n):
+        pix = doc[i].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        images.append(base64.b64encode(pix.tobytes("png")).decode())
+
+    user_text = "Determine the needed rotation for each page, in order, as described in the system prompt."
+    parsed, _provider = await classify_document(
+        images, user_text, ORIENTATION_PROMPT, openai_client, anthropic_client, loop, detail="low",
+    )
+    pages_info = (parsed or {}).get("pages") if parsed else None
+    if not isinstance(pages_info, list):
+        doc.close()
+        return pdf_bytes
+
+    changed = False
+    for i, info in enumerate(pages_info[:n]):
+        if not isinstance(info, dict):
+            continue
+        try:
+            rotation = int(info.get("rotation", 0))
+        except (TypeError, ValueError):
+            rotation = 0
+        if rotation in (90, 180, 270):
+            page = doc[i]
+            page.set_rotation((page.rotation + rotation) % 360)
+            changed = True
+
+    result = doc.tobytes() if changed else pdf_bytes
+    doc.close()
+    return result
 
 
 # ── Name / filename helpers ───────────────────────────────────────────────────
@@ -534,11 +595,11 @@ async def _extract_residency_multi(pdf_bytes, openai_client, anthropic_client, l
     person" -- a coordinator batch-scanning a stack of physical IDs produces a
     single multi-page PDF containing several different people's cards, each
     spanning 1 page (front only) or 2 (front+back). This renders every page
-    (up to MAX_RESIDENCY_PAGES) and asks the model to group them by person in
+    (up to MAX_PAGES_TO_INSPECT) and asks the model to group them by person in
     one call, then physically splits the PDF so each person becomes their own
     output file -- one uploaded file can produce many DocResults here, unlike
     every other family."""
-    images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_RESIDENCY_PAGES)
+    images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_PAGES_TO_INSPECT)
     if not images:
         return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="residency", subfolder=FOLDER_NOT_READABLE,
@@ -785,8 +846,18 @@ async def process_one_document(
         )]
 
     try:
+        # Fix orientation FIRST, before anything else looks at this file --
+        # a sideways/upside-down scan (phone photo, misfed scanner page)
+        # would otherwise confuse classification/extraction too. A failure
+        # here is never fatal to the rest of the pipeline; just proceed with
+        # whatever orientation the file already had.
+        pdf_bytes = await correct_page_orientations(pdf_bytes, openai_client, anthropic_client, loop)
+    except Exception:
+        pass
+
+    try:
         # A quick, cheap look (first few pages) is enough to tell the family
-        # -- Residency's own extraction re-renders up to MAX_RESIDENCY_PAGES
+        # -- Residency's own extraction re-renders up to MAX_PAGES_TO_INSPECT
         # separately once we know that's what we're dealing with, since a
         # batch-scanned stack can run well past this classification cap.
         classify_images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=3)

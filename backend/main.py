@@ -5580,7 +5580,14 @@ async def wizard01_conventions(x_app_secret: str = Header(default="")):
     moment a new document type is added."""
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
-    return {"types": pdf_namer.NAMING_CONVENTIONS}
+    return {
+        "types": pdf_namer.NAMING_CONVENTIONS,
+        "general_notes": [
+            "A sideways or upside-down page (a phone photo taken the wrong way, "
+            "or a scanner-fed page) is automatically rotated upright in the "
+            "output file -- applies to every document type, not just Residency.",
+        ],
+    }
 
 
 @app.post("/wizard01/jobs")
