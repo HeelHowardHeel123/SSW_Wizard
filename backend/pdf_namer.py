@@ -70,7 +70,11 @@ FOLDER_NOT_READABLE = "Not Readable"
 class BatchContext:
     """One per job, filled once from the Overview-style intake form and
     threaded into every per-file call. received_from is exactly one of
-    "prodco" / "agency" / "client" -- a batch is never mixed-source."""
+    "prodco" / "agency" / "client" -- a batch is never mixed-source.
+    vendor_naming is one of "invoice_number" (default) / "po_number" -- a
+    user-chosen preference for how Vendor Invoice files get named; falls
+    back to "invoice_number" automatically per-file whenever a PO number
+    isn't actually printed on that invoice, regardless of this setting."""
     client_name: str = ""
     client_address: str = ""
     agency_name: str = ""
@@ -78,6 +82,7 @@ class BatchContext:
     prodco_name: str = ""
     prodco_address: str = ""
     received_from: str = ""
+    vendor_naming: str = "invoice_number"
 
 
 @dataclass
@@ -158,7 +163,9 @@ No explanation. No markdown. No code fences. JSON object only."""
 
 VENDOR_SYSTEM_PROMPT_TEMPLATE = """You are analyzing a vendor document submitted as part of a film/TV production's Accounts Payable packet. It is one of: a hotel guest folio, a purchase receipt/order confirmation, or a formal vendor invoice.
 {prodco_line}
-Some of these PDFs begin with an internal Purchase Order cover sheet (a page showing "Purchase Order: PO-XXXXXXX", a Subsidiary line, and a Vendor/Accounts/Description/Amount summary) before the vendor's own actual invoice/receipt/folio appears on a later page. When this cover sheet is present, completely ignore its "Purchase Order" number and its summary line items for every field below -- always read the ACTUAL vendor document (the page(s) that look like a real invoice, receipt, or folio) for every field, never the internal PO cover sheet.
+Some of these PDFs begin with an internal Purchase Order cover sheet (a page showing "Purchase Order: PO-XXXXXXX", a Subsidiary line, and a Vendor/Accounts/Description/Amount summary) before the vendor's own actual invoice/receipt/folio appears on a later page. When this cover sheet is present, completely ignore its "Purchase Order" number and its summary line items for every field below EXCEPT po_number itself -- always read the ACTUAL vendor document (the page(s) that look like a real invoice, receipt, or folio) for every other field, never the internal PO cover sheet.
+
+- po_number: the internal Purchase Order number/code from that cover sheet, if one is present anywhere in this PDF (e.g. "2528-06" from "Purchase Order: PO-2528-06" -- strip a leading "PO"/"PO-" prefix, keep just the number/code itself). Empty string if no PO cover sheet is present.
 
 FIRST, determine which of these three this document is:
 
@@ -185,7 +192,7 @@ FOR A VENDOR INVOICE ONLY (skip these two for a receipt):
 - invoice_number: the vendor's OWN invoice number, exactly as printed on the actual invoice itself (e.g. "1080" from "Invoice no.: 1080", "CHIC-26-000208" from "Invoice CHIC-26-000208"). This is never the internal "PO-XXXXXXX" purchase order number from a cover sheet. Empty string if the actual invoice has no invoice number printed anywhere.
 - has_labor_line_item: true ONLY if the invoice shows a distinct billed line item whose own printed label literally is (or very closely matches) "Labor", "Delivery Labor", "Install Labor", "Labor Fee", or equivalent wording for a labor/delivery-labor charge. This is a narrow, literal check -- a flat day-rate professional service fee (e.g. "Casting Session $1,500/day") or an hourly service charge described some other way (e.g. security guard hours billed by shift) does NOT count unless a line is actually labeled "Labor" (or equivalent). false otherwise.
 
-Return ONLY a JSON object with exactly these keys: {"is_hotel_folio": true or false, "hotel_name": "...", "folio_number": "...", "is_receipt": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "has_company_name": true or false, "company_name": "...", "bill_to_name": "...", "invoice_number": "...", "has_labor_line_item": true or false}
+Return ONLY a JSON object with exactly these keys: {"po_number": "...", "is_hotel_folio": true or false, "hotel_name": "...", "folio_number": "...", "is_receipt": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "has_company_name": true or false, "company_name": "...", "bill_to_name": "...", "invoice_number": "...", "has_labor_line_item": true or false}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -626,6 +633,18 @@ def build_vendor_invoice_filename(company: str, invoice_number: str):
     return f"{company_s} - {invoice_suffix}.pdf"
 
 
+def build_vendor_invoice_filename_by_po(company: str, po_number: str):
+    """The alternate Vendor Invoice naming convention: "PO{number} -
+    {Vendor Name}.pdf". Only usable when a PO number was actually printed
+    on this specific invoice's cover sheet -- returns None otherwise so
+    the caller falls back to build_vendor_invoice_filename instead."""
+    company_s = sanitize_component(proper_case(company))
+    po_s = sanitize_component((po_number or "").strip())
+    if not company_s or not po_s:
+        return None
+    return f"PO{po_s} - {company_s}.pdf"
+
+
 def build_vendor_receipt_filename(company: str):
     company_s = sanitize_component(proper_case(company))
     return f"{company_s} - receipt.pdf" if company_s else None
@@ -848,6 +867,7 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
     company = parsed.get("company_name", "")
     bill_to_name = parsed.get("bill_to_name", "")
     invoice_number = parsed.get("invoice_number", "")
+    po_number = parsed.get("po_number", "")
 
     mismatch_detail = check_sender_mismatch(bill_to_name, batch)
 
@@ -884,7 +904,15 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
                 provider=provider,
             )
     else:
-        new_name = build_vendor_invoice_filename(company, invoice_number)
+        # PO-based naming is a user-chosen preference (Overview intake), but
+        # only usable when this specific invoice actually has a PO number on
+        # it -- falls back to invoice-number naming automatically otherwise,
+        # exactly as if the user had picked that convention for this file.
+        new_name = None
+        if batch.vendor_naming == "po_number":
+            new_name = build_vendor_invoice_filename_by_po(company, po_number)
+        if not new_name:
+            new_name = build_vendor_invoice_filename(company, invoice_number)
         if not new_name:
             return DocResult(
                 bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=FOLDER_VENDOR,
@@ -1038,11 +1066,24 @@ NAMING_CONVENTIONS = [
         "type_id": "vendor",
         "label": "Vendor (Invoice / Receipt / Hotel Folio)",
         "patterns": [
-            {"pattern": "{Company} - Invoice {Number}.pdf", "description": "Company invoice (number omitted if not printed)"},
-            {"pattern": "{Company} - receipt.pdf", "description": "Purchase receipt / order confirmation"},
-            {"pattern": "{Hotel Name} - Folio {Number}.pdf", "description": "Hotel guest folio (number omitted if blank)"},
-            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "description": "Invoice with a Labor/Delivery Labor line item, billed by a person"},
+            {"pattern": "{Company} - Invoice {Number}.pdf", "description": "Company invoice, named by invoice number (number omitted if not printed) -- the default, and the automatic fallback for the PO-number option below whenever a given invoice has no PO number on it"},
+            {"pattern": "PO{PO Number} - {Company}.pdf", "description": "Company invoice, named by PO number instead -- a user-chosen alternative (set once per batch), only used for an invoice that actually has a PO number printed on it"},
+            {"pattern": "{Company} - receipt.pdf", "description": "Purchase receipt / order confirmation -- always by invoice number convention, not affected by the PO-number choice"},
+            {"pattern": "{Hotel Name} - Folio {Number}.pdf", "description": "Hotel guest folio (number omitted if blank) -- not affected by the PO-number choice"},
+            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "description": "Invoice with a Labor/Delivery Labor line item, billed by a person -- not affected by the PO-number choice"},
             {"pattern": "{Last}, {First} ({Company}) - Invoice {Number}.pdf", "description": "Same, when both a person and a company are named"},
+        ],
+        "options": [
+            {
+                "key": "vendor_naming",
+                "label": "Vendor Invoice naming",
+                "choices": [
+                    {"value": "invoice_number", "label": "Vendor Name - Invoice Number (default)"},
+                    {"value": "po_number", "label": "PO Number - Vendor Name"},
+                ],
+                "default": "invoice_number",
+                "note": "Set once per batch on the Overview screen. Only changes the plain company-invoice pattern above -- Receipts, Hotel Folios, and Labor-line-item invoices are unaffected either way.",
+            },
         ],
     },
 ]

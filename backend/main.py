@@ -123,13 +123,17 @@ Endpoints
   this replaces) and wizard01_jobs.py (job storage/background loop/cleanup).
   GET    /wizard01/conventions     → static naming-pattern reference per document type,
                                      not job-specific — {"types": [...]}
-  POST   /wizard01/jobs            → multipart: files[]=<pdf/png/jpg> (many), client_name,
-                                     client_address, agency_name, agency_address, prodco_name,
-                                     prodco_address, received_from ("prodco"/"agency"/"client",
-                                     exactly one per batch — never mixed). Streams uploads
-                                     straight to the volume (never buffers a whole file),
-                                     kicks off background processing, returns {"job_id": ...}
-                                     immediately.
+  POST   /wizard01/jobs            → multipart: files[]=<pdf/png/jpg/any image format> (many),
+                                     client_name, client_address, agency_name, agency_address,
+                                     prodco_name, prodco_address, received_from ("prodco"/
+                                     "agency"/"client", exactly one per batch — never mixed),
+                                     vendor_naming ("invoice_number" default / "po_number" —
+                                     Vendor Invoice naming preference; falls back to
+                                     invoice_number per-file whenever a given invoice has no
+                                     PO number on it, regardless of this setting). Streams
+                                     uploads straight to the volume (never buffers a whole
+                                     file), kicks off background processing, returns
+                                     {"job_id": ...} immediately.
   GET    /wizard01/jobs/{id}       → status JSON: state (running/done/error), total,
                                      processed, renamed, not_readable, needs_review, log[],
                                      batch_context. 404 once expired. total/processed track
@@ -5571,6 +5575,7 @@ async def delete_template(template_id: str, x_app_secret: str = Header(default="
 # storage, background loop, cleanup) for the actual implementation.
 
 _RECEIVED_FROM_VALID = {"prodco", "agency", "client"}
+_VENDOR_NAMING_VALID = {"invoice_number", "po_number"}
 
 
 @app.get("/wizard01/conventions")
@@ -5603,6 +5608,7 @@ async def wizard01_create_job(
     prodco_name:     str              = Form(""),
     prodco_address:  str              = Form(""),
     received_from:   str              = Form(""),
+    vendor_naming:   str              = Form("invoice_number"),
     x_app_secret:    str              = Header(default=""),
 ):
     if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
@@ -5611,6 +5617,9 @@ async def wizard01_create_job(
     received_from = received_from.strip().lower()
     if received_from not in _RECEIVED_FROM_VALID:
         raise HTTPException(400, f"received_from must be one of {sorted(_RECEIVED_FROM_VALID)}.")
+    vendor_naming = vendor_naming.strip().lower()
+    if vendor_naming not in _VENDOR_NAMING_VALID:
+        raise HTTPException(400, f"vendor_naming must be one of {sorted(_VENDOR_NAMING_VALID)}.")
     if not files:
         raise HTTPException(400, "No files uploaded.")
 
@@ -5623,7 +5632,7 @@ async def wizard01_create_job(
         client_name=client_name, client_address=client_address,
         agency_name=agency_name, agency_address=agency_address,
         prodco_name=prodco_name, prodco_address=prodco_address,
-        received_from=received_from,
+        received_from=received_from, vendor_naming=vendor_naming,
     )
     job_id = wizard01_jobs.create_job(batch)
 

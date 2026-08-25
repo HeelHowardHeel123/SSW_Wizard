@@ -144,7 +144,7 @@ def create_job(batch: BatchContext) -> str:
             "client_name": batch.client_name, "client_address": batch.client_address,
             "agency_name": batch.agency_name, "agency_address": batch.agency_address,
             "prodco_name": batch.prodco_name, "prodco_address": batch.prodco_address,
-            "received_from": batch.received_from,
+            "received_from": batch.received_from, "vendor_naming": batch.vendor_naming,
         },
     }
     _write_status(job_id, status)
