@@ -903,7 +903,7 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
                                f"first={first!r}, company={company!r})"),
                 provider=provider,
             )
-    else:
+    elif has_company:
         # PO-based naming is a user-chosen preference (Overview intake), but
         # only usable when this specific invoice actually has a PO number on
         # it -- falls back to invoice-number naming automatically otherwise,
@@ -919,6 +919,29 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
                 output_pdf_bytes=b"", reason_code=REASON_MISSING_COMPANY,
                 reason_detail=f"Missing company name (company={company!r})", provider=provider,
             )
+    elif has_person:
+        # A vendor invoice billed directly by an individual (a freelancer, a
+        # consultant, a personal-services contractor) with no company name
+        # at all and no literal "Labor" line item -- confirmed real case: a
+        # "Purchase Order / Check Request" form where the Vendor field is
+        # just a person's name for things like a storyboard artist's fee or
+        # a location consultation, not a business. Same "Last, First -
+        # Invoice Number" naming as the has_labor branch above uses for a
+        # person -- the PO-number naming choice doesn't apply here (it's a
+        # company-invoice-specific alternative), always by invoice number.
+        new_name = build_freelance_filename(has_person, last, first, has_company, company, invoice_number)
+        if not new_name:
+            return DocResult(
+                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=FOLDER_VENDOR,
+                output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+                reason_detail=f"Missing usable name (last={last!r}, first={first!r})", provider=provider,
+            )
+    else:
+        return DocResult(
+            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=FOLDER_VENDOR,
+            output_pdf_bytes=b"", reason_code=REASON_MISSING_COMPANY,
+            reason_detail="Could not identify a billing person or company on this invoice", provider=provider,
+        )
 
     if mismatch_detail:
         return DocResult(
@@ -1070,7 +1093,7 @@ NAMING_CONVENTIONS = [
             {"pattern": "PO{PO Number} - {Company}.pdf", "description": "Company invoice, named by PO number instead -- a user-chosen alternative (set once per batch), only used for an invoice that actually has a PO number printed on it"},
             {"pattern": "{Company} - receipt.pdf", "description": "Purchase receipt / order confirmation -- always by invoice number convention, not affected by the PO-number choice"},
             {"pattern": "{Hotel Name} - Folio {Number}.pdf", "description": "Hotel guest folio (number omitted if blank) -- not affected by the PO-number choice"},
-            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "description": "Invoice with a Labor/Delivery Labor line item, billed by a person -- not affected by the PO-number choice"},
+            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "description": "Billed directly by an individual with no company name at all (a freelancer/consultant invoice, or a Labor/Delivery Labor line item) -- always by invoice number, not affected by the PO-number choice"},
             {"pattern": "{Last}, {First} ({Company}) - Invoice {Number}.pdf", "description": "Same, when both a person and a company are named"},
         ],
         "options": [
