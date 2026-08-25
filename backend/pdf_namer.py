@@ -21,12 +21,14 @@ are:
 """
 
 import os
+import io
 import re
 import json
 import base64
 from dataclasses import dataclass, field
 
 import fitz  # PyMuPDF
+from PIL import Image, ImageOps
 
 INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _BUSINESS_WORDS = {
@@ -36,8 +38,6 @@ _BUSINESS_WORDS = {
 }
 _UPPERCASE_EXCEPTIONS = {"llc", "inc"}
 _NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"}
-
-_SUPPORTED_EXTENSIONS = (".pdf", ".png", ".jpg", ".jpeg")
 
 
 # ── Reason codes ──────────────────────────────────────────────────────────────
@@ -217,20 +217,68 @@ def build_vendor_system_prompt(batch: BatchContext) -> str:
 
 # ── PDF / image / vision helpers ──────────────────────────────────────────────
 
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()  # lets Image.open() read iPhone HEIC/HEIF photos too
+except ImportError:
+    pass
+
+
+def _flatten_to_rgb(img):
+    """PDF has no real transparency model -- a transparent PNG/GIF/etc.
+    composited straight in would render with an undefined (often black)
+    background in some viewers, so anything with real alpha gets flattened
+    onto white first. Everything else just gets a normal mode conversion."""
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        img = img.convert("RGBA")
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(img, mask=img.split()[-1])
+        return background
+    if img.mode != "RGB":
+        return img.convert("RGB")
+    return img
+
+
 def load_source_as_pdf_bytes(raw_bytes: bytes, filename: str) -> bytes:
-    """Returns valid single-document PDF bytes regardless of whether the
-    source was already a PDF or a PNG/JPG photo -- images get converted
-    (not just relabeled), so what eventually lands in the output zip is
-    always a real PDF, matching the existing tool's own convention that
-    output folders hold PDFs only."""
+    """Returns valid single-document PDF bytes regardless of source format.
+    A PDF (by extension or by content, in case someone renamed/mislabeled
+    it) passes through untouched. Anything else is handed to Pillow as an
+    image -- covers PNG/JPG same as before, plus BMP/GIF/TIFF/WEBP/HEIC-HEIF
+    (iPhone photos) and effectively any other format Pillow understands,
+    regardless of the file's own extension. A multi-page/multi-frame image
+    (e.g. a scanner's multi-page TIFF) becomes a multi-page PDF, feeding the
+    same downstream pipeline (including Residency's page-splitting) as a
+    native multi-page PDF would. Raises if the file is neither a valid PDF
+    nor an image Pillow can open -- the caller already treats that as an
+    unreadable file, so no separate extension whitelist is needed here."""
     ext = os.path.splitext(filename)[1].lower()
-    if ext == ".pdf":
+    if ext == ".pdf" or raw_bytes[:5] == b"%PDF-":
         return raw_bytes
-    filetype = "png" if ext == ".png" else "jpg"
-    doc = fitz.open(stream=raw_bytes, filetype=filetype)
-    pdf_bytes = doc.convert_to_pdf()
-    doc.close()
-    return pdf_bytes
+
+    try:
+        img = Image.open(io.BytesIO(raw_bytes))
+    except Exception:
+        # PIL's own exception message embeds a raw BytesIO object repr,
+        # which is meaningless in a user-facing reason_detail -- replace it
+        # with a clean one instead of letting that string surface.
+        raise ValueError(f"not a PDF and not a recognizable image format ({ext or 'no extension'})")
+    n_frames = getattr(img, "n_frames", 1)
+    frames = []
+    for i in range(n_frames):
+        img.seek(i)
+        # exif_transpose bakes in a phone photo's stored orientation flag
+        # before it ever reaches the vision-based rotation check, so that
+        # check only has to catch genuine scanner/photo mistakes, not every
+        # normally-oriented phone photo.
+        frame = ImageOps.exif_transpose(img.copy())
+        frames.append(_flatten_to_rgb(frame))
+
+    buf = io.BytesIO()
+    if len(frames) == 1:
+        frames[0].save(buf, format="PDF")
+    else:
+        frames[0].save(buf, format="PDF", save_all=True, append_images=frames[1:])
+    return buf.getvalue()
 
 
 def render_pdf_bytes_to_images_b64(pdf_bytes: bytes, dpi_scale: float = 2.0, max_pages: int = 3) -> list:

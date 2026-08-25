@@ -5586,6 +5586,9 @@ async def wizard01_conventions(x_app_secret: str = Header(default="")):
             "A sideways or upside-down page (a phone photo taken the wrong way, "
             "or a scanner-fed page) is automatically rotated upright in the "
             "output file -- applies to every document type, not just Residency.",
+            "Any image file is accepted, not just PDF/PNG/JPG -- BMP, GIF, TIFF, "
+            "WEBP, iPhone HEIC/HEIF photos, and more are all converted to a real "
+            "PDF automatically before naming/organizing.",
         ],
     }
 

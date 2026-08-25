@@ -199,22 +199,13 @@ async def run_job(job_id: str, uploaded: list[tuple[str, str]]) -> None:
 
     async def _process_one(file_id: str, original_filename: str):
         async with sem:
-            ext = os.path.splitext(original_filename)[1].lower()
             src_path = os.path.join(_uploads_dir(job_id), f"{file_id}__{original_filename}")
-            if ext not in pdf_namer._SUPPORTED_EXTENSIONS:
-                entry = {
-                    "file_id": uuid.uuid4().hex, "filename": original_filename,
-                    "bucket": pdf_namer.BUCKET_NOT_READABLE, "doc_type": "unknown",
-                    "new_name": None, "reason_code": "unreadable",
-                    "reason_detail": f"Unsupported file type ({ext or 'no extension'})",
-                }
-                await _update([entry])
-                try:
-                    _write_not_readable(job_id, src_path, original_filename)
-                except Exception:
-                    pass
-                return
-
+            # No extension whitelist here -- pdf_namer.load_source_as_pdf_bytes
+            # accepts a PDF or effectively any image format Pillow can open
+            # (PNG/JPG/BMP/GIF/TIFF/WEBP/HEIC-HEIF and more), regardless of
+            # the file's own extension. Anything genuinely unreadable raises
+            # there and lands in Not Readable via process_one_document's own
+            # exception handling below -- no separate check needed here.
             try:
                 with open(src_path, "rb") as f:
                     raw_bytes = f.read()
