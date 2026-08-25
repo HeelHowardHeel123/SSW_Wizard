@@ -50,6 +50,7 @@ REASON_UNCLASSIFIED     = "unclassified"      # readable, but not a known type
 REASON_UNREADABLE       = "unreadable"        # corrupt/blank, both providers failed
 REASON_MISSING_NAME     = "missing_name"
 REASON_MISSING_DATE     = "missing_date"
+REASON_MISSING_STATE    = "missing_state"
 REASON_MISSING_COMPANY  = "missing_company"
 REASON_SENDER_MISMATCH  = "sender_mismatch"
 REASON_LOW_CONFIDENCE   = "low_confidence"
@@ -114,9 +115,10 @@ Determine which type this is:
 Then extract:
 - last_name: the person's last/family name, exactly as printed, title case. For a driver's license/state ID this is field "1" (the first name line, e.g. "ALLEN"). For an I-9 this is "Last Name (Family Name)" in Section 1. If a generational suffix (Jr, Sr, II, III, 3rd, etc.) is printed as part of that same name, keep it attached to last_name (e.g. "Sanders Jr") -- never treat the suffix as first_name or as the whole last_name by itself.
 - first_name: the person's FIRST/given name ONLY -- never include a middle name. For a driver's license/state ID, field "2" often has first + middle name together (e.g. "CAROLINE ROSE") -- use only the first word ("Caroline"). For an I-9 use "First Name (Given Name)" in Section 1.
+- state: ONLY for drivers_license or state_id, the 2-letter issuing state abbreviation exactly as printed on the card (e.g. "IL", "CA") -- this is usually part of the header ("ILLINOIS DRIVER LICENSE") or printed near the state seal. Empty string for i9 or unknown.
 - expiration_date: ONLY for drivers_license or state_id, in exactly MM/DD/YYYY as printed next to "EXP" or field "4b". Empty string for i9 or unknown.
 
-Return ONLY a JSON object with exactly these keys: {"document_type": "...", "last_name": "...", "first_name": "...", "expiration_date": "..."}
+Return ONLY a JSON object with exactly these keys: {"document_type": "...", "last_name": "...", "first_name": "...", "state": "...", "expiration_date": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
 DIVERSITY_SYSTEM_PROMPT = """You are analyzing an Illinois Department of Commerce & Economic Opportunity (DCEO) "Illinois Film Tax Credit Tracking Sheet" submitted by a film production crew member.
@@ -366,12 +368,14 @@ def name_looks_like_person(text: str) -> bool:
 
 
 def reformat_date_for_filename(mmddyyyy: str) -> str:
+    """MM/DD/YYYY -> YYYY_MM_DD, for the Driver's License / State ID
+    filename pattern: "Last, First (ST) YYYY_MM_DD.pdf"."""
     s = (mmddyyyy or "").strip()
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
     if m:
         mm, dd, yyyy = m.groups()
-        return f"{int(mm):02d}-{int(dd):02d}-{yyyy}"
-    return s.replace("/", "-")
+        return f"{yyyy}_{int(mm):02d}_{int(dd):02d}"
+    return s.replace("/", "_")
 
 
 def split_person_name(full_name: str):
@@ -389,15 +393,16 @@ def split_person_name(full_name: str):
     return full_name, ""
 
 
-def build_residency_filename(doc_type: str, last: str, first: str, exp_date: str):
+def build_residency_filename(doc_type: str, last: str, first: str, state: str, exp_date: str):
     last_s, first_s = sanitize_component(proper_case(last)), sanitize_component(proper_case(first))
     if not last_s or not first_s:
         return None
     if doc_type in ("drivers_license", "state_id"):
+        state_s = sanitize_component((state or "").strip().upper())
         exp_s = sanitize_component(reformat_date_for_filename(exp_date))
-        if not exp_s:
+        if not state_s or not exp_s:
             return None
-        return f"{last_s}, {first_s} - {exp_s}.pdf"
+        return f"{last_s}, {first_s} ({state_s}) {exp_s}.pdf"
     if doc_type == "i9":
         return f"{last_s}, {first_s} - I9.pdf"
     return None
@@ -513,14 +518,21 @@ async def _extract_residency(images_b64, openai_client, anthropic_client, loop):
         )
 
     last, first = parsed.get("last_name", ""), parsed.get("first_name", "")
+    state = parsed.get("state", "")
     exp_date = parsed.get("expiration_date", "")
-    new_name = build_residency_filename(doc_type, last, first, exp_date)
+    new_name = build_residency_filename(doc_type, last, first, state, exp_date)
     if not new_name:
-        missing = REASON_MISSING_DATE if doc_type in ("drivers_license", "state_id") and not exp_date else REASON_MISSING_NAME
+        if not last or not first:
+            missing = REASON_MISSING_NAME
+        elif doc_type in ("drivers_license", "state_id") and not state:
+            missing = REASON_MISSING_STATE
+        else:
+            missing = REASON_MISSING_DATE
         return DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="residency", subfolder=FOLDER_RESIDENCY,
             output_pdf_bytes=b"", reason_code=missing,
-            reason_detail=f"Missing/unreadable name or expiration date (type={doc_type}, last={last!r}, first={first!r}, exp={exp_date!r})",
+            reason_detail=(f"Missing/unreadable name, state, or expiration date "
+                            f"(type={doc_type}, last={last!r}, first={first!r}, state={state!r}, exp={exp_date!r})"),
             provider=provider,
         )
     return DocResult(
@@ -732,7 +744,7 @@ NAMING_CONVENTIONS = [
         "type_id": "residency",
         "label": "Residency (Driver's License / State ID / I-9)",
         "patterns": [
-            {"pattern": "{Last}, {First} - {MM-DD-YYYY}.pdf", "description": "Driver's License / State ID, named by expiration date"},
+            {"pattern": "{Last}, {First} ({State}) {YYYY_MM_DD}.pdf", "description": "Driver's License / State ID, named by issuing state + expiration date"},
             {"pattern": "{Last}, {First} - I9.pdf", "description": "USCIS Form I-9"},
         ],
     },
