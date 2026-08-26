@@ -36,7 +36,7 @@ _BUSINESS_WORDS = {
     "production", "company", "co", "ltd", "llp", "enterprises", "group",
     "studios", "studio", "media", "films", "film", "pictures", "entertainment",
 }
-_UPPERCASE_EXCEPTIONS = {"llc", "inc"}
+_UPPERCASE_EXCEPTIONS = {"llc", "inc", "caps"}
 _NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"}
 
 
@@ -250,8 +250,8 @@ CREW_PAYROLL_SYSTEM_PROMPT = """You are analyzing a Crew Payroll document submit
 
 Determine:
 - doc_kind: "invoice" for case 1, "fringe_report" for case 2, "payroll_register" for case 3.
-- company_name: ONLY for doc_kind "invoice" -- the payroll company's own short/common name, from its own letterhead/remittance information (e.g. "Remit Payment To: New C.A.P.S. LLC", or "TakeOne Network Corp. DBA Wrapbook") -- normalize it the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc"/"Corp", drop a "DBA" business-name wrapper down to just the brand name that follows it, and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS", "TakeOne Network Corp. DBA Wrapbook" -> "Wrapbook"). Never the production company being billed (the "Bill To"/"To" party). Empty string for the other two doc_kinds.
-- invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed, from whichever field the payroll company happens to use for it ("Invoice Number," "Payroll ID," etc.). Empty string if none is printed, or for the other two doc_kinds.
+- company_name: ONLY for doc_kind "invoice" -- the payroll company's own short/common name. Prefer its own prominent header/logo/address block (e.g. the big "THE TEAM COMPANIES" logo and "The TEAM Companies, 2300 Empire Avenue..." address on its own invoice) over a smaller "Employer of Record" field elsewhere on the same page, which can name a different, less-recognizable legal entity the payroll company processes this particular job's checks through (e.g. "Talent, Ent. & Media Svcs, LLC" on that same Team Companies invoice) -- the header/letterhead name is the one to use, not the Employer of Record. Normalize whichever name you use the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc"/"Corp", drop a "DBA" business-name wrapper down to just the brand name that follows it, and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS", "TakeOne Network Corp. DBA Wrapbook" -> "Wrapbook"). Never the production company being billed (the "Bill To"/"To" party). Empty string for the other two doc_kinds.
+- invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed. Prefer a field literally labeled "Invoice Number"/"Invoice #" when one is present; only fall back to another field the payroll company uses instead (e.g. "Payroll ID") when no "Invoice Number" field exists at all. Never the internal "Invoice Group," "Batch," "Client #," or Project/Job number. Empty string if none is printed, or for the other two doc_kinds.
 
 Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register", "company_name": "...", "invoice_number": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
@@ -732,22 +732,6 @@ def build_vendor_invoice_filename(company: str, invoice_number: str):
     return f"{company_s} - {invoice_suffix}.pdf"
 
 
-def build_crew_payroll_invoice_filename(company: str, invoice_number: str):
-    """Same shape as build_vendor_invoice_filename, but the payroll
-    company's name is always rendered fully uppercase rather than
-    proper-cased -- confirmed by two independent real examples ("New
-    C.A.P.S. LLC" -> "CAPS - Invoice ....pdf", "TakeOne Network Corp. DBA
-    Wrapbook" -> "WRAPBOOK - Invoice ....pdf") where the source name isn't
-    even an acronym in the second case, so this appears to be a naming
-    convention specific to this folder rather than an acronym-only rule."""
-    company_s = sanitize_component(company).upper()
-    if not company_s:
-        return None
-    num_s = sanitize_component((invoice_number or "").strip())
-    invoice_suffix = f"Invoice {num_s}" if num_s else "Invoice"
-    return f"{company_s} - {invoice_suffix}.pdf"
-
-
 def build_vendor_invoice_filename_by_po(company: str, po_number: str):
     """The alternate Vendor Invoice naming convention: "PO{number} -
     {Vendor Name}.pdf". Only usable when a PO number was actually printed
@@ -1070,7 +1054,7 @@ async def _extract_crew_payroll(images_b64, openai_client, anthropic_client, loo
 
     company = parsed.get("company_name", "")
     invoice_number = parsed.get("invoice_number", "")
-    new_name = build_crew_payroll_invoice_filename(company, invoice_number)
+    new_name = build_vendor_invoice_filename(company, invoice_number)
     if not new_name:
         return DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
@@ -1396,7 +1380,7 @@ NAMING_CONVENTIONS = [
         "type_id": "crew_payroll",
         "label": "Crew Payroll",
         "patterns": [
-            {"pattern": "{COMPANY} - Invoice {Number}.pdf", "folder": "Crew Payroll", "description": "A payroll company's own consolidated invoice for one batch of crew wages (Invoice Fee Summary / Fringe Recap Report / Wage-Payroll Register / Payroll Check Register pages) -- named by the payroll company's short/common name IN ALL CAPS and its own batch reference number (labeled \"Invoice Number\", \"Payroll ID\", or similar depending on the provider), e.g. \"CAPS - Invoice 1001430894.pdf\" for \"New C.A.P.S. LLC\", \"WRAPBOOK - Invoice 00722447.pdf\" for \"TakeOne Network Corp. DBA Wrapbook\" -- regardless of how many individual crew members' pay it covers"},
+            {"pattern": "{Company} - Invoice {Number}.pdf", "folder": "Crew Payroll", "description": "A payroll company's own consolidated invoice for one batch of crew wages (Invoice Fee Summary / Fringe Recap Report / Wage-Payroll Register / Payroll Check Register pages) -- named by the payroll company's own short/common name (from its letterhead, not a possibly-different \"Employer of Record\" field) and its own batch reference number, preferring a literal \"Invoice Number\" field when present and otherwise whatever field the provider uses instead (e.g. \"Payroll ID\"), e.g. \"CAPS - Invoice 1001430894.pdf\", \"Wrapbook - Invoice 00722447.pdf\", \"The Team Companies - Invoice 26218283.pdf\", \"Revolution Entertainment Services - Invoice A23720A0136.pdf\" -- regardless of how many individual crew members' pay it covers"},
             {"pattern": "Fringe Report.pdf", "folder": "Crew Payroll", "description": "A whole-project aggregate table of every crew member's wages/fringes/benefits, not tied to one batch or invoice"},
             {"pattern": "Payroll Register.pdf", "folder": "Crew Payroll", "description": "A whole-project running payroll ledger covering every payment across the full project date range, not tied to one batch or invoice"},
         ],
