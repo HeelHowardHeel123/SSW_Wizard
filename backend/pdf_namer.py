@@ -170,6 +170,8 @@ VENDOR_SYSTEM_PROMPT_TEMPLATE = """You are analyzing a vendor document submitted
 {prodco_line}
 Some of these PDFs begin with an internal Purchase Order cover sheet (a page showing "Purchase Order: PO-XXXXXXX", a Subsidiary line, and a Vendor/Accounts/Description/Amount summary) before the vendor's own actual invoice/receipt/folio appears on a later page. When this cover sheet is present, completely ignore its "Purchase Order" number and its summary line items for every field below EXCEPT po_number itself -- always read the ACTUAL vendor document (the page(s) that look like a real invoice, receipt, or folio) for every other field, never the internal PO cover sheet.
 
+You may be looking at a multi-page packet rather than a single document -- e.g. an invoice page, then an internal PO cover sheet, then a Form W-9, then a payment-confirmation/check page, in any order. Read every page before answering. A later page in the packet is often the most reliable place to find the actual billing individual's legal name when the invoice itself only shows a business/loan-out/DBA/studio name: a W-9 always states it on line 1 ("Name of entity/individual" -- the disregarded/business name goes on line 2 instead), and a payment confirmation or check memo page will sometimes spell it out directly as "[Person Name] dba [Company Name]".
+
 - po_number: the internal Purchase Order number/code from that cover sheet, if one is present anywhere in this PDF (e.g. "2528-06" from "Purchase Order: PO-2528-06" -- strip a leading "PO"/"PO-" prefix, keep just the number/code itself). Empty string if no PO cover sheet is present.
 
 FIRST, determine which of these three this document is:
@@ -187,7 +189,7 @@ FOR A HOTEL FOLIO ONLY:
 - folio_number: the number printed specifically next to a "Folio No." / "Folio #" label. Empty string if that field is blank or not shown -- do NOT substitute a confirmation number, reservation number, or room number instead, even if one is visible nearby.
 
 FOR A RECEIPT OR VENDOR INVOICE, identify the BILLER -- the individual and/or company actually issuing this document and being paid, from its own header/logo/contact-info area. NEVER use the "Bill To"/client/production-company block for these fields, no matter what it's labeled, and never use the internal PO cover sheet's "Subsidiary" or "Vendor" fields if a more specific header appears on the actual document itself.
-- has_person_name: true ONLY if an individual person's own name is presented as who this document is FROM (e.g. it's headed with a person's own name, made out personally, or says "make checks payable to [person]"). false otherwise.
+- has_person_name: true if an individual person's own name is presented as who this document is FROM -- either directly (it's headed with a person's own name, made out personally, or says "make checks payable to [person]"), OR indirectly, when the invoice itself is headed only with a business/loan-out/DBA/studio name (e.g. "Location Media LLC", "Alexa Viscius Studio") but another page in this same packet (a W-9's line 1, a "[Person] dba [Company]" payment-confirmation page, a Fed ID/SS contact line) identifies the individual behind it. false only if no individual can be identified anywhere in the packet.
 - last_name / first_name: that person's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
 - has_company_name: true if a business name is shown as the billing entity/merchant.
 - company_name: that company's name, exactly as printed, ONLY if has_company_name is true. Empty string otherwise.
@@ -195,7 +197,7 @@ FOR A RECEIPT OR VENDOR INVOICE, identify the BILLER -- the individual and/or co
 
 FOR A VENDOR INVOICE ONLY (skip these two for a receipt):
 - invoice_number: the vendor's OWN invoice number, exactly as printed on the actual invoice itself (e.g. "1080" from "Invoice no.: 1080", "CHIC-26-000208" from "Invoice CHIC-26-000208"). This is never the internal "PO-XXXXXXX" purchase order number from a cover sheet. Empty string if the actual invoice has no invoice number printed anywhere.
-- is_freelance_crew_labor: true if this document, in substance, is one individual crew member/freelancer billing the production for their own personal time/labor on this shoot -- judge this by actually examining the document's content and structure, not by searching for any one specific word. Signals that this IS freelance crew labor (any one can be enough, and none of them require the literal word "Labor" to appear anywhere): it is titled or functions as a "Crew Invoice" or crew timesheet; it shows a Social Security Number instead of (or alongside) a business Tax ID/EIN; it lists a crew position/job title on set (e.g. PA, Art Director, Line Producer, Stills, Wardrobe, Grip, HMU/HMUA, Production Coordinator, Set Dresser, etc.); it bills a day rate or hourly rate tied to actual hours/days worked, with prep/shoot/wrap-style time tracking, call/wrap times, or overtime; it carries a "Sub-contractor Signature" and/or production-manager sign-off line. This still counts as true even when the invoice is issued through the person's own loan-out/DBA/LLC/company name rather than their personal name -- what matters is that the substance of the charges is one individual's personal labor/time on this shoot, e.g. "Art Director, 8 days" or "Line Producer Prep/Wrap + Shoot Labor" invoiced through a company like "MSDP Inc." still counts as true. Set false for a company selling goods, renting equipment, providing a venue, or billing a flat vendor service that is not one individual's time/labor on set (even if that service happens to be described using the word "labor" loosely, e.g. a generic "installation labor" line on an equipment-rental invoice from an equipment company is NOT freelance crew labor).
+- is_freelance_crew_labor: true if this document, in substance, is one individual production professional billing the production for their own personal service/time on this shoot -- not limited to below-the-line "crew" job titles; a Director's fee, a Photographer's creative fee, or a Wardrobe Stylist's day rate all count exactly the same way. Judge this by actually examining the document's content and structure, not by searching for any one specific word. Signals that this IS freelance labor (any one can be enough, and none of them require the literal word "Labor" to appear anywhere): it is titled or functions as a "Crew Invoice" or crew timesheet; it shows a Social Security Number instead of (or alongside) a business Tax ID/EIN; it names a specific person's role/title on this production (e.g. PA, Art Director, Line Producer, Stills, Wardrobe, Grip, HMU/HMUA, Production Coordinator, Set Dresser, Director, Photographer, Stylist, Location Sound Mixer, Storyboard Artist, etc.); it bills a day rate, hourly rate, or flat creative/service fee tied to this specific shoot, with prep/shoot/wrap-style time tracking, call/wrap times, or overtime; it carries a "Sub-contractor Signature" and/or production-manager sign-off line. This still counts as true even when the invoice is issued through the person's own loan-out/DBA/LLC/studio name rather than their personal name -- what matters is that the substance of the charges is one individual's personal service/time on this shoot, e.g. "Art Director, 8 days" through "MSDP Inc.", a "Director Fee" through "Thou Swell Thou Witty, Inc.", or a "Photographer Creative + Usage Fee" through "Alexa Viscius Studio" all still count as true. A single freelancer's invoice commonly bundles in a few incidental line items alongside their main fee -- their OWN kit/equipment/gear rental (e.g. a sound mixer's own recording kit, a photographer's own camera gear), reimbursed travel/meal/parking/supply expenses, film processing, or a helper/assistant they personally brought -- none of that disqualifies it; the whole invoice is still that one person's freelance labor. Set false only for a genuine third-party vendor business -- a dedicated equipment rental house, prop house, venue, or goods supplier -- invoicing the production for goods/services that are not tied to one specific billing individual's personal day-rate/creative-service work on this shoot.
 
 Return ONLY a JSON object with exactly these keys: {"po_number": "...", "is_hotel_folio": true or false, "hotel_name": "...", "folio_number": "...", "is_receipt": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "has_company_name": true or false, "company_name": "...", "bill_to_name": "...", "invoice_number": "...", "is_freelance_crew_labor": true or false}
 No explanation. No markdown. No code fences. JSON object only."""
@@ -610,6 +612,13 @@ def build_diversity_filename(last: str, first: str):
 
 
 def build_freelance_filename(has_person: bool, last: str, first: str, has_company: bool, company: str, invoice_number: str):
+    # A freelance crew invoice is always named by the individual alone, even
+    # when it's billed through their own loan-out/DBA/LLC/studio name (e.g.
+    # "NPD Media (Nathan Destro)", "Location Media LLC", "Lavi Toma
+    # Styling", "Alexa Viscius Studio") -- confirmed by real reference
+    # examples that drop the company entirely from the filename in every
+    # such case. The company name only gets used as a last resort when no
+    # person name could be extracted at all.
     last_s = sanitize_component(proper_case(last)) if has_person else ""
     first_s = sanitize_component(proper_case(first)) if has_person else ""
     company_s = sanitize_component(proper_case(company)) if has_company else ""
@@ -620,8 +629,6 @@ def build_freelance_filename(has_person: bool, last: str, first: str, has_compan
         return None
     if has_company and not company_s:
         return None
-    if has_person and has_company:
-        return f"{last_s}, {first_s} ({company_s}) - {invoice_suffix}.pdf"
     if has_person:
         return f"{last_s}, {first_s} - {invoice_suffix}.pdf"
     if has_company:
@@ -1058,7 +1065,14 @@ async def process_one_document(
             result.output_pdf_bytes = pdf_bytes
             results = [result]
         elif family == "vendor":
-            result = await _extract_vendor(classify_images, openai_client, anthropic_client, loop, batch)
+            # Re-render at a higher page cap than the classify pass -- a
+            # vendor submission is often a packet (invoice + an internal PO
+            # cover sheet + a W-9 + a payment confirmation), and the page
+            # that actually reveals the biller's identity (e.g. a W-9's
+            # "Name of entity/individual" line, or "dba" wording on a
+            # payment-confirmation page) can land past page 3.
+            vendor_images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_PAGES_TO_INSPECT)
+            result = await _extract_vendor(vendor_images or classify_images, openai_client, anthropic_client, loop, batch)
             result.output_pdf_bytes = pdf_bytes
             results = [result]
         else:
@@ -1110,8 +1124,7 @@ NAMING_CONVENTIONS = [
             {"pattern": "{Company} - receipt.pdf", "folder": "Vendor Invoices", "description": "Purchase receipt / order confirmation -- always by invoice number convention, not affected by the PO-number choice"},
             {"pattern": "{Hotel Name} - Folio {Number}.pdf", "folder": "Vendor Invoices", "description": "Hotel guest folio (number omitted if blank) -- not affected by the PO-number choice"},
             {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Vendor Invoices", "description": "Billed directly by an individual with no company name at all and not judged to be freelance crew labor (a freelancer/consultant invoice, e.g. a location consultation fee) -- always by invoice number, not affected by the PO-number choice"},
-            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Invoice judged (by content, not a keyword match) to represent one crew member's own personal labor/time on the shoot -- e.g. a crew timesheet, a day-rate invoice with prep/shoot/wrap hours -- billed by a person, gets its own folder rather than sitting alongside ordinary vendor invoices"},
-            {"pattern": "{Last}, {First} ({Company}) - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Same, when the crew member bills through their own loan-out/DBA company name as well as their personal name"},
+            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Invoice judged (by content, not a keyword match) to represent one individual's own personal labor/service on this shoot -- e.g. a crew timesheet, a day-rate invoice with prep/shoot/wrap hours, or a Director/Photographer/Stylist fee -- always named by the person alone, even when billed through their own loan-out/DBA/LLC/studio name, gets its own folder rather than sitting alongside ordinary vendor invoices"},
         ],
         "options": [
             {
