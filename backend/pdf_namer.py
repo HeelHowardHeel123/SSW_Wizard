@@ -36,7 +36,7 @@ _BUSINESS_WORDS = {
     "production", "company", "co", "ltd", "llp", "enterprises", "group",
     "studios", "studio", "media", "films", "film", "pictures", "entertainment",
 }
-_UPPERCASE_EXCEPTIONS = {"llc", "inc"}
+_UPPERCASE_EXCEPTIONS = {"llc", "inc", "caps"}
 _NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"}
 
 
@@ -66,6 +66,7 @@ FOLDER_VENDOR     = "Vendor Invoices"
 FOLDER_FREELANCE  = "Freelance Crew Invoice"
 FOLDER_PETTY_CASH = "Petty Cash"
 FOLDER_PRODCC    = "ProdCC"
+FOLDER_CREW_PAYROLL = "Crew Payroll"
 FOLDER_NOT_READABLE = "Not Readable"
 
 
@@ -110,12 +111,13 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 
 - "residency" -- a Driver's License, a State ID card, or a USCIS Form I-9 (Employment Eligibility Verification).
 - "diversity" -- an Illinois Department of Commerce & Economic Opportunity (DCEO) "Illinois Film Tax Credit Tracking Sheet."
-- "vendor" -- a hotel guest folio, a purchase receipt/order confirmation, or a formal invoice (vendor or freelance) billing the production for goods, services, or labor.
+- "vendor" -- a hotel guest folio, a purchase receipt/order confirmation, or a formal invoice (vendor or freelance) billing the production for goods, services, or labor. Never a payroll company's own invoice -- see "crew_payroll" below.
 - "petty_cash" -- ANY petty cash document: a "Petty Cash Summary"/"Summary of Petty Cash Expenses" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log) -- if it's this kind of form at all, it's petty_cash, full stop, regardless of which way its balance-due settlement happens to run; an internal cash-advance Purchase Order that states its purpose is Petty Cash -- however that's expressed on this particular PO template: a Vendor field literally reading "Petty Cash"/"Petty Cash Advance", a "FOR" or "Purpose" field saying "PETTY CASH", or a line-item description literally reading "Petty Cash" (e.g. "PC / Petty Cash / $3,000.00") -- handing a lump sum float to a named custodian; a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export); OR just a bare stack of purchase receipts with NO cover sheet, PO, or summary form of any kind in front of them identifying whose batch this is -- an uncovered stack of receipts defaults to petty_cash too. Never "vendor" for any of these, even the PO-cover-sheet variant -- the word "Petty Cash" appearing anywhere on the PO as its stated reason is the deciding signal, regardless of which field it's in or what the rest of that PO template looks like.
 - "prodcc" -- a Production Credit Card (ProdCC) reimbursement: the crew member paid with their OWN money/personal card and the production owes THEM back. This is normally identifiable ONLY by an explicit cover sheet clearly built for that purpose -- either an internal Purchase Order-style request where the Vendor field names the crew member directly followed by wording like "- CC Reimbursement"/"- CC Reimb" (never "Petty Cash"), or a human-made cover sheet (often an Excel printout) that itself is specifically about a credit card reimbursement. NEVER classify a "Petty Cash Summary"/"Summary of Petty Cash Expenses" form as prodcc, even if its balance-due line seems to run the "company owes the employee" direction -- that form always means petty_cash regardless.
+- "crew_payroll" -- a payroll company's own consolidated invoice to the production for crew wages, covering one or more crew members' pay for a given batch/work-date period. Identified by payroll-report page types like "Invoice Fee Summary," "Fringe Recap Report," "Wage/Payroll Register," or "Payroll Check Register," and payroll-specific line items (Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, Handling Fees) -- this is the payroll processor itself billing the production (e.g. "New C.A.P.S. LLC"/"Remit Payment To: ..."), never a single crew member's own invoice.
 - "unknown" -- anything else, or if you cannot confidently tell from what's visible.
 
-Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "unknown"}
+Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "crew_payroll" | "unknown"}
 No explanation. No markdown. No code fences. JSON object only."""
 
 ORIENTATION_PROMPT = """You are looking at page images from a single PDF document -- a scan or phone photo submitted as part of a film/TV production crew paperwork batch. For each page, determine how many degrees it needs to be rotated CLOCKWISE for its content (text, photos) to appear upright/right-side-up. Common causes: a phone photo taken in landscape when the document is portrait (or vice versa), or a scanner fed the page sideways or upside-down.
@@ -236,6 +238,15 @@ Determine:
 - last_name / first_name: that crew member's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
 
 Return ONLY a JSON object with exactly these keys: {"has_person_name": true or false, "last_name": "...", "first_name": "..."}
+No explanation. No markdown. No code fences. JSON object only."""
+
+CREW_PAYROLL_SYSTEM_PROMPT = """You are analyzing a Crew Payroll document submitted as part of a film/TV production's Accounts Payable packet -- a payroll company's own consolidated invoice to the production for crew wages, covering one or more crew members' pay for a given batch/work-date period. It typically bundles several report pages together: an Invoice summary, an "Invoice Fee Summary," a "Fringe Recap Report," a "Wage/Payroll Register" (per-employee paystub-style breakdown), and/or a "Payroll Check Register" -- with line items like Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, and Handling Fees. This is the payroll processor itself billing the production, not any one crew member's own invoice -- ignore individual employee names on later pages entirely, they don't matter for naming this file.
+
+Extract:
+- company_name: the payroll company's own short/common name, from its own letterhead/remittance information (e.g. a "Remit Payment To: New C.A.P.S. LLC" line) -- normalize it the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc", and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS"). Never the production company being billed (the "Bill To" party).
+- invoice_number: the payroll company's OWN invoice number (e.g. "1001430894" from "Invoice Number: 1001430894"), exactly as printed. This is never the internal "Invoice Group," "Batch," or Project/Job number. Empty string if none is printed.
+
+Return ONLY a JSON object with exactly these keys: {"company_name": "...", "invoice_number": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -1010,6 +1021,33 @@ async def _extract_prodcc(images_b64, openai_client, anthropic_client, loop):
     )
 
 
+async def _extract_crew_payroll(images_b64, openai_client, anthropic_client, loop):
+    user_text = "Extract the fields described in the system prompt from this Crew Payroll document."
+    parsed, provider = await classify_document(
+        images_b64, user_text, CREW_PAYROLL_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
+    )
+    if parsed is None:
+        return DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="crew_payroll", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
+            reason_detail="Could not read document (both providers failed)", provider=provider,
+        )
+
+    company = parsed.get("company_name", "")
+    invoice_number = parsed.get("invoice_number", "")
+    new_name = build_vendor_invoice_filename(company, invoice_number)
+    if not new_name:
+        return DocResult(
+            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
+            output_pdf_bytes=b"", reason_code=REASON_MISSING_COMPANY,
+            reason_detail=f"Could not identify the payroll company (company={company!r})", provider=provider,
+        )
+    return DocResult(
+        bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
+        output_pdf_bytes=b"", new_filename=new_name, provider=provider,
+    )
+
+
 async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, batch: BatchContext):
     user_text = "Extract the fields described in the system prompt from this vendor document."
     system_prompt = build_vendor_system_prompt(batch)
@@ -1235,6 +1273,10 @@ async def process_one_document(
             result = await _extract_prodcc(classify_images, openai_client, anthropic_client, loop)
             result.output_pdf_bytes = pdf_bytes
             results = [result]
+        elif family == "crew_payroll":
+            result = await _extract_crew_payroll(classify_images, openai_client, anthropic_client, loop)
+            result.output_pdf_bytes = pdf_bytes
+            results = [result]
         else:
             results = [DocResult(
                 bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
@@ -1312,7 +1354,14 @@ NAMING_CONVENTIONS = [
         "type_id": "prodcc",
         "label": "ProdCC (Production Credit Card Reimbursement)",
         "patterns": [
-            {"pattern": "{Last}, {First} - CC Reimb.pdf", "folder": "ProdCC", "description": "A crew member reimbursed for expenses paid with their own money/personal card -- the reverse of Petty Cash. Same two template shapes as Petty Cash (a \"[Name] - CC Reimbursement\" PO cover sheet, or a \"Summary of Petty Cash Expenses\"-style form), distinguished by content (a \"Balance Due Employee\" amount owed to them, no cash advance received), never by the form's title alone"},
+            {"pattern": "{Last}, {First} - CC Reimb.pdf", "folder": "ProdCC", "description": "A crew member reimbursed for expenses paid with their own money/personal card -- the reverse of Petty Cash. Identified only by an explicit cover sheet built for that purpose: a \"[Name] - CC Reimbursement\" PO cover sheet, or a human-made (often Excel) cover sheet specifically about a card reimbursement -- never a \"Petty Cash Summary\" form, which is always Petty Cash regardless of its balance-due direction"},
+        ],
+    },
+    {
+        "type_id": "crew_payroll",
+        "label": "Crew Payroll",
+        "patterns": [
+            {"pattern": "{Company} - Invoice {Number}.pdf", "folder": "Crew Payroll", "description": "A payroll company's own consolidated invoice to the production for crew wages (Invoice Fee Summary / Fringe Recap Report / Wage-Payroll Register / Payroll Check Register pages) -- named by the payroll company's short/common name and its own invoice number, e.g. \"CAPS - Invoice 1001430894.pdf\" for \"New C.A.P.S. LLC\", regardless of how many individual crew members' pay it covers"},
         ],
     },
 ]
