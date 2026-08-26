@@ -62,7 +62,7 @@ BUCKET_NOT_READABLE     = "not_readable"
 
 FOLDER_RESIDENCY  = "Residency"
 FOLDER_DIVERSITY  = "Diversity Form"
-FOLDER_VENDOR     = "Vendor"
+FOLDER_VENDOR     = "Vendor Invoices"
 FOLDER_NOT_READABLE = "Not Readable"
 
 
