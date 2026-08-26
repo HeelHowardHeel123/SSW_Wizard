@@ -36,7 +36,7 @@ _BUSINESS_WORDS = {
     "production", "company", "co", "ltd", "llp", "enterprises", "group",
     "studios", "studio", "media", "films", "film", "pictures", "entertainment",
 }
-_UPPERCASE_EXCEPTIONS = {"llc", "inc", "caps"}
+_UPPERCASE_EXCEPTIONS = {"llc", "inc"}
 _NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"}
 
 
@@ -114,7 +114,7 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 - "vendor" -- a hotel guest folio, a purchase receipt/order confirmation, or a formal invoice (vendor or freelance) billing the production for goods, services, or labor. Never a payroll company's own invoice -- see "crew_payroll" below.
 - "petty_cash" -- ANY petty cash document: a "Petty Cash Summary"/"Summary of Petty Cash Expenses" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log) -- if it's this kind of form at all, it's petty_cash, full stop, regardless of which way its balance-due settlement happens to run; an internal cash-advance Purchase Order that states its purpose is Petty Cash -- however that's expressed on this particular PO template: a Vendor field literally reading "Petty Cash"/"Petty Cash Advance", a "FOR" or "Purpose" field saying "PETTY CASH", or a line-item description literally reading "Petty Cash" (e.g. "PC / Petty Cash / $3,000.00") -- handing a lump sum float to a named custodian; a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export); OR just a bare stack of purchase receipts with NO cover sheet, PO, or summary form of any kind in front of them identifying whose batch this is -- an uncovered stack of receipts defaults to petty_cash too. Never "vendor" for any of these, even the PO-cover-sheet variant -- the word "Petty Cash" appearing anywhere on the PO as its stated reason is the deciding signal, regardless of which field it's in or what the rest of that PO template looks like.
 - "prodcc" -- a Production Credit Card (ProdCC) reimbursement: the crew member paid with their OWN money/personal card and the production owes THEM back. This is normally identifiable ONLY by an explicit cover sheet clearly built for that purpose -- either an internal Purchase Order-style request where the Vendor field names the crew member directly followed by wording like "- CC Reimbursement"/"- CC Reimb" (never "Petty Cash"), or a human-made cover sheet (often an Excel printout) that itself is specifically about a credit card reimbursement. NEVER classify a "Petty Cash Summary"/"Summary of Petty Cash Expenses" form as prodcc, even if its balance-due line seems to run the "company owes the employee" direction -- that form always means petty_cash regardless.
-- "crew_payroll" -- a payroll company's own consolidated invoice to the production for crew wages, covering one or more crew members' pay for a given batch/work-date period. Identified by payroll-report page types like "Invoice Fee Summary," "Fringe Recap Report," "Wage/Payroll Register," or "Payroll Check Register," and payroll-specific line items (Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, Handling Fees) -- this is the payroll processor itself billing the production (e.g. "New C.A.P.S. LLC"/"Remit Payment To: ..."), never a single crew member's own invoice.
+- "crew_payroll" -- any payroll-company document for the production's crew as a whole (never a single crew member's own invoice): a payroll company's own consolidated invoice for one batch of crew wages (e.g. "New C.A.P.S. LLC," "TakeOne Network Corp. DBA Wrapbook") -- identified by payroll-report page types like "Invoice Fee Summary," "Fringe Recap Report," "Wage/Payroll Register," or "Payroll Check Register," and payroll-specific line items (Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, Handling Fees); OR a whole-project aggregate export covering every crew member at once for the full project date range, not tied to any one batch/invoice -- a "Fringe Report" (a big table, one row per crew member, of wages/fringes/benefits) or a "Payroll Register" (a running ledger of every payment across the whole project, often hundreds of pages).
 - "unknown" -- anything else, or if you cannot confidently tell from what's visible.
 
 Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "crew_payroll" | "unknown"}
@@ -240,13 +240,20 @@ Determine:
 Return ONLY a JSON object with exactly these keys: {"has_person_name": true or false, "last_name": "...", "first_name": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
-CREW_PAYROLL_SYSTEM_PROMPT = """You are analyzing a Crew Payroll document submitted as part of a film/TV production's Accounts Payable packet -- a payroll company's own consolidated invoice to the production for crew wages, covering one or more crew members' pay for a given batch/work-date period. It typically bundles several report pages together: an Invoice summary, an "Invoice Fee Summary," a "Fringe Recap Report," a "Wage/Payroll Register" (per-employee paystub-style breakdown), and/or a "Payroll Check Register" -- with line items like Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, and Handling Fees. This is the payroll processor itself billing the production, not any one crew member's own invoice -- ignore individual employee names on later pages entirely, they don't matter for naming this file.
+CREW_PAYROLL_SYSTEM_PROMPT = """You are analyzing a Crew Payroll document submitted as part of a film/TV production's Accounts Payable packet -- always something a payroll company (e.g. "New C.A.P.S. LLC," "TakeOne Network Corp. DBA Wrapbook") produced for the production's crew as a whole, never any one crew member's own invoice. Ignore individual employee names anywhere in the document entirely -- they never matter for naming this file. It will be one of:
 
-Extract:
-- company_name: the payroll company's own short/common name, from its own letterhead/remittance information (e.g. a "Remit Payment To: New C.A.P.S. LLC" line) -- normalize it the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc", and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS"). Never the production company being billed (the "Bill To" party).
-- invoice_number: the payroll company's OWN invoice number (e.g. "1001430894" from "Invoice Number: 1001430894"), exactly as printed. This is never the internal "Invoice Group," "Batch," or Project/Job number. Empty string if none is printed.
+1. A per-batch INVOICE -- the payroll company billing the production for one batch of crew wages, covering a given batch/work-date period. Typically bundles several report pages together: an Invoice summary, an "Invoice Fee Summary," a "Fringe Recap Report," a "Wage/Payroll Register" (per-employee paystub-style breakdown), and/or a "Payroll Check Register" -- with line items like Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, and Handling Fees. Its own reference number for this specific batch may be labeled "Invoice Number," "Payroll ID," or similar -- never the internal "Invoice Group," "Batch," or Project/Job number.
 
-Return ONLY a JSON object with exactly these keys: {"company_name": "...", "invoice_number": "..."}
+2. A whole-project FRINGE REPORT -- a single wide table, one row per crew member, of wages/reimbursements/fringes/benefits, covering the ENTIRE project's date range at once rather than one batch. Not tied to any invoice number.
+
+3. A whole-project PAYROLL REGISTER -- a running ledger of every payment across the whole project's date range, often hundreds of pages, titled "Payroll Register." Not tied to any invoice number.
+
+Determine:
+- doc_kind: "invoice" for case 1, "fringe_report" for case 2, "payroll_register" for case 3.
+- company_name: ONLY for doc_kind "invoice" -- the payroll company's own short/common name, from its own letterhead/remittance information (e.g. "Remit Payment To: New C.A.P.S. LLC", or "TakeOne Network Corp. DBA Wrapbook") -- normalize it the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc"/"Corp", drop a "DBA" business-name wrapper down to just the brand name that follows it, and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS", "TakeOne Network Corp. DBA Wrapbook" -> "Wrapbook"). Never the production company being billed (the "Bill To"/"To" party). Empty string for the other two doc_kinds.
+- invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed, from whichever field the payroll company happens to use for it ("Invoice Number," "Payroll ID," etc.). Empty string if none is printed, or for the other two doc_kinds.
+
+Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register", "company_name": "...", "invoice_number": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -725,6 +732,22 @@ def build_vendor_invoice_filename(company: str, invoice_number: str):
     return f"{company_s} - {invoice_suffix}.pdf"
 
 
+def build_crew_payroll_invoice_filename(company: str, invoice_number: str):
+    """Same shape as build_vendor_invoice_filename, but the payroll
+    company's name is always rendered fully uppercase rather than
+    proper-cased -- confirmed by two independent real examples ("New
+    C.A.P.S. LLC" -> "CAPS - Invoice ....pdf", "TakeOne Network Corp. DBA
+    Wrapbook" -> "WRAPBOOK - Invoice ....pdf") where the source name isn't
+    even an acronym in the second case, so this appears to be a naming
+    convention specific to this folder rather than an acronym-only rule."""
+    company_s = sanitize_component(company).upper()
+    if not company_s:
+        return None
+    num_s = sanitize_component((invoice_number or "").strip())
+    invoice_suffix = f"Invoice {num_s}" if num_s else "Invoice"
+    return f"{company_s} - {invoice_suffix}.pdf"
+
+
 def build_vendor_invoice_filename_by_po(company: str, po_number: str):
     """The alternate Vendor Invoice naming convention: "PO{number} -
     {Vendor Name}.pdf". Only usable when a PO number was actually printed
@@ -1033,9 +1056,21 @@ async def _extract_crew_payroll(images_b64, openai_client, anthropic_client, loo
             reason_detail="Could not read document (both providers failed)", provider=provider,
         )
 
+    doc_kind = str(parsed.get("doc_kind", "")).strip().lower()
+    if doc_kind == "fringe_report":
+        return DocResult(
+            bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
+            output_pdf_bytes=b"", new_filename="Fringe Report.pdf", provider=provider,
+        )
+    if doc_kind == "payroll_register":
+        return DocResult(
+            bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
+            output_pdf_bytes=b"", new_filename="Payroll Register.pdf", provider=provider,
+        )
+
     company = parsed.get("company_name", "")
     invoice_number = parsed.get("invoice_number", "")
-    new_name = build_vendor_invoice_filename(company, invoice_number)
+    new_name = build_crew_payroll_invoice_filename(company, invoice_number)
     if not new_name:
         return DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
@@ -1361,7 +1396,9 @@ NAMING_CONVENTIONS = [
         "type_id": "crew_payroll",
         "label": "Crew Payroll",
         "patterns": [
-            {"pattern": "{Company} - Invoice {Number}.pdf", "folder": "Crew Payroll", "description": "A payroll company's own consolidated invoice to the production for crew wages (Invoice Fee Summary / Fringe Recap Report / Wage-Payroll Register / Payroll Check Register pages) -- named by the payroll company's short/common name and its own invoice number, e.g. \"CAPS - Invoice 1001430894.pdf\" for \"New C.A.P.S. LLC\", regardless of how many individual crew members' pay it covers"},
+            {"pattern": "{COMPANY} - Invoice {Number}.pdf", "folder": "Crew Payroll", "description": "A payroll company's own consolidated invoice for one batch of crew wages (Invoice Fee Summary / Fringe Recap Report / Wage-Payroll Register / Payroll Check Register pages) -- named by the payroll company's short/common name IN ALL CAPS and its own batch reference number (labeled \"Invoice Number\", \"Payroll ID\", or similar depending on the provider), e.g. \"CAPS - Invoice 1001430894.pdf\" for \"New C.A.P.S. LLC\", \"WRAPBOOK - Invoice 00722447.pdf\" for \"TakeOne Network Corp. DBA Wrapbook\" -- regardless of how many individual crew members' pay it covers"},
+            {"pattern": "Fringe Report.pdf", "folder": "Crew Payroll", "description": "A whole-project aggregate table of every crew member's wages/fringes/benefits, not tied to one batch or invoice"},
+            {"pattern": "Payroll Register.pdf", "folder": "Crew Payroll", "description": "A whole-project running payroll ledger covering every payment across the full project date range, not tied to one batch or invoice"},
         ],
     },
 ]
