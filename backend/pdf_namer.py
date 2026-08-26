@@ -176,7 +176,7 @@ FIRST, determine which of these three this document is:
 
 1. HOTEL FOLIO -- a hotel guest bill/folio: shows a hotel name, Room Number, Arrival/Departure dates, and a running list of room/tax charges for one guest's stay. Set is_hotel_folio=true.
 
-2. RECEIPT -- a purchase receipt or order confirmation for a straightforward purchase (a restaurant/catering order, a retail purchase, a delivery confirmation email) that has NO formal invoice structure (no "Bill To" block, no invoice number). Set is_receipt=true (and is_hotel_folio=false).
+2. RECEIPT -- a purchase receipt or order confirmation for a straightforward purchase (a restaurant/catering order, a retail purchase, a delivery confirmation email) that has NO formal invoice structure (no "Bill To" block, no invoice number). Set is_receipt=true (and is_hotel_folio=false). A production's own "Crew Invoice" / crew timesheet form (see is_freelance_crew_labor below) is NEVER a receipt even though it also lacks a Bill To block or invoice number -- set is_receipt=false for those and let is_freelance_crew_labor carry the distinction instead.
 
 3. VENDOR INVOICE -- a formal invoice from a business or individual billing the production, with a "Bill To"/client block and (usually) its own invoice number. Set both is_hotel_folio=false and is_receipt=false.
 
@@ -195,9 +195,9 @@ FOR A RECEIPT OR VENDOR INVOICE, identify the BILLER -- the individual and/or co
 
 FOR A VENDOR INVOICE ONLY (skip these two for a receipt):
 - invoice_number: the vendor's OWN invoice number, exactly as printed on the actual invoice itself (e.g. "1080" from "Invoice no.: 1080", "CHIC-26-000208" from "Invoice CHIC-26-000208"). This is never the internal "PO-XXXXXXX" purchase order number from a cover sheet. Empty string if the actual invoice has no invoice number printed anywhere.
-- has_labor_line_item: true ONLY if the invoice shows a distinct billed line item whose own printed label literally is (or very closely matches) "Labor", "Delivery Labor", "Install Labor", "Labor Fee", or equivalent wording for a labor/delivery-labor charge. This is a narrow, literal check -- a flat day-rate professional service fee (e.g. "Casting Session $1,500/day") or an hourly service charge described some other way (e.g. security guard hours billed by shift) does NOT count unless a line is actually labeled "Labor" (or equivalent). false otherwise.
+- is_freelance_crew_labor: true if this document, in substance, is one individual crew member/freelancer billing the production for their own personal time/labor on this shoot -- judge this by actually examining the document's content and structure, not by searching for any one specific word. Signals that this IS freelance crew labor (any one can be enough, and none of them require the literal word "Labor" to appear anywhere): it is titled or functions as a "Crew Invoice" or crew timesheet; it shows a Social Security Number instead of (or alongside) a business Tax ID/EIN; it lists a crew position/job title on set (e.g. PA, Art Director, Line Producer, Stills, Wardrobe, Grip, HMU/HMUA, Production Coordinator, Set Dresser, etc.); it bills a day rate or hourly rate tied to actual hours/days worked, with prep/shoot/wrap-style time tracking, call/wrap times, or overtime; it carries a "Sub-contractor Signature" and/or production-manager sign-off line. This still counts as true even when the invoice is issued through the person's own loan-out/DBA/LLC/company name rather than their personal name -- what matters is that the substance of the charges is one individual's personal labor/time on this shoot, e.g. "Art Director, 8 days" or "Line Producer Prep/Wrap + Shoot Labor" invoiced through a company like "MSDP Inc." still counts as true. Set false for a company selling goods, renting equipment, providing a venue, or billing a flat vendor service that is not one individual's time/labor on set (even if that service happens to be described using the word "labor" loosely, e.g. a generic "installation labor" line on an equipment-rental invoice from an equipment company is NOT freelance crew labor).
 
-Return ONLY a JSON object with exactly these keys: {"po_number": "...", "is_hotel_folio": true or false, "hotel_name": "...", "folio_number": "...", "is_receipt": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "has_company_name": true or false, "company_name": "...", "bill_to_name": "...", "invoice_number": "...", "has_labor_line_item": true or false}
+Return ONLY a JSON object with exactly these keys: {"po_number": "...", "is_hotel_folio": true or false, "hotel_name": "...", "folio_number": "...", "is_receipt": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "has_company_name": true or false, "company_name": "...", "bill_to_name": "...", "invoice_number": "...", "is_freelance_crew_labor": true or false}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -866,7 +866,7 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
 
     is_hotel_folio = bool(parsed.get("is_hotel_folio"))
     is_receipt = bool(parsed.get("is_receipt"))
-    has_labor = bool(parsed.get("has_labor_line_item"))
+    is_freelance_labor = bool(parsed.get("is_freelance_crew_labor"))
     hotel_name = parsed.get("hotel_name", "")
     folio_number = parsed.get("folio_number", "")
     has_person = bool(parsed.get("has_person_name"))
@@ -878,7 +878,7 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
     po_number = parsed.get("po_number", "")
 
     mismatch_detail = check_sender_mismatch(bill_to_name, batch)
-    subfolder = FOLDER_VENDOR  # overridden below for an invoice with a literal Labor line item
+    subfolder = FOLDER_VENDOR  # overridden below for a freelance crew labor invoice
 
     if is_hotel_folio:
         new_name = build_hotel_folio_filename(hotel_name, folio_number)
@@ -896,24 +896,25 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
                 output_pdf_bytes=b"", reason_code=REASON_MISSING_COMPANY,
                 reason_detail=f"Receipt but missing company name (company={company!r})", provider=provider,
             )
-    elif has_labor:
-        # A literal "Labor"/"Delivery Labor" line item -- this is the one
-        # case that gets its own folder rather than sitting alongside
-        # ordinary vendor invoices, since it represents freelance crew labor
-        # rather than a goods/equipment/services purchase.
+    elif is_freelance_labor:
+        # The invoice, in substance, represents one individual crew member's
+        # own personal labor/time on this shoot (LLM judgment call based on
+        # the document's actual content -- see is_freelance_crew_labor in the
+        # prompt -- not a literal keyword match) -- gets its own folder
+        # rather than sitting alongside ordinary vendor invoices.
         subfolder = FOLDER_FREELANCE
         if not has_person and not has_company:
             return DocResult(
                 bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=subfolder,
                 output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
-                reason_detail="Labor line item found but could not identify a billing person or company", provider=provider,
+                reason_detail="Freelance crew labor invoice found but could not identify a billing person or company", provider=provider,
             )
         new_name = build_freelance_filename(has_person, last, first, has_company, company, invoice_number)
         if not new_name:
             return DocResult(
                 bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=subfolder,
                 output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
-                reason_detail=(f"Labor line item found but missing usable name/company (last={last!r}, "
+                reason_detail=(f"Freelance crew labor invoice found but missing usable name/company (last={last!r}, "
                                f"first={first!r}, company={company!r})"),
                 provider=provider,
             )
@@ -936,13 +937,14 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
     elif has_person:
         # A vendor invoice billed directly by an individual (a freelancer, a
         # consultant, a personal-services contractor) with no company name
-        # at all and no literal "Labor" line item -- confirmed real case: a
-        # "Purchase Order / Check Request" form where the Vendor field is
-        # just a person's name for things like a storyboard artist's fee or
-        # a location consultation, not a business. Same "Last, First -
-        # Invoice Number" naming as the has_labor branch above uses for a
-        # person -- the PO-number naming choice doesn't apply here (it's a
-        # company-invoice-specific alternative), always by invoice number.
+        # at all and not judged to be freelance crew labor -- confirmed real
+        # case: a "Purchase Order / Check Request" form where the Vendor
+        # field is just a person's name for things like a storyboard
+        # artist's fee or a location consultation, not a business. Same
+        # "Last, First - Invoice Number" naming as the is_freelance_labor
+        # branch above uses for a person -- the PO-number naming choice
+        # doesn't apply here (it's a company-invoice-specific alternative),
+        # always by invoice number.
         new_name = build_freelance_filename(has_person, last, first, has_company, company, invoice_number)
         if not new_name:
             return DocResult(
@@ -1107,9 +1109,9 @@ NAMING_CONVENTIONS = [
             {"pattern": "PO{PO Number} - {Company}.pdf", "folder": "Vendor Invoices", "description": "Company invoice, named by PO number instead -- a user-chosen alternative (set once per batch), only used for an invoice that actually has a PO number printed on it"},
             {"pattern": "{Company} - receipt.pdf", "folder": "Vendor Invoices", "description": "Purchase receipt / order confirmation -- always by invoice number convention, not affected by the PO-number choice"},
             {"pattern": "{Hotel Name} - Folio {Number}.pdf", "folder": "Vendor Invoices", "description": "Hotel guest folio (number omitted if blank) -- not affected by the PO-number choice"},
-            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Vendor Invoices", "description": "Billed directly by an individual with no company name at all and no Labor line item (a freelancer/consultant invoice, e.g. a location consultation fee) -- always by invoice number, not affected by the PO-number choice"},
-            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Invoice with a literal Labor/Delivery Labor line item, billed by a person -- gets its own folder rather than sitting alongside ordinary vendor invoices"},
-            {"pattern": "{Last}, {First} ({Company}) - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Same, when both a person and a company are named on a Labor-line invoice"},
+            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Vendor Invoices", "description": "Billed directly by an individual with no company name at all and not judged to be freelance crew labor (a freelancer/consultant invoice, e.g. a location consultation fee) -- always by invoice number, not affected by the PO-number choice"},
+            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Invoice judged (by content, not a keyword match) to represent one crew member's own personal labor/time on the shoot -- e.g. a crew timesheet, a day-rate invoice with prep/shoot/wrap hours -- billed by a person, gets its own folder rather than sitting alongside ordinary vendor invoices"},
+            {"pattern": "{Last}, {First} ({Company}) - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Same, when the crew member bills through their own loan-out/DBA company name as well as their personal name"},
         ],
         "options": [
             {
@@ -1120,7 +1122,7 @@ NAMING_CONVENTIONS = [
                     {"value": "po_number", "label": "PO Number - Vendor Name"},
                 ],
                 "default": "invoice_number",
-                "note": "Set once per batch on the Overview screen. Only changes the plain company-invoice pattern above -- Receipts, Hotel Folios, and Labor-line-item invoices are unaffected either way.",
+                "note": "Set once per batch on the Overview screen. Only changes the plain company-invoice pattern above -- Receipts, Hotel Folios, and Freelance Crew Invoices are unaffected either way.",
             },
         ],
     },
