@@ -111,8 +111,8 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 - "residency" -- a Driver's License, a State ID card, or a USCIS Form I-9 (Employment Eligibility Verification).
 - "diversity" -- an Illinois Department of Commerce & Economic Opportunity (DCEO) "Illinois Film Tax Credit Tracking Sheet."
 - "vendor" -- a hotel guest folio, a purchase receipt/order confirmation, or a formal invoice (vendor or freelance) billing the production for goods, services, or labor.
-- "petty_cash" -- a petty cash document: a "Petty Cash Summary" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log); an internal cash-advance Purchase Order where the Vendor is literally "Petty Cash" (or a close variant like "Petty Cash Advance") rather than an actual company or freelancer, handing a lump sum float to a named custodian; or a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export). Never "vendor" for any of these, even the PO-cover-sheet variant -- Vendor: "Petty Cash" is the deciding signal, not the document's template. Petty Cash always means the crew member was handed cash UP FRONT and is settling what's left -- see "prodcc" below for the reverse case, which can use this exact same form template.
-- "prodcc" -- a Production Credit Card (ProdCC) reimbursement: the crew member paid with their OWN money/personal card and the production owes THEM back, the reverse of Petty Cash. Comes in the same two template shapes as petty_cash and can be easy to confuse with it: an internal Purchase Order-style request where the Vendor field names the crew member directly followed by wording like "- CC Reimbursement"/"- CC Reimb" (never "Petty Cash"); or the identical "Summary of Petty Cash Expenses"-style itemized form used for petty_cash, distinguished ONLY by which settlement line at the bottom actually carries a dollar amount -- "Balance Due Employee" filled in (and "Amount Received"/"Cash Received" blank) means ProdCC, while "Balance Due Company (Employee)" filled in (with an actual amount received) means petty_cash. Judge this by that settlement direction, never by the form's title text alone -- a real ProdCC packet is very often still titled "Summary of Petty Cash Expenses".
+- "petty_cash" -- ANY petty cash document: a "Petty Cash Summary"/"Summary of Petty Cash Expenses" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log) -- if it's this kind of form at all, it's petty_cash, full stop, regardless of which way its balance-due settlement happens to run; an internal cash-advance Purchase Order where the Vendor is literally "Petty Cash" (or a close variant like "Petty Cash Advance") rather than an actual company or freelancer, handing a lump sum float to a named custodian; a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export); OR just a bare stack of purchase receipts with NO cover sheet, PO, or summary form of any kind in front of them identifying whose batch this is -- an uncovered stack of receipts defaults to petty_cash too. Never "vendor" for any of these, even the PO-cover-sheet variant -- Vendor: "Petty Cash" is the deciding signal, not the document's template.
+- "prodcc" -- a Production Credit Card (ProdCC) reimbursement: the crew member paid with their OWN money/personal card and the production owes THEM back. This is normally identifiable ONLY by an explicit cover sheet clearly built for that purpose -- either an internal Purchase Order-style request where the Vendor field names the crew member directly followed by wording like "- CC Reimbursement"/"- CC Reimb" (never "Petty Cash"), or a human-made cover sheet (often an Excel printout) that itself is specifically about a credit card reimbursement. NEVER classify a "Petty Cash Summary"/"Summary of Petty Cash Expenses" form as prodcc, even if its balance-due line seems to run the "company owes the employee" direction -- that form always means petty_cash regardless.
 - "unknown" -- anything else, or if you cannot confidently tell from what's visible.
 
 Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "unknown"}
@@ -214,19 +214,22 @@ PETTY_CASH_SYSTEM_PROMPT = """You are analyzing a petty cash document submitted 
 
 3. A PETTY CASH LOG / multi-person summary spreadsheet -- an aggregate report (often a "Petty Cash Spreadsheet" or "PC Master Summary" export from production budgeting software) that totals up SEVERAL different custodians' petty cash at once, typically as columns of initials rather than one full name. This has no single custodian to name.
 
+4. A bare stack of purchase receipts with NO cover sheet, PO, summary form, or handwritten note of any kind in front of them identifying whose batch this is -- just receipt images/scans back to back. This has no name to extract at all, by design.
+
 Determine:
-- is_petty_cash_log: true ONLY for case 3 above -- a multi-custodian aggregate/summary report with no one specific named custodian. false for case 1 or case 2, even though those are also summary-style forms -- they still belong to exactly one named person.
-- has_person_name: true if a single custodian's name can be identified (cases 1 and 2). Always false when is_petty_cash_log is true.
+- has_cover_sheet: false ONLY for case 4 -- no summary form, PO cover sheet, or any other page identifying a custodian appears anywhere in this document, just raw receipts. true for cases 1, 2, and 3.
+- is_petty_cash_log: true ONLY for case 3 above -- a multi-custodian aggregate/summary report with no one specific named custodian. false otherwise.
+- has_person_name: true if a single custodian's name can be identified (cases 1 and 2). Always false when is_petty_cash_log is true or has_cover_sheet is false.
 - last_name / first_name: that custodian's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
 
-Return ONLY a JSON object with exactly these keys: {"is_petty_cash_log": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "..."}
+Return ONLY a JSON object with exactly these keys: {"has_cover_sheet": true or false, "is_petty_cash_log": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
 PRODCC_SYSTEM_PROMPT = """You are analyzing a Production Credit Card (ProdCC) reimbursement document submitted as part of a film/TV production's Accounts Payable packet. ProdCC is how a crew member gets paid back for production expenses they already paid for with their OWN money/personal card -- the reverse of Petty Cash, where the company hands cash to the crew member up front instead. It will be one of:
 
 1. An internal Purchase Order-style reimbursement request -- the Vendor field on these names the crew member directly, followed by wording like "- CC Reimbursement" or "- CC Reimb" (e.g. "Logan Gilmore - CC Reimbursement"), never a real company and never "Petty Cash". Pages behind the PO cover sheet are typically the crew member's own scanned credit-card receipts.
 
-2. A "Summary of Petty Cash Expenses"-style itemized expense form filled out for ONE named crew member (a "Name" field, a dated grid of purchases by category) -- structurally identical to a Petty Cash form, and even titled the same way, but the SETTLEMENT DIRECTION at the bottom reveals it's actually a reimbursement: "Amount Received"/"Cash Received" is blank (no cash was ever advanced), and "Balance Due Employee" carries the dollar amount owed -- meaning the PRODUCTION owes the CREW MEMBER money back, the opposite of a genuine Petty Cash settlement where "Balance Due Company (Employee)" is what carries the amount because the crew member received cash up front and may owe some of it back. Judge this by which of those two lines actually has a dollar amount filled in, never by the form's title text alone.
+2. A human-made cover sheet (often an Excel printout, not the standard "Petty Cash Summary" form) that a crew member or coordinator put together themselves specifically to itemize a credit card reimbursement request for one named person.
 
 Determine:
 - has_person_name: true if a single named crew member can be identified as this document's owner.
@@ -666,6 +669,17 @@ def build_prodcc_filename(last: str, first: str):
     return f"{last_s}, {first_s} - CC Reimb.pdf"
 
 
+def build_uncovered_receipts_filename(original_filename: str):
+    """A bare stack of receipts with no cover sheet at all can't be named by
+    content -- keep whatever the original filename was (it may be the only
+    hint of whose receipts these are) and just prefix it so it sorts to the
+    top of the Petty Cash folder for manual review, same "aaa" convention
+    used for an unreadable/unable-to-rename file elsewhere in this pipeline."""
+    base = os.path.splitext(original_filename or "")[0]
+    base_s = sanitize_component(base) or "receipts"
+    return f"aaa{base_s}.pdf"
+
+
 def build_freelance_filename(has_person: bool, last: str, first: str, has_company: bool, company: str, invoice_number: str):
     # A freelance crew invoice is always named by the individual alone, even
     # when it's billed through their own loan-out/DBA/LLC/studio name (e.g.
@@ -913,7 +927,7 @@ async def _extract_diversity(images_b64, openai_client, anthropic_client, loop, 
     )
 
 
-async def _extract_petty_cash(images_b64, openai_client, anthropic_client, loop):
+async def _extract_petty_cash(images_b64, openai_client, anthropic_client, loop, orig_filename_hint):
     user_text = "Extract the fields described in the system prompt from this petty cash document."
     parsed, provider = await classify_document(
         images_b64, user_text, PETTY_CASH_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
@@ -923,6 +937,17 @@ async def _extract_petty_cash(images_b64, openai_client, anthropic_client, loop)
             bucket=BUCKET_NOT_READABLE, doc_type="petty_cash", subfolder=FOLDER_NOT_READABLE,
             output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
             reason_detail="Could not read document (both providers failed)", provider=provider,
+        )
+
+    if not bool(parsed.get("has_cover_sheet")):
+        # A bare stack of receipts with nothing identifying whose batch this
+        # is -- not an error, just nothing to confidently name from content.
+        # Keep the original filename (it may be the only clue) under an
+        # "aaa" prefix so it sorts to the top for manual review.
+        return DocResult(
+            bucket=BUCKET_RENAMED, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
+            output_pdf_bytes=b"", new_filename=build_uncovered_receipts_filename(orig_filename_hint),
+            provider=provider,
         )
 
     if bool(parsed.get("is_petty_cash_log")):
@@ -1203,7 +1228,7 @@ async def process_one_document(
             result.output_pdf_bytes = pdf_bytes
             results = [result]
         elif family == "petty_cash":
-            result = await _extract_petty_cash(classify_images, openai_client, anthropic_client, loop)
+            result = await _extract_petty_cash(classify_images, openai_client, anthropic_client, loop, filename)
             result.output_pdf_bytes = pdf_bytes
             results = [result]
         elif family == "prodcc":
@@ -1280,6 +1305,7 @@ NAMING_CONVENTIONS = [
         "patterns": [
             {"pattern": "{Last}, {First} - Petty Cash.pdf", "folder": "Petty Cash", "description": "A named custodian's Petty Cash Summary reimbursement form, or an internal cash-advance PO handing that custodian a float (Vendor field literally \"Petty Cash\")"},
             {"pattern": "Petty Cash Log.pdf", "folder": "Petty Cash", "description": "A multi-custodian aggregate summary/spreadsheet with no single named custodian"},
+            {"pattern": "aaa{Original Filename}.pdf", "folder": "Petty Cash", "description": "A bare stack of receipts with no cover sheet, PO, or summary form of any kind identifying whose batch this is -- original filename kept (it may be the only clue) and prefixed with \"aaa\" so it sorts to the top for manual review/renaming"},
         ],
     },
     {
