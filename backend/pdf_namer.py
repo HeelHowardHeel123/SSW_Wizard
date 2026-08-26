@@ -65,6 +65,7 @@ FOLDER_DIVERSITY  = "Diversity Form"
 FOLDER_VENDOR     = "Vendor Invoices"
 FOLDER_FREELANCE  = "Freelance Crew Invoice"
 FOLDER_PETTY_CASH = "Petty Cash"
+FOLDER_PRODCC    = "ProdCC"
 FOLDER_NOT_READABLE = "Not Readable"
 
 
@@ -110,10 +111,11 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 - "residency" -- a Driver's License, a State ID card, or a USCIS Form I-9 (Employment Eligibility Verification).
 - "diversity" -- an Illinois Department of Commerce & Economic Opportunity (DCEO) "Illinois Film Tax Credit Tracking Sheet."
 - "vendor" -- a hotel guest folio, a purchase receipt/order confirmation, or a formal invoice (vendor or freelance) billing the production for goods, services, or labor.
-- "petty_cash" -- a petty cash document: a "Petty Cash Summary" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log); an internal cash-advance Purchase Order where the Vendor is literally "Petty Cash" (or a close variant like "Petty Cash Advance") rather than an actual company or freelancer, handing a lump sum float to a named custodian; or a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export). Never "vendor" for any of these, even the PO-cover-sheet variant -- Vendor: "Petty Cash" is the deciding signal, not the document's template.
+- "petty_cash" -- a petty cash document: a "Petty Cash Summary" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log); an internal cash-advance Purchase Order where the Vendor is literally "Petty Cash" (or a close variant like "Petty Cash Advance") rather than an actual company or freelancer, handing a lump sum float to a named custodian; or a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export). Never "vendor" for any of these, even the PO-cover-sheet variant -- Vendor: "Petty Cash" is the deciding signal, not the document's template. Petty Cash always means the crew member was handed cash UP FRONT and is settling what's left -- see "prodcc" below for the reverse case, which can use this exact same form template.
+- "prodcc" -- a Production Credit Card (ProdCC) reimbursement: the crew member paid with their OWN money/personal card and the production owes THEM back, the reverse of Petty Cash. Comes in the same two template shapes as petty_cash and can be easy to confuse with it: an internal Purchase Order-style request where the Vendor field names the crew member directly followed by wording like "- CC Reimbursement"/"- CC Reimb" (never "Petty Cash"); or the identical "Summary of Petty Cash Expenses"-style itemized form used for petty_cash, distinguished ONLY by which settlement line at the bottom actually carries a dollar amount -- "Balance Due Employee" filled in (and "Amount Received"/"Cash Received" blank) means ProdCC, while "Balance Due Company (Employee)" filled in (with an actual amount received) means petty_cash. Judge this by that settlement direction, never by the form's title text alone -- a real ProdCC packet is very often still titled "Summary of Petty Cash Expenses".
 - "unknown" -- anything else, or if you cannot confidently tell from what's visible.
 
-Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "unknown"}
+Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "unknown"}
 No explanation. No markdown. No code fences. JSON object only."""
 
 ORIENTATION_PROMPT = """You are looking at page images from a single PDF document -- a scan or phone photo submitted as part of a film/TV production crew paperwork batch. For each page, determine how many degrees it needs to be rotated CLOCKWISE for its content (text, photos) to appear upright/right-side-up. Common causes: a phone photo taken in landscape when the document is portrait (or vice versa), or a scanner fed the page sideways or upside-down.
@@ -218,6 +220,19 @@ Determine:
 - last_name / first_name: that custodian's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
 
 Return ONLY a JSON object with exactly these keys: {"is_petty_cash_log": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "..."}
+No explanation. No markdown. No code fences. JSON object only."""
+
+PRODCC_SYSTEM_PROMPT = """You are analyzing a Production Credit Card (ProdCC) reimbursement document submitted as part of a film/TV production's Accounts Payable packet. ProdCC is how a crew member gets paid back for production expenses they already paid for with their OWN money/personal card -- the reverse of Petty Cash, where the company hands cash to the crew member up front instead. It will be one of:
+
+1. An internal Purchase Order-style reimbursement request -- the Vendor field on these names the crew member directly, followed by wording like "- CC Reimbursement" or "- CC Reimb" (e.g. "Logan Gilmore - CC Reimbursement"), never a real company and never "Petty Cash". Pages behind the PO cover sheet are typically the crew member's own scanned credit-card receipts.
+
+2. A "Summary of Petty Cash Expenses"-style itemized expense form filled out for ONE named crew member (a "Name" field, a dated grid of purchases by category) -- structurally identical to a Petty Cash form, and even titled the same way, but the SETTLEMENT DIRECTION at the bottom reveals it's actually a reimbursement: "Amount Received"/"Cash Received" is blank (no cash was ever advanced), and "Balance Due Employee" carries the dollar amount owed -- meaning the PRODUCTION owes the CREW MEMBER money back, the opposite of a genuine Petty Cash settlement where "Balance Due Company (Employee)" is what carries the amount because the crew member received cash up front and may owe some of it back. Judge this by which of those two lines actually has a dollar amount filled in, never by the form's title text alone.
+
+Determine:
+- has_person_name: true if a single named crew member can be identified as this document's owner.
+- last_name / first_name: that crew member's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
+
+Return ONLY a JSON object with exactly these keys: {"has_person_name": true or false, "last_name": "...", "first_name": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -644,6 +659,13 @@ def build_petty_cash_filename(last: str, first: str):
     return f"{last_s}, {first_s} - Petty Cash.pdf"
 
 
+def build_prodcc_filename(last: str, first: str):
+    last_s, first_s = sanitize_component(proper_case(last)), sanitize_component(proper_case(first))
+    if not last_s or not first_s:
+        return None
+    return f"{last_s}, {first_s} - CC Reimb.pdf"
+
+
 def build_freelance_filename(has_person: bool, last: str, first: str, has_company: bool, company: str, invoice_number: str):
     # A freelance crew invoice is always named by the individual alone, even
     # when it's billed through their own loan-out/DBA/LLC/studio name (e.g.
@@ -930,6 +952,39 @@ async def _extract_petty_cash(images_b64, openai_client, anthropic_client, loop)
     )
 
 
+async def _extract_prodcc(images_b64, openai_client, anthropic_client, loop):
+    user_text = "Extract the fields described in the system prompt from this ProdCC reimbursement document."
+    parsed, provider = await classify_document(
+        images_b64, user_text, PRODCC_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
+    )
+    if parsed is None:
+        return DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="prodcc", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
+            reason_detail="Could not read document (both providers failed)", provider=provider,
+        )
+
+    if not bool(parsed.get("has_person_name")):
+        return DocResult(
+            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="prodcc", subfolder=FOLDER_PRODCC,
+            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            reason_detail="Could not identify a named crew member on this ProdCC document", provider=provider,
+        )
+
+    last, first = parsed.get("last_name", ""), parsed.get("first_name", "")
+    new_name = build_prodcc_filename(last, first)
+    if not new_name:
+        return DocResult(
+            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="prodcc", subfolder=FOLDER_PRODCC,
+            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            reason_detail=f"Could not derive a usable name (last={last!r}, first={first!r})", provider=provider,
+        )
+    return DocResult(
+        bucket=BUCKET_RENAMED, doc_type="prodcc", subfolder=FOLDER_PRODCC,
+        output_pdf_bytes=b"", new_filename=new_name, provider=provider,
+    )
+
+
 async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, batch: BatchContext):
     user_text = "Extract the fields described in the system prompt from this vendor document."
     system_prompt = build_vendor_system_prompt(batch)
@@ -1151,6 +1206,10 @@ async def process_one_document(
             result = await _extract_petty_cash(classify_images, openai_client, anthropic_client, loop)
             result.output_pdf_bytes = pdf_bytes
             results = [result]
+        elif family == "prodcc":
+            result = await _extract_prodcc(classify_images, openai_client, anthropic_client, loop)
+            result.output_pdf_bytes = pdf_bytes
+            results = [result]
         else:
             results = [DocResult(
                 bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
@@ -1221,6 +1280,13 @@ NAMING_CONVENTIONS = [
         "patterns": [
             {"pattern": "{Last}, {First} - Petty Cash.pdf", "folder": "Petty Cash", "description": "A named custodian's Petty Cash Summary reimbursement form, or an internal cash-advance PO handing that custodian a float (Vendor field literally \"Petty Cash\")"},
             {"pattern": "Petty Cash Log.pdf", "folder": "Petty Cash", "description": "A multi-custodian aggregate summary/spreadsheet with no single named custodian"},
+        ],
+    },
+    {
+        "type_id": "prodcc",
+        "label": "ProdCC (Production Credit Card Reimbursement)",
+        "patterns": [
+            {"pattern": "{Last}, {First} - CC Reimb.pdf", "folder": "ProdCC", "description": "A crew member reimbursed for expenses paid with their own money/personal card -- the reverse of Petty Cash. Same two template shapes as Petty Cash (a \"[Name] - CC Reimbursement\" PO cover sheet, or a \"Summary of Petty Cash Expenses\"-style form), distinguished by content (a \"Balance Due Employee\" amount owed to them, no cash advance received), never by the form's title alone"},
         ],
     },
 ]
