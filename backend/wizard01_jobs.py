@@ -232,7 +232,9 @@ async def run_job(job_id: str, uploaded: list[tuple[str, str]]) -> None:
                         async with lock:
                             n = unable_counters.get(result.subfolder, 0) + 1
                             unable_counters[result.subfolder] = n
-                        final_name = _write_output(job_id, result.subfolder, f"Unable_To_Rename_{n:03d}.pdf", result.output_pdf_bytes)
+                        # "aaa" prefix floats these to the top of the folder
+                        # alphabetically, ahead of every real renamed file.
+                        final_name = _write_output(job_id, result.subfolder, f"aaaUnable_To_Rename_{n:03d}.pdf", result.output_pdf_bytes)
                     else:
                         final_name = _write_not_readable(job_id, None, original_filename, data=result.output_pdf_bytes or raw_bytes)
                 except Exception as e:
