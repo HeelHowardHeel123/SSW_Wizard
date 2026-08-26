@@ -124,9 +124,10 @@ Endpoints
   GET    /wizard01/conventions     → static naming-pattern reference per document type,
                                      not job-specific — {"types": [...]}
   POST   /wizard01/jobs            → multipart: files[]=<pdf/png/jpg/any image format> (many),
-                                     client_name, client_address, agency_name, agency_address,
-                                     prodco_name, prodco_address, received_from ("prodco"/
-                                     "agency"/"client", exactly one per batch — never mixed),
+                                     client_name, agency_name, prodco_name (no address fields —
+                                     they don't affect a filename), received_from ("prodco" /
+                                     "agency", exactly one per batch — never mixed, and never
+                                     "client": a batch is never received FROM the Client),
                                      vendor_naming ("invoice_number" default / "po_number" —
                                      Vendor Invoice naming preference; falls back to
                                      invoice_number per-file whenever a given invoice has no
@@ -5574,7 +5575,7 @@ async def delete_template(template_id: str, x_app_secret: str = Header(default="
 # See pdf_namer.py (classify/extract/name logic) and wizard01_jobs.py (job
 # storage, background loop, cleanup) for the actual implementation.
 
-_RECEIVED_FROM_VALID = {"prodco", "agency", "client"}
+_RECEIVED_FROM_VALID = {"prodco", "agency"}  # never "client" -- a batch is never received FROM the Client
 _VENDOR_NAMING_VALID = {"invoice_number", "po_number"}
 
 
@@ -5602,11 +5603,8 @@ async def wizard01_conventions(x_app_secret: str = Header(default="")):
 async def wizard01_create_job(
     files:           list[UploadFile] = File(...),
     client_name:     str              = Form(""),
-    client_address:  str              = Form(""),
     agency_name:     str              = Form(""),
-    agency_address:  str              = Form(""),
     prodco_name:     str              = Form(""),
-    prodco_address:  str              = Form(""),
     received_from:   str              = Form(""),
     vendor_naming:   str              = Form("invoice_number"),
     x_app_secret:    str              = Header(default=""),
@@ -5629,9 +5627,7 @@ async def wizard01_create_job(
     wizard01_jobs.sweep_expired_jobs()
 
     batch = pdf_namer.BatchContext(
-        client_name=client_name, client_address=client_address,
-        agency_name=agency_name, agency_address=agency_address,
-        prodco_name=prodco_name, prodco_address=prodco_address,
+        client_name=client_name, agency_name=agency_name, prodco_name=prodco_name,
         received_from=received_from, vendor_naming=vendor_naming,
     )
     job_id = wizard01_jobs.create_job(batch)

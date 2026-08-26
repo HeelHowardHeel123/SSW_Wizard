@@ -70,17 +70,21 @@ FOLDER_NOT_READABLE = "Not Readable"
 class BatchContext:
     """One per job, filled once from the Overview-style intake form and
     threaded into every per-file call. received_from is exactly one of
-    "prodco" / "agency" / "client" -- a batch is never mixed-source.
+    "prodco" / "agency" -- a batch is never mixed-source, and Client is not
+    a valid sender (a batch is never "received from" the Client -- it can
+    only be received from the ProdCo or the Agency). client_name is still
+    collected as a third named entity, since a vendor invoice's Bill-To can
+    legitimately show the Client's name even when the batch itself came
+    from the ProdCo or Agency -- it's used for sender-mismatch comparison,
+    just never as the "expected" party. No address fields -- they don't
+    affect a filename, so they were never actually read anywhere below.
     vendor_naming is one of "invoice_number" (default) / "po_number" -- a
     user-chosen preference for how Vendor Invoice files get named; falls
     back to "invoice_number" automatically per-file whenever a PO number
     isn't actually printed on that invoice, regardless of this setting."""
     client_name: str = ""
-    client_address: str = ""
     agency_name: str = ""
-    agency_address: str = ""
     prodco_name: str = ""
-    prodco_address: str = ""
     received_from: str = ""
     vendor_naming: str = "invoice_number"
 
@@ -662,10 +666,13 @@ def build_hotel_folio_filename(hotel_name: str, folio_number: str):
 # ── Sender-mismatch detection (Vendor only) ───────────────────────────────────
 
 def _expected_biller_name(batch: BatchContext) -> str:
+    # No "client" case -- received_from can only ever be "prodco" or
+    # "agency" (validated at the API boundary), since a batch is never
+    # "received from" the Client. client_name still participates in
+    # check_sender_mismatch below, just only ever as an "other" candidate.
     return {
         "prodco": batch.prodco_name,
         "agency": batch.agency_name,
-        "client": batch.client_name,
     }.get(batch.received_from, "")
 
 
