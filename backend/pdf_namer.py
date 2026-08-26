@@ -67,6 +67,7 @@ FOLDER_FREELANCE  = "Freelance Crew Invoice"
 FOLDER_PETTY_CASH = "Petty Cash"
 FOLDER_PRODCC    = "ProdCC"
 FOLDER_CREW_PAYROLL = "Crew Payroll"
+FOLDER_OTHER_FORMS = "Other Forms"
 FOLDER_NOT_READABLE = "Not Readable"
 
 
@@ -115,9 +116,10 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 - "petty_cash" -- ANY petty cash document: a "Petty Cash Summary"/"Summary of Petty Cash Expenses" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log) -- if it's this kind of form at all, it's petty_cash, full stop, regardless of which way its balance-due settlement happens to run; an internal cash-advance Purchase Order that states its purpose is Petty Cash -- however that's expressed on this particular PO template: a Vendor field literally reading "Petty Cash"/"Petty Cash Advance", a "FOR" or "Purpose" field saying "PETTY CASH", or a line-item description literally reading "Petty Cash" (e.g. "PC / Petty Cash / $3,000.00") -- handing a lump sum float to a named custodian; a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export); OR just a bare stack of purchase receipts with NO cover sheet, PO, or summary form of any kind in front of them identifying whose batch this is -- an uncovered stack of receipts defaults to petty_cash too. Never "vendor" for any of these, even the PO-cover-sheet variant -- the word "Petty Cash" appearing anywhere on the PO as its stated reason is the deciding signal, regardless of which field it's in or what the rest of that PO template looks like.
 - "prodcc" -- a Production Credit Card (ProdCC) reimbursement: the crew member paid with their OWN money/personal card and the production owes THEM back. This is normally identifiable ONLY by an explicit cover sheet clearly built for that purpose -- either an internal Purchase Order-style request where the Vendor field names the crew member directly followed by wording like "- CC Reimbursement"/"- CC Reimb" (never "Petty Cash"), or a human-made cover sheet (often an Excel printout) that itself is specifically about a credit card reimbursement. NEVER classify a "Petty Cash Summary"/"Summary of Petty Cash Expenses" form as prodcc, even if its balance-due line seems to run the "company owes the employee" direction -- that form always means petty_cash regardless.
 - "crew_payroll" -- any payroll-company document for the production's crew as a whole (never a single crew member's own invoice): a payroll company's own consolidated invoice for one batch of crew wages (e.g. "New C.A.P.S. LLC," "TakeOne Network Corp. DBA Wrapbook") -- identified by payroll-report page types like "Invoice Fee Summary," "Fringe Recap Report," "Wage/Payroll Register," or "Payroll Check Register," and payroll-specific line items (Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, Handling Fees); OR a whole-project aggregate export covering every crew member at once for the full project date range, not tied to any one batch/invoice -- a "Fringe Report" (a big table, one row per crew member, of wages/fringes/benefits) or a "Payroll Register" (a running ledger of every payment across the whole project, often hundreds of pages).
+- "misc_form" -- any other standardized production paperwork form not covered above, belonging to either one company or one specific crew member and tied to a specific date/period -- e.g. a state tax withholding return (such as Georgia's "G-7 Quarterly Return for Film Payer," usually filed by the payroll company), a crew member's time card, or similar standardized forms.
 - "unknown" -- anything else, or if you cannot confidently tell from what's visible.
 
-Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "crew_payroll" | "unknown"}
+Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "crew_payroll" | "misc_form" | "unknown"}
 No explanation. No markdown. No code fences. JSON object only."""
 
 ORIENTATION_PROMPT = """You are looking at page images from a single PDF document -- a scan or phone photo submitted as part of a film/TV production crew paperwork batch. For each page, determine how many degrees it needs to be rotated CLOCKWISE for its content (text, photos) to appear upright/right-side-up. Common causes: a phone photo taken in landscape when the document is portrait (or vice versa), or a scanner fed the page sideways or upside-down.
@@ -254,6 +256,25 @@ Determine:
 - invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed. Prefer a field literally labeled "Invoice Number"/"Invoice #" when one is present; only fall back to another field the payroll company uses instead (e.g. "Payroll ID") when no "Invoice Number" field exists at all. Never the internal "Invoice Group," "Batch," "Client #," or Project/Job number. Empty string if none is printed, or for the other two doc_kinds.
 
 Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register", "company_name": "...", "invoice_number": "..."}
+No explanation. No markdown. No code fences. JSON object only."""
+
+MISC_FORM_MULTI_SYSTEM_PROMPT = """You are analyzing a multi-page PDF that may contain one or more separate standardized production paperwork forms -- forms that don't belong to any of Residency, Diversity, Vendor, Petty Cash, ProdCC, or Crew Payroll. Examples include a state tax withholding return (e.g. Georgia's "G-7 Quarterly Return for Film Payer," usually filed by the payroll company on the production's behalf) or a crew member's time card -- more form types beyond these can appear too. Each individual form belongs to either ONE company or ONE specific named crew member, and is tied to one specific date/period.
+
+A single form is sometimes 1 page and sometimes spans several consecutive pages (e.g. a tax return with an attached schedule) -- pages belonging to the same form never get split apart, and different forms never share a page.
+
+Look at every page, in the order given, and group them into distinct forms. For each form, report which pages belong to it and extract its fields.
+
+For each form:
+- pages: a list of the page numbers belonging to this form (1-indexed, in the order given).
+- owner_type: "company" if this form is filed/owned by a company/production/payroll entity as a whole (e.g. a tax withholding return filed by the payroll company on the production's behalf), or "person" if it belongs to one specific named crew member (e.g. a time card).
+- company_name: ONLY if owner_type is "company" -- that company's name, exactly as shown on the form's own header/letterhead (e.g. "WRAPBOOK"). Empty string otherwise.
+- last_name / first_name: ONLY if owner_type is "person" -- that crew member's name, split. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
+- form_type: a short, human-readable label for what this specific form actually is, derived from its own visible title (e.g. "G-7 QUARTERLY RETURN FOR FILM PAYER" -> "G-7 Form", a timecard's own heading -> "Time Card") -- keep it short and in Title Case, not the form's full legal title verbatim.
+- relevant_date: the ONE date on this form that identifies which specific period/instance it represents (e.g. the "Period Ending" date on a tax return, the work-week/pay-period-ending date on a time card), in exactly MM/DD/YYYY. Empty string if no such date is present anywhere on the form.
+
+Every page must belong to exactly one form's "pages" list -- never omit a page and never assign one page to two forms.
+
+Return ONLY a JSON object with exactly this key: {"forms": [{"pages": [...], "owner_type": "company" | "person", "company_name": "...", "last_name": "...", "first_name": "...", "form_type": "...", "relevant_date": "..."}, ...]}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -687,6 +708,32 @@ def build_prodcc_filename(last: str, first: str):
     return f"{last_s}, {first_s} - CC Reimb.pdf"
 
 
+def build_misc_form_filename(owner_type: str, last: str, first: str, company: str, form_type: str, relevant_date: str):
+    """Shared naming convention for the "random forms" catch-all: a
+    company-owned form is "{Company} - {Form Type} {Date}.pdf", a
+    crew-member-owned form is "{Last}, {First} - {Form Type} {Date}.pdf"
+    -- e.g. "Wrapbook - G-7 Form 2024_03_31.pdf" or
+    "Marivee, Cade - Time Card 2023_12_31.pdf". The date suffix is omitted
+    entirely (not left as a trailing space) when none was found."""
+    form_type_s = sanitize_component(proper_case((form_type or "").strip()))
+    if not form_type_s:
+        return None
+    date_s = reformat_date_for_filename(relevant_date) if (relevant_date or "").strip() else ""
+    suffix = f"{form_type_s} {date_s}" if date_s else form_type_s
+
+    if owner_type == "company":
+        company_s = sanitize_component(proper_case(company))
+        if not company_s:
+            return None
+        return f"{company_s} - {suffix}.pdf"
+    if owner_type == "person":
+        last_s, first_s = sanitize_component(proper_case(last)), sanitize_component(proper_case(first))
+        if not last_s or not first_s:
+            return None
+        return f"{last_s}, {first_s} - {suffix}.pdf"
+    return None
+
+
 def build_uncovered_receipts_filename(original_filename: str):
     """A bare stack of receipts with no cover sheet at all can't be named by
     content -- keep whatever the original filename was (it may be the only
@@ -883,6 +930,89 @@ async def _extract_residency_multi(pdf_bytes, openai_client, anthropic_client, l
     if not results:
         return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="residency", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNCLASSIFIED,
+            reason_detail="Model returned no usable page groupings", provider=provider,
+        )]
+    return results
+
+
+async def _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, loop):
+    """The "random forms" catch-all (G-7, Time Card, and whatever else
+    comes up) can't assume one uploaded file = one form either -- a
+    coordinator can batch-scan several distinct forms into one PDF. Same
+    render-everything/group/split pattern as Residency."""
+    images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_PAGES_TO_INSPECT)
+    if not images:
+        return [DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="misc_form", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+            reason_detail="No renderable pages found",
+        )]
+
+    user_text = (
+        "Identify every distinct form across all pages of this PDF and group "
+        "pages accordingly, as described in the system prompt."
+    )
+    parsed, provider = await classify_document(
+        images, user_text, MISC_FORM_MULTI_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
+    )
+    forms = (parsed or {}).get("forms") if parsed else None
+    if not isinstance(forms, list) or not forms:
+        return [DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="misc_form", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+            reason_detail="Could not read document (both providers failed)", provider=provider,
+        )]
+
+    total_pages = len(images)
+    results = []
+    for form in forms:
+        page_nums = [p for p in (form.get("pages") or []) if isinstance(p, int) and 1 <= p <= total_pages]
+        if not page_nums:
+            continue  # nothing usable to split out for this group
+
+        try:
+            sub_pdf_bytes = extract_pages_as_pdf(pdf_bytes, page_nums)
+        except Exception as e:
+            results.append(DocResult(
+                bucket=BUCKET_NOT_READABLE, doc_type="misc_form", subfolder=FOLDER_NOT_READABLE,
+                output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+                reason_detail=f"Could not split page(s) {page_nums} into their own file: {e}", provider=provider,
+            ))
+            continue
+
+        owner_type = str(form.get("owner_type", "")).strip().lower()
+        company = form.get("company_name", "")
+        last, first = form.get("last_name", ""), form.get("first_name", "")
+        form_type = form.get("form_type", "")
+        relevant_date = form.get("relevant_date", "")
+
+        new_name = build_misc_form_filename(owner_type, last, first, company, form_type, relevant_date)
+        if not new_name:
+            if owner_type not in ("company", "person"):
+                reason = REASON_UNCLASSIFIED
+            elif owner_type == "company":
+                reason = REASON_MISSING_COMPANY
+            else:
+                reason = REASON_MISSING_NAME
+            results.append(DocResult(
+                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="misc_form", subfolder=FOLDER_OTHER_FORMS,
+                output_pdf_bytes=sub_pdf_bytes, reason_code=reason,
+                reason_detail=(f"Missing/unreadable owner or form details on page(s) {page_nums} "
+                                f"(owner_type={owner_type!r}, company={company!r}, last={last!r}, first={first!r}, "
+                                f"form_type={form_type!r}, date={relevant_date!r})"),
+                provider=provider,
+            ))
+            continue
+
+        results.append(DocResult(
+            bucket=BUCKET_RENAMED, doc_type="misc_form", subfolder=FOLDER_OTHER_FORMS,
+            output_pdf_bytes=sub_pdf_bytes, new_filename=new_name, provider=provider,
+        ))
+
+    if not results:
+        return [DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="misc_form", subfolder=FOLDER_NOT_READABLE,
             output_pdf_bytes=pdf_bytes, reason_code=REASON_UNCLASSIFIED,
             reason_detail="Model returned no usable page groupings", provider=provider,
         )]
@@ -1296,6 +1426,8 @@ async def process_one_document(
             result = await _extract_crew_payroll(classify_images, openai_client, anthropic_client, loop)
             result.output_pdf_bytes = pdf_bytes
             results = [result]
+        elif family == "misc_form":
+            results = await _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, loop)
         else:
             results = [DocResult(
                 bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
@@ -1384,5 +1516,19 @@ NAMING_CONVENTIONS = [
             {"pattern": "Fringe Report.pdf", "folder": "Crew Payroll", "description": "A whole-project aggregate table of every crew member's wages/fringes/benefits, not tied to one batch or invoice"},
             {"pattern": "Payroll Register.pdf", "folder": "Crew Payroll", "description": "A whole-project running payroll ledger covering every payment across the full project date range, not tied to one batch or invoice"},
         ],
+    },
+    {
+        "type_id": "misc_form",
+        "label": "Other Forms (G-7, Time Card, etc.)",
+        "patterns": [
+            {"pattern": "{Company} - {Form Type} {Date}.pdf", "folder": "Other Forms", "description": "A standardized form filed/owned by a company as a whole, e.g. \"Wrapbook - G-7 Form 2024_03_31.pdf\" for a Georgia G-7 Quarterly Return filed by the payroll company"},
+            {"pattern": "{Last}, {First} - {Form Type} {Date}.pdf", "folder": "Other Forms", "description": "A standardized form belonging to one specific crew member, e.g. \"Marivee, Cade - Time Card 2023_12_31.pdf\""},
+        ],
+        "notes": (
+            "Catch-all for standardized production paperwork that isn't Residency, Diversity, Vendor, "
+            "Petty Cash, ProdCC, or Crew Payroll. If one uploaded PDF contains several distinct forms "
+            "batch-scanned together, each is split out into its own renamed output file -- one upload "
+            "can produce multiple results here, same as Residency."
+        ),
     },
 ]
