@@ -63,6 +63,7 @@ BUCKET_NOT_READABLE     = "not_readable"
 FOLDER_RESIDENCY  = "Residency"
 FOLDER_DIVERSITY  = "Diversity Form"
 FOLDER_VENDOR     = "Vendor Invoices"
+FOLDER_FREELANCE  = "Freelance Crew Invoice"
 FOLDER_NOT_READABLE = "Not Readable"
 
 
@@ -877,6 +878,7 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
     po_number = parsed.get("po_number", "")
 
     mismatch_detail = check_sender_mismatch(bill_to_name, batch)
+    subfolder = FOLDER_VENDOR  # overridden below for an invoice with a literal Labor line item
 
     if is_hotel_folio:
         new_name = build_hotel_folio_filename(hotel_name, folio_number)
@@ -895,16 +897,21 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
                 reason_detail=f"Receipt but missing company name (company={company!r})", provider=provider,
             )
     elif has_labor:
+        # A literal "Labor"/"Delivery Labor" line item -- this is the one
+        # case that gets its own folder rather than sitting alongside
+        # ordinary vendor invoices, since it represents freelance crew labor
+        # rather than a goods/equipment/services purchase.
+        subfolder = FOLDER_FREELANCE
         if not has_person and not has_company:
             return DocResult(
-                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=FOLDER_VENDOR,
+                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=subfolder,
                 output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
                 reason_detail="Labor line item found but could not identify a billing person or company", provider=provider,
             )
         new_name = build_freelance_filename(has_person, last, first, has_company, company, invoice_number)
         if not new_name:
             return DocResult(
-                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=FOLDER_VENDOR,
+                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=subfolder,
                 output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
                 reason_detail=(f"Labor line item found but missing usable name/company (last={last!r}, "
                                f"first={first!r}, company={company!r})"),
@@ -952,13 +959,13 @@ async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, bat
 
     if mismatch_detail:
         return DocResult(
-            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=FOLDER_VENDOR,
+            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="vendor", subfolder=subfolder,
             output_pdf_bytes=b"", reason_code=REASON_SENDER_MISMATCH,
             reason_detail=mismatch_detail, provider=provider,
         )
 
     return DocResult(
-        bucket=BUCKET_RENAMED, doc_type="vendor", subfolder=FOLDER_VENDOR,
+        bucket=BUCKET_RENAMED, doc_type="vendor", subfolder=subfolder,
         output_pdf_bytes=b"", new_filename=new_name, provider=provider,
     )
 
@@ -1096,12 +1103,13 @@ NAMING_CONVENTIONS = [
         "type_id": "vendor",
         "label": "Vendor (Invoice / Receipt / Hotel Folio)",
         "patterns": [
-            {"pattern": "{Company} - Invoice {Number}.pdf", "description": "Company invoice, named by invoice number (number omitted if not printed) -- the default, and the automatic fallback for the PO-number option below whenever a given invoice has no PO number on it"},
-            {"pattern": "PO{PO Number} - {Company}.pdf", "description": "Company invoice, named by PO number instead -- a user-chosen alternative (set once per batch), only used for an invoice that actually has a PO number printed on it"},
-            {"pattern": "{Company} - receipt.pdf", "description": "Purchase receipt / order confirmation -- always by invoice number convention, not affected by the PO-number choice"},
-            {"pattern": "{Hotel Name} - Folio {Number}.pdf", "description": "Hotel guest folio (number omitted if blank) -- not affected by the PO-number choice"},
-            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "description": "Billed directly by an individual with no company name at all (a freelancer/consultant invoice, or a Labor/Delivery Labor line item) -- always by invoice number, not affected by the PO-number choice"},
-            {"pattern": "{Last}, {First} ({Company}) - Invoice {Number}.pdf", "description": "Same, when both a person and a company are named"},
+            {"pattern": "{Company} - Invoice {Number}.pdf", "folder": "Vendor Invoices", "description": "Company invoice, named by invoice number (number omitted if not printed) -- the default, and the automatic fallback for the PO-number option below whenever a given invoice has no PO number on it"},
+            {"pattern": "PO{PO Number} - {Company}.pdf", "folder": "Vendor Invoices", "description": "Company invoice, named by PO number instead -- a user-chosen alternative (set once per batch), only used for an invoice that actually has a PO number printed on it"},
+            {"pattern": "{Company} - receipt.pdf", "folder": "Vendor Invoices", "description": "Purchase receipt / order confirmation -- always by invoice number convention, not affected by the PO-number choice"},
+            {"pattern": "{Hotel Name} - Folio {Number}.pdf", "folder": "Vendor Invoices", "description": "Hotel guest folio (number omitted if blank) -- not affected by the PO-number choice"},
+            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Vendor Invoices", "description": "Billed directly by an individual with no company name at all and no Labor line item (a freelancer/consultant invoice, e.g. a location consultation fee) -- always by invoice number, not affected by the PO-number choice"},
+            {"pattern": "{Last}, {First} - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Invoice with a literal Labor/Delivery Labor line item, billed by a person -- gets its own folder rather than sitting alongside ordinary vendor invoices"},
+            {"pattern": "{Last}, {First} ({Company}) - Invoice {Number}.pdf", "folder": "Freelance Crew Invoice", "description": "Same, when both a person and a company are named on a Labor-line invoice"},
         ],
         "options": [
             {
