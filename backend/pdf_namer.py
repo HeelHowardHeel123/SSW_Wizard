@@ -64,6 +64,7 @@ FOLDER_RESIDENCY  = "Residency"
 FOLDER_DIVERSITY  = "Diversity Form"
 FOLDER_VENDOR     = "Vendor Invoices"
 FOLDER_FREELANCE  = "Freelance Crew Invoice"
+FOLDER_PETTY_CASH = "Petty Cash"
 FOLDER_NOT_READABLE = "Not Readable"
 
 
@@ -109,9 +110,10 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 - "residency" -- a Driver's License, a State ID card, or a USCIS Form I-9 (Employment Eligibility Verification).
 - "diversity" -- an Illinois Department of Commerce & Economic Opportunity (DCEO) "Illinois Film Tax Credit Tracking Sheet."
 - "vendor" -- a hotel guest folio, a purchase receipt/order confirmation, or a formal invoice (vendor or freelance) billing the production for goods, services, or labor.
+- "petty_cash" -- a petty cash document: a "Petty Cash Summary" reimbursement/reconciliation form for one named custodian (a running list of small cash purchases, an "Employee Name" field, an envelope/receipt log); an internal cash-advance Purchase Order where the Vendor is literally "Petty Cash" (or a close variant like "Petty Cash Advance") rather than an actual company or freelancer, handing a lump sum float to a named custodian; or a multi-person petty cash log/spreadsheet summarizing several custodians' totals at once (e.g. a "Petty Cash Spreadsheet"/"PC Master Summary" export). Never "vendor" for any of these, even the PO-cover-sheet variant -- Vendor: "Petty Cash" is the deciding signal, not the document's template.
 - "unknown" -- anything else, or if you cannot confidently tell from what's visible.
 
-Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "unknown"}
+Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "unknown"}
 No explanation. No markdown. No code fences. JSON object only."""
 
 ORIENTATION_PROMPT = """You are looking at page images from a single PDF document -- a scan or phone photo submitted as part of a film/TV production crew paperwork batch. For each page, determine how many degrees it needs to be rotated CLOCKWISE for its content (text, photos) to appear upright/right-side-up. Common causes: a phone photo taken in landscape when the document is portrait (or vice versa), or a scanner fed the page sideways or upside-down.
@@ -200,6 +202,22 @@ FOR A VENDOR INVOICE ONLY (skip these two for a receipt):
 - is_freelance_crew_labor: true if this document, in substance, is one individual production professional billing the production for their own personal service/time on this shoot -- not limited to below-the-line "crew" job titles; a Director's fee, a Photographer's creative fee, or a Wardrobe Stylist's day rate all count exactly the same way. Judge this by actually examining the document's content and structure, not by searching for any one specific word. Signals that this IS freelance labor (any one can be enough, and none of them require the literal word "Labor" to appear anywhere): it is titled or functions as a "Crew Invoice" or crew timesheet; it shows a Social Security Number instead of (or alongside) a business Tax ID/EIN; it names a specific person's role/title on this production (e.g. PA, Art Director, Line Producer, Stills, Wardrobe, Grip, HMU/HMUA, Production Coordinator, Set Dresser, Director, Photographer, Stylist, Location Sound Mixer, Storyboard Artist, etc.); it bills a day rate, hourly rate, or flat creative/service fee tied to this specific shoot, with prep/shoot/wrap-style time tracking, call/wrap times, or overtime; it carries a "Sub-contractor Signature" and/or production-manager sign-off line. This still counts as true even when the invoice is issued through the person's own loan-out/DBA/LLC/studio name rather than their personal name -- what matters is that the substance of the charges is one individual's personal service/time on this shoot, e.g. "Art Director, 8 days" through "MSDP Inc.", a "Director Fee" through "Thou Swell Thou Witty, Inc.", or a "Photographer Creative + Usage Fee" through "Alexa Viscius Studio" all still count as true. A single freelancer's invoice commonly bundles in a few incidental line items alongside their main fee -- their OWN kit/equipment/gear rental (e.g. a sound mixer's own recording kit, a photographer's own camera gear), reimbursed travel/meal/parking/supply expenses, film processing, or a helper/assistant they personally brought -- none of that disqualifies it; the whole invoice is still that one person's freelance labor. Set false only for a genuine third-party vendor business -- a dedicated equipment rental house, prop house, venue, or goods supplier -- invoicing the production for goods/services that are not tied to one specific billing individual's personal day-rate/creative-service work on this shoot.
 
 Return ONLY a JSON object with exactly these keys: {"po_number": "...", "is_hotel_folio": true or false, "hotel_name": "...", "folio_number": "...", "is_receipt": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "has_company_name": true or false, "company_name": "...", "bill_to_name": "...", "invoice_number": "...", "is_freelance_crew_labor": true or false}
+No explanation. No markdown. No code fences. JSON object only."""
+
+PETTY_CASH_SYSTEM_PROMPT = """You are analyzing a petty cash document submitted as part of a film/TV production's Accounts Payable packet. It will be one of:
+
+1. A PETTY CASH SUMMARY form for ONE named custodian -- a running log of small cash purchases/receipts (Date, To Whom, For What, Amount) with an "Employee Name" field identifying whose envelope this is. Extra scanned receipt images (rideshare receipts, store receipts, email confirmations) are commonly attached on later pages behind this cover sheet -- ignore them, the cover sheet's Employee Name is all you need.
+
+2. An internal cash-advance Purchase Order handing a lump-sum float to a custodian -- the Vendor field on these literally reads "Petty Cash" (or a close variant like "Petty Cash Advance") rather than a real company or freelancer name. The actual custodian's name is NOT the Vendor field -- read the Purpose/description block instead, where it typically appears directly below wording like "PC Float" (e.g. "PC Float\\nHolli McGinley"), or use the Contact name if that's the only name given.
+
+3. A PETTY CASH LOG / multi-person summary spreadsheet -- an aggregate report (often a "Petty Cash Spreadsheet" or "PC Master Summary" export from production budgeting software) that totals up SEVERAL different custodians' petty cash at once, typically as columns of initials rather than one full name. This has no single custodian to name.
+
+Determine:
+- is_petty_cash_log: true ONLY for case 3 above -- a multi-custodian aggregate/summary report with no one specific named custodian. false for case 1 or case 2, even though those are also summary-style forms -- they still belong to exactly one named person.
+- has_person_name: true if a single custodian's name can be identified (cases 1 and 2). Always false when is_petty_cash_log is true.
+- last_name / first_name: that custodian's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
+
+Return ONLY a JSON object with exactly these keys: {"is_petty_cash_log": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -523,7 +541,12 @@ def proper_case(s: str) -> str:
     title-cased, and a single letter directly after an apostrophe stays
     lowercase (a possessive/contraction suffix -- "Joe's", "McDonald's" --
     rather than a second name part, unlike "O'Brien"/"D'Angelo" where the
-    run after the apostrophe is longer and does get title-cased).
+    run after the apostrophe is longer and does get title-cased). A run
+    starting with "Mc" also capitalizes the letter right after it --
+    "MCGEE"/"mcgee" -> "McGee" -- since that's effectively universal for
+    real surnames and this field is always a person's name, never
+    arbitrary text; "Mac" is deliberately left alone since "Mack"/"Macy"/
+    "Mace" are common surnames in their own right where that doesn't apply.
     Capitalizes each contiguous run of letters independently:
     "REAGAN-BARNES" -> "Reagan-Barnes", "O'BRIEN" -> "O'Brien",
     "JOE'S BAKERY" -> "Joe's Bakery"."""
@@ -537,7 +560,10 @@ def proper_case(s: str) -> str:
             preceded_by_apostrophe = m.start() > 0 and word[m.start() - 1] == "'"
             if preceded_by_apostrophe and len(run) == 1:
                 return run.lower()
-            return run[:1].upper() + run[1:].lower()
+            capped = run[:1].upper() + run[1:].lower()
+            if len(capped) > 2 and capped[:2] == "Mc":
+                capped = capped[:2] + capped[2].upper() + capped[3:]
+            return capped
 
         return re.sub(r"[A-Za-z]+", cap_run, word)
 
@@ -609,6 +635,13 @@ def build_diversity_filename(last: str, first: str):
     if not last_s or not first_s:
         return None
     return f"{last_s}, {first_s} - Diversity Form.pdf"
+
+
+def build_petty_cash_filename(last: str, first: str):
+    last_s, first_s = sanitize_component(proper_case(last)), sanitize_component(proper_case(first))
+    if not last_s or not first_s:
+        return None
+    return f"{last_s}, {first_s} - Petty Cash.pdf"
 
 
 def build_freelance_filename(has_person: bool, last: str, first: str, has_company: bool, company: str, invoice_number: str):
@@ -858,6 +891,45 @@ async def _extract_diversity(images_b64, openai_client, anthropic_client, loop, 
     )
 
 
+async def _extract_petty_cash(images_b64, openai_client, anthropic_client, loop):
+    user_text = "Extract the fields described in the system prompt from this petty cash document."
+    parsed, provider = await classify_document(
+        images_b64, user_text, PETTY_CASH_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
+    )
+    if parsed is None:
+        return DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="petty_cash", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
+            reason_detail="Could not read document (both providers failed)", provider=provider,
+        )
+
+    if bool(parsed.get("is_petty_cash_log")):
+        return DocResult(
+            bucket=BUCKET_RENAMED, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
+            output_pdf_bytes=b"", new_filename="Petty Cash Log.pdf", provider=provider,
+        )
+
+    if not bool(parsed.get("has_person_name")):
+        return DocResult(
+            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
+            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            reason_detail="Could not identify a named custodian on this petty cash document", provider=provider,
+        )
+
+    last, first = parsed.get("last_name", ""), parsed.get("first_name", "")
+    new_name = build_petty_cash_filename(last, first)
+    if not new_name:
+        return DocResult(
+            bucket=BUCKET_UNABLE_TO_RENAME, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
+            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            reason_detail=f"Could not derive a usable name (last={last!r}, first={first!r})", provider=provider,
+        )
+    return DocResult(
+        bucket=BUCKET_RENAMED, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
+        output_pdf_bytes=b"", new_filename=new_name, provider=provider,
+    )
+
+
 async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, batch: BatchContext):
     user_text = "Extract the fields described in the system prompt from this vendor document."
     system_prompt = build_vendor_system_prompt(batch)
@@ -1075,6 +1147,10 @@ async def process_one_document(
             result = await _extract_vendor(vendor_images or classify_images, openai_client, anthropic_client, loop, batch)
             result.output_pdf_bytes = pdf_bytes
             results = [result]
+        elif family == "petty_cash":
+            result = await _extract_petty_cash(classify_images, openai_client, anthropic_client, loop)
+            result.output_pdf_bytes = pdf_bytes
+            results = [result]
         else:
             results = [DocResult(
                 bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
@@ -1137,6 +1213,14 @@ NAMING_CONVENTIONS = [
                 "default": "invoice_number",
                 "note": "Set once per batch on the Overview screen. Only changes the plain company-invoice pattern above -- Receipts, Hotel Folios, and Freelance Crew Invoices are unaffected either way.",
             },
+        ],
+    },
+    {
+        "type_id": "petty_cash",
+        "label": "Petty Cash",
+        "patterns": [
+            {"pattern": "{Last}, {First} - Petty Cash.pdf", "folder": "Petty Cash", "description": "A named custodian's Petty Cash Summary reimbursement form, or an internal cash-advance PO handing that custodian a float (Vendor field literally \"Petty Cash\")"},
+            {"pattern": "Petty Cash Log.pdf", "folder": "Petty Cash", "description": "A multi-custodian aggregate summary/spreadsheet with no single named custodian"},
         ],
     },
 ]
