@@ -250,12 +250,14 @@ CREW_PAYROLL_SYSTEM_PROMPT = """You are analyzing a Crew Payroll document submit
 
 3. A whole-project PAYROLL REGISTER -- a running ledger of every payment across the whole project's date range, often hundreds of pages, titled "Payroll Register." Not tied to any invoice number.
 
-Determine:
-- doc_kind: "invoice" for case 1, "fringe_report" for case 2, "payroll_register" for case 3.
-- company_name: ONLY for doc_kind "invoice" -- the payroll company's own short/common name. Prefer its own prominent header/logo/address block (e.g. the big "THE TEAM COMPANIES" logo and "The TEAM Companies, 2300 Empire Avenue..." address on its own invoice) over a smaller "Employer of Record" field elsewhere on the same page, which can name a different, less-recognizable legal entity the payroll company processes this particular job's checks through (e.g. "Talent, Ent. & Media Svcs, LLC" on that same Team Companies invoice) -- the header/letterhead name is the one to use, not the Employer of Record. Normalize whichever name you use the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc"/"Corp", drop a "DBA" business-name wrapper down to just the brand name that follows it, and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS", "TakeOne Network Corp. DBA Wrapbook" -> "Wrapbook"). Never the production company being billed (the "Bill To"/"To" party). Empty string for the other two doc_kinds.
-- invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed. Prefer a field literally labeled "Invoice Number"/"Invoice #" when one is present; only fall back to another field the payroll company uses instead (e.g. "Payroll ID") when no "Invoice Number" field exists at all. Never the internal "Invoice Group," "Batch," "Client #," or Project/Job number. Empty string if none is printed, or for the other two doc_kinds.
+4/5. A whole-project PAYROLL LOG -- a "PAYROLL LOG" table (columns like Line, Payee, PO, Rate, Days, Taxable/Non-taxable, Total, etc.) covering every payroll line item for the whole project. Comes in two variants with identical titles/structure, distinguished only by row order: "by Line #" is sorted by ascending Line number, so consecutive rows are usually different payees; "by Payee" is grouped by payee instead, so the same payee's name typically repeats across several consecutive rows before moving to the next one.
 
-Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register", "company_name": "...", "invoice_number": "..."}
+Determine:
+- doc_kind: "invoice" for case 1, "fringe_report" for case 2, "payroll_register" for case 3, "payroll_log_by_line" or "payroll_log_by_payee" for case 4/5 depending on that row-order tell.
+- company_name: ONLY for doc_kind "invoice" -- the payroll company's own short/common name. Prefer its own prominent header/logo/address block (e.g. the big "THE TEAM COMPANIES" logo and "The TEAM Companies, 2300 Empire Avenue..." address on its own invoice) over a smaller "Employer of Record" field elsewhere on the same page, which can name a different, less-recognizable legal entity the payroll company processes this particular job's checks through (e.g. "Talent, Ent. & Media Svcs, LLC" on that same Team Companies invoice) -- the header/letterhead name is the one to use, not the Employer of Record. Normalize whichever name you use the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc"/"Corp", drop a "DBA" business-name wrapper down to just the brand name that follows it, and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS", "TakeOne Network Corp. DBA Wrapbook" -> "Wrapbook"). Never the production company being billed (the "Bill To"/"To" party). Empty string for every other doc_kind.
+- invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed. Prefer a field literally labeled "Invoice Number"/"Invoice #" when one is present; only fall back to another field the payroll company uses instead (e.g. "Payroll ID") when no "Invoice Number" field exists at all. Never the internal "Invoice Group," "Batch," "Client #," or Project/Job number. Empty string if none is printed, or for every other doc_kind.
+
+Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register" | "payroll_log_by_line" | "payroll_log_by_payee", "company_name": "...", "invoice_number": "..."}
 No explanation. No markdown. No code fences. JSON object only."""
 
 MISC_FORM_MULTI_SYSTEM_PROMPT = """You are analyzing a multi-page PDF that may contain one or more separate standardized production paperwork forms -- forms that don't belong to any of Residency, Diversity, Vendor, Petty Cash, ProdCC, or Crew Payroll. Examples include a state tax withholding return (e.g. Georgia's "G-7 Quarterly Return for Film Payer," usually filed by the payroll company on the production's behalf), a crew member's time card, or a Kit/Box Rental fee record (a "Kit / Box Fee" summary page -- Employee, Amount, Date -- paired with its own "Box/Kit Rental Inventory" detail page) -- more form types beyond these can appear too. Each individual form belongs to either ONE company or ONE specific named crew member, and is tied to one specific date/period.
@@ -1183,6 +1185,16 @@ async def _extract_crew_payroll(images_b64, openai_client, anthropic_client, loo
             bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
             output_pdf_bytes=b"", new_filename="Payroll Register.pdf", provider=provider,
         )
+    if doc_kind == "payroll_log_by_line":
+        return DocResult(
+            bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
+            output_pdf_bytes=b"", new_filename="Payroll Log by Line #.pdf", provider=provider,
+        )
+    if doc_kind == "payroll_log_by_payee":
+        return DocResult(
+            bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
+            output_pdf_bytes=b"", new_filename="Payroll Log by Payee.pdf", provider=provider,
+        )
 
     company = parsed.get("company_name", "")
     invoice_number = parsed.get("invoice_number", "")
@@ -1517,6 +1529,8 @@ NAMING_CONVENTIONS = [
             {"pattern": "{Company} - Invoice {Number}.pdf", "folder": "Crew Payroll", "description": "A payroll company's own consolidated invoice for one batch of crew wages (Invoice Fee Summary / Fringe Recap Report / Wage-Payroll Register / Payroll Check Register pages) -- named by the payroll company's own short/common name (from its letterhead, not a possibly-different \"Employer of Record\" field) and its own batch reference number, preferring a literal \"Invoice Number\" field when present and otherwise whatever field the provider uses instead (e.g. \"Payroll ID\"), e.g. \"CAPS - Invoice 1001430894.pdf\", \"Wrapbook - Invoice 00722447.pdf\", \"The Team Companies - Invoice 26218283.pdf\", \"Revolution Entertainment Services - Invoice A23720A0136.pdf\" -- regardless of how many individual crew members' pay it covers"},
             {"pattern": "Fringe Report.pdf", "folder": "Crew Payroll", "description": "A whole-project aggregate table of every crew member's wages/fringes/benefits, not tied to one batch or invoice"},
             {"pattern": "Payroll Register.pdf", "folder": "Crew Payroll", "description": "A whole-project running payroll ledger covering every payment across the full project date range, not tied to one batch or invoice"},
+            {"pattern": "Payroll Log by Line #.pdf", "folder": "Crew Payroll", "description": "A whole-project \"PAYROLL LOG\" table sorted by ascending Line number, not tied to one batch or invoice"},
+            {"pattern": "Payroll Log by Payee.pdf", "folder": "Crew Payroll", "description": "Same PAYROLL LOG table, grouped by payee instead -- the same payee's name repeats across consecutive rows"},
         ],
     },
     {
