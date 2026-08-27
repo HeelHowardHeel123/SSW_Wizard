@@ -1,94 +1,92 @@
-# Frontend source handoff — rebuild for the main push (Aug 23, 2026)
+# Frontend source handoff — rebuild for the main push (Aug 27, 2026)
 
 ## Short answer
 
-Still **no git on my side.** Everything you need is in this repo working tree
-right now — commit it yourself. `source/` is the canonical frontend source;
-`backend/frontend/index.html` is the build artifact committed alongside it.
+Still **no git on my side.** Everything you need is in this package — commit it
+yourself. `source/` is the canonical frontend source; `backend/frontend/index.html`
+is the build artifact committed alongside it. Both are current as of today.
 
-Both were rewritten today from the current sandbox state. The previous versions
-in this tree were stale (`source/workbook-engine.js` was ~10 KB behind).
+Only **Wizard 01 (Name PDFs)** changed since the Aug 23 note. Wizard 02/03/04,
+the workbook engine, the bundled templates, and every GA/IL tab mapping are
+byte-identical to what you already merged.
 
-## What I just wrote into this tree
+## Files in this package
 
 | Path | What it is |
 |---|---|
-| `backend/frontend/index.html` | **Freshly rebuilt production bundle**, 3.37 MB. Self-contained: the four workbook templates are embedded as base64 via `window.__OM_EMBEDDED_WORKBOOKS__` + a `fetch` shim, and `workbook-engine.js` is embedded as module source and handed to the app as a blob URL. **Compiled output — never hand-edit.** |
-| `source/Production Binder Wizard.dc.html` | The real editable source (~5,850 lines). All UI, upload zones, column mapping, extraction calls. |
-| `source/workbook-engine.js` | xlsx read/patch/insert engine. Now includes `shiftMergeCells` and read-only `inspectStructure`. |
-| `source/wrapbook-fringe.js` | Wrapbook fringe parsing helper. |
+| `backend/frontend/index.html` | **Freshly rebuilt production bundle**, 3.27 MB. Self-contained: the four workbook templates are embedded as base64 via `window.__OM_EMBEDDED_WORKBOOKS__` + a `fetch` shim, and `workbook-engine.js` is embedded as module source handed to the app as a blob URL. **Compiled output — never hand-edit.** |
+| `source/Production Binder Wizard.dc.html` | The real editable source. All UI, upload zones, column mapping, extraction calls. |
+| `source/workbook-engine.js` | xlsx read/patch/insert engine. **Unchanged** since Aug 23. |
+| `source/wrapbook-fringe.js` | Wrapbook fringe parsing helper. **Unchanged.** |
 | `source/support.js` | Runtime the `.dc.html` loads. Generated — don't edit. |
-| `source/assets/workbooks/*.xlsx` | The four bundled default templates. |
-| `source/CLAUDE.md` | Current template versions + column mappings for every GA tab. **Read this before touching geometry.** |
+| `source/CLAUDE.md` | Template versions + column mappings for every tab, plus the Wizard 01 contract notes. **Read this before touching geometry.** |
 
-## Post-rebuild injection — verified in-browser
+Not included because they didn't change: `source/assets/workbooks/*.xlsx` (the
+four bundled defaults, already in the repo and already embedded in the bundle
+above), `backend/main.py`, `requirements.txt`.
 
-Both globals present and working (re-check these on any future rebuild):
+## What's new in this bundle
 
-- `__OM_EMBEDDED_WORKBOOKS__` — 4 keys. `fetch('assets/workbooks/georgia.xlsx')`
-  returns **302,169 bytes**, byte-identical to source, no network request.
-- `__OM_EMBEDDED_MODULES__` — 1 key; the blob imports and exports
-  `generateWorkbook`.
+1. **Vendor invoice naming toggle** on the Wizard 01 intake screen. Posts
+   `vendor_naming` = `"invoice_number"` (default) or `"po_number"` on
+   `POST /wizard01/jobs`. Label, note, choices and default are read from
+   `GET /wizard01/conventions` (`types[].options[]` where
+   `key === "vendor_naming"`); only the two values are built in, so it works
+   before that endpoint deploys. Not part of the intake gate — always has a
+   default.
+2. **Intake screen simplified.**
+   - **All address fields removed** — they never affected a filename. The POST
+     no longer sends `client_address` / `agency_address` / `prodco_address`.
+   - **Client removed as a batch source.** "Who is this batch from?" is now
+     Production Co. or Agency only (a client never bills a production).
+   - **Only the sender's name is required.** The other entity's name is still
+     collected and posted, optional — the backend's Bill-To cross-check is what
+     catches a mis-declared batch, so more names is still better.
+   - On an **Agency** batch an optional **Client Name** card appears and posts as
+     `client_name`; on a ProdCo batch that field is hidden and `client_name`
+     posts empty.
+3. **The Wizard 01 upload POST moves off Cloudflare.** New `UPLOAD_BACKEND_URL`
+   getter + `UPLOAD_HOSTS_MAP`: on `tealdocwizard.com` / `www.` the single
+   multipart `POST /wizard01/jobs` goes to `https://upload.tealdocwizard.com`
+   (DNS-only, unproxied, same Railway service) so a multi-GB batch isn't 413'd
+   at the edge by Cloudflare's body-size cap. Everywhere else it resolves to
+   `BACKEND_URL` unchanged. Status polling, download and delete all stay on
+   `BACKEND_URL`. **No backend code change — the FastAPI app just needs to
+   answer that second hostname, and the DNS record has to exist.**
+4. **Wizard 01's landing card pill reads "In Development"** (electric blue)
+   instead of "Active" — the backend endpoints aren't live yet and the card
+   shouldn't promise they are. Flip it back to the aquamarine "Active" pill when
+   `/wizard01/*` ships.
 
-Absent → every template load 404s / Generate Workbook dies on
+## Post-rebuild injection — re-verify on any future rebuild
+
+- `__OM_EMBEDDED_WORKBOOKS__` — 4 keys, present in this build.
+- `__OM_EMBEDDED_MODULE_SOURCE__` — 1 key, present in this build.
+
+Absent → every template load 404s and Generate Workbook dies on
 *"Failed to resolve module specifier"*.
-
-## What's in this bundle that wasn't in the last one
-
-- **Georgia marked Active** (dev pill removed) on the workbook picker.
-- **Agency Billings hidden on GA** — no destination tab there, so the whole
-  Agency section now drops out on GA runs. Still writes on both IL wizards.
-- **Talent (GA)** — Highland Talent added as a third payroll company; multi-file
-  PTIP for all three; `loan_out` → AE with YES/NO normalization (a raw `"NO"`
-  string was truthy before); column map current to *Template GA … 2026 08 20*
-  (Other Fees inserted at S).
-- **Loan Out Withholding tab** — accumulates `loan_out_rows` off four endpoints.
-- **Payroll Roster tab** — deduped by (name, job title) from
-  `payroll_roster_rows`; Y wins over N.
-- **GL(BILLING) / GL (PRODCO) tabs** — literal ledgers, never deduped. PRODCO
-  crew rows are built client-side from the reconciled Payroll Report set, so
-  they can't double-count.
-- **Payroll Report (GA)** — reconciliation via `/reconcile-ga-payroll`, timecards
-  slot, 3-way sort selector, current 2026-17-10 column layout.
-- **Hotel Charges Summary (GA)** — two-axis growth (hotels x guests).
-- **Engine**: row insertion now shifts `<mergeCells>`; soft geometry checks
-  (`inspectStructure`) for GA Talent / Loan Out / Payroll Roster / GL, hard
-  preconditions for GA Payroll Report.
 
 ## Backend targeting — unchanged
 
-`BACKEND_URL` resolution is the same as the Aug 6 note: same-origin on
-`tealdocwizard.com`, `www.tealdocwizard.com`,
-`sswwizard-production.up.railway.app`,
-`sswwizard-production-7974.up.railway.app`; `BACKEND_FALLBACK` (dev) anywhere
-else, so sandbox runs never touch prod. `X-App-Secret` still `tpcSSW201005`.
-Nothing to change for the main sync.
+`BACKEND_URL` resolution, the `BACKEND_FALLBACK` dev host, and
+`X-App-Secret` (`tpcSSW201005`) are all as documented Aug 6. Nothing to change
+for this sync.
 
-## Known-open, non-blocking (documented, not bugs to fix before merge)
+## Known-open, non-blocking
 
-1. **Loan Out Withholding col A (Job Code) ships blank** with a visible run
-   issue — there is no Job Code field on the Overview step to stamp it from.
-   One-liner once that input exists.
-2. **GA Talent geometry is checked softly** because the bundled
-   `assets/workbooks/georgia.xlsx` is still the *older* Talent layout (no Misc
-   Payment / Signatory Fee / PTIP columns). A first-time user who never
-   uploaded a template gets the Talent tab skipped with an issue rather than an
-   aborted workbook. **Publishing the current GA template via Wizard 04 fixes
-   this for everyone without a redeploy** — worth doing right after the merge.
-3. **Talent invoice roll-up caps at 15 distinct invoices** (the block shares
-   rows 43–72 with the AICP category block). Accepted stopgap; raises a visible
-   issue naming the overflow.
-4. **Four tabs have no backend rows yet** — Loan Out Withholding, Payroll
-   Roster, GL(BILLING), GL (PRODCO) (and the Highland branch). The frontend
-   harvests `loan_out_rows` / `payroll_roster_rows` / `gl_*_rows` off existing
-   envelopes, so a response without those keys is the normal case today and
-   those tabs simply write nothing. Not a merge blocker — they go live the
-   moment the backend starts sending the arrays, no frontend change needed.
-5. **GL(BILLING) / GL (PRODCO) have never had a live test run.** Everything
-   else in this bundle has.
+Everything on the Aug 23 list still stands unchanged (Loan Out col A blank, GA
+Talent soft geometry check, Talent invoice roll-up capped at 15, four tabs
+awaiting backend arrays, GL tabs never live-tested). Plus, for Wizard 01:
+
+- **The whole `/wizard01/*` surface is still stubbed on the frontend's side of
+  the contract** — jobs, status polling, download, delete, conventions. The UI is
+  complete and tested against hand-written payloads; nothing has run against a
+  real backend. Hence the "In Development" pill.
+- **`GET /wizard01/conventions` 404 is expected** — the conventions panel says
+  the endpoint is unreachable rather than showing invented patterns, and the
+  naming toggle falls back to two built-in labels. Never inline the patterns.
 
 ## Merge
 
-No blockers on my side. Nothing mid-flight. Merge whenever — simultaneous is
-fine, and since the frontend ships inside this repo as
-`backend/frontend/index.html`, one merge lands both halves in sync anyway.
+No blockers. Nothing mid-flight. One merge lands both halves in sync since the
+frontend ships inside this repo as `backend/frontend/index.html`.

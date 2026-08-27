@@ -1,5 +1,95 @@
 # Production Binder Wizard — project notes
 
+## Wizard 01 — Name PDFs
+- **Job-based, not request/response.** Classifying 100-250+ PDFs is 30+ minutes
+  of LLM work, so `POST /wizard01/jobs` returns `{job_id}` immediately and the
+  frontend polls `GET /wizard01/jobs/{id}` every **3s** (backend increments
+  `processed` per file, ~5 concurrent). `…/download` streams the zip (409 while
+  running, 404 expired); `DELETE` clears a job early. All four take
+  `X-App-Secret` like everything else.
+- **Job record and zip share ONE 2-day clock** — a bookmarked job that still
+  answers `done` is always still downloadable. `job_id` is a random UUID4
+  (deliberately unlike `/templates/{id}`, which are human-chosen and few), so it
+  is safe in the URL. We write `#job=<id>` and mirror it to localStorage
+  (`tpc_namer_job_v1`). **Hash wins over localStorage on mount** and forces
+  `view:"namer"`; a job merely remembered in this browser does NOT hijack the
+  landing screen.
+- **The upload POST alone goes to `UPLOAD_BACKEND_URL`** (`upload.tealdocwizard.com`
+  on prod, a DNS-only/unproxied subdomain on the same Railway service; identical
+  to `BACKEND_URL` everywhere else). Cloudflare hard-caps request body size at
+  the edge, so a multi-GB batch 413s before reaching the backend. Polling,
+  download and delete stay on `BACKEND_URL`.
+- **Upload is one multipart POST via XHR**, not fetch — purely for
+  `upload.onprogress`, since a multi-GB POST with no progress is
+  indistinguishable from a hang. Backend streams each file to disk as it
+  arrives. A dropped connection costs a re-upload and nothing more (no work has
+  started), so chunked upload was deliberately deferred. Soft nudge over
+  **120 files** (`NAMER_BATCH_NUDGE`) — a courtesy, not a backend limit.
+- **Intake gate (`namerIntakeMissing`)**: `received_from` (prodco or agency,
+  never mixed) + **that entity's NAME**. Client was dropped as a source (a client
+  never bills a production) — but on an AGENCY batch an optional Client Name
+  field appears and is posted as `client_name` (empty on prodco batches) — and **addresses were dropped entirely** — they never
+  affected a filename. The non-sender entity's name is still collected and posted
+  (optional): the backend compares each invoice's Bill-To against every name it
+  was given, which is the guard against the old tool's regression (naming
+  invoices after who was *billed* instead of who was *billing*).
+- **Sender-mismatch detection is Vendor-only.** Residency and Diversity docs
+  have no "who is this addressed to" field, so for those two the intake screen
+  carrying the confirmation burden is the whole defense.
+- **Vendor invoice naming toggle** (`vendor_naming` on POST): `invoice_number`
+  (default) vs `po_number`. Scoped to plain company invoices only — receipts,
+  hotel folios and the labor-line-item pattern ignore it, and a PO-less invoice
+  falls back to invoice-number naming backend-side. The control's label, note,
+  choices and default are read from the conventions payload
+  (`types[].options[]` where `key === "vendor_naming"`); only the two VALUES are
+  built in, so the toggle still works before that endpoint deploys. It is not
+  part of `namerIntakeMissing` — it always has a default.
+- **Naming conventions are NOT hardcoded.** `GET /wizard01/conventions` returns
+  them as data so they can't drift when a 4th document type ships. A 404 is
+  expected until that endpoint deploys — the panel says so rather than showing
+  invented patterns. Never inline the patterns as a fallback.
+- `reason_code` is a closed enum mapped to real words in `NAMER_REASONS`
+  (`missing_name`, `missing_date`, `missing_company`, `sender_mismatch`,
+  `low_confidence`, plus the not-readable split `unclassified` = readable but no
+  handler yet vs `unreadable` = genuinely corrupt). Unknown codes fall through
+  to the raw string, never swallowed. `reason_detail` is free text shown verbatim.
+- **Residency splits one upload into many documents** (backend dev 05fa536): a
+  batch scan of a stack of physical IDs (1 page front-only, or 2 front+back per
+  person) is sliced into one named file per person. Consequences:
+  - **`log[]` can be LONGER than `total`.** `total`/`processed` count uploaded
+    files only, so the progress counter is unaffected; `renamed` /
+    `needs_review` / `not_readable` count OUTPUT documents. Never assume
+    `log.length === total` — the log view derives its own totals.
+  - Several entries legitimately share one `filename` (the upload's). Rows get a
+    **"Split · 2 of 4"** badge, counted across the WHOLE log so the ordinal
+    stays right inside a filtered tab, plus a one-line note above the table
+    ("5 uploads produced 8 named documents").
+  - Log view caps at **500 rows** and says how many more are in `_manifest.csv`
+    rather than silently truncating.
+- Every log entry carries its own freshly-generated `file_id` (UUID, stable for
+  the job's life) — including single-output files, which used to reuse the
+  upload's id. One upload splitting into 5 people means 5 distinct ids, which is
+  what makes per-document retry/override workable later. Filename is a weak key
+  across 250 files with duplicates, and now genuinely ambiguous on splits.
+- Zip: one folder per type that had a classified file, with successfully-renamed
+  AND `Unable_To_Rename_NNN` files together in their correct type folder; a
+  `Not Readable/` folder for anything unclassifiable, original names intact;
+  `_manifest.csv` at top level, **server-generated** (guaranteed to match what
+  shipped, and outlives the 2-day status payload).
+- **Discarding an in-flight run is a two-step confirm** (`namerConfirmStop`);
+  finished jobs discard in one click. The footer button sits beside the benign
+  "Show file-by-file log" toggle, and the DELETE destroys a 30-minute run plus
+  the only two copies of the job id (hash + localStorage) — so the running case
+  has to be asked for twice. Label flips to "Discard this run" while live.
+- `jDead` (`namerError` with no `namerJob`) means expired/404/deleted: polling
+  has already stopped, so the spinner, stats, progress label and discard-confirm
+  all suppress on it. Without that flag a dead job spins forever.
+- Folder drag-drop recurses `webkitGetAsEntry` — a plain `dataTransfer.files`
+  read returns the directory and drops everything inside it. Non-`.pdf` is
+  filtered; dedupe is on `name|size`.
+- Zero shared state with Wizard 02 — no engine, no template geometry, no
+  Electron concerns.
+
 ## Templates (Wizard 04)
 - The workbook templates the wizards populate live at `assets/workbooks/*.xlsx`
   (`illinois-local.xlsx` is the only one wired to an active wizard today).

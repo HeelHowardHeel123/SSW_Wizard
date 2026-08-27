@@ -41,17 +41,19 @@
         <p style="margin:0 0 28px;font-size:15px;color:#5A5770">Pick the tool for the task. More are on the way.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
 
-          <!-- 1. Name PDFs (coming soon) -->
-          <div style="display:flex;flex-direction:column;gap:16px;padding:26px;border:1px solid #DDE0E0;background:#FAFBFB;border-radius:10px;opacity:0.72;cursor:not-allowed">
-            <div style="width:48px;height:48px;border-radius:8px;background:#F1F2F2;display:flex;align-items:center;justify-content:center">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#B8B6C4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 13h6M9 17h4"></path></svg>
+          <!-- 1. Name PDFs (in development) -->
+          <div onClick="{{ onEnterNamer }}" style="display:flex;flex-direction:column;gap:16px;padding:26px;border:1px solid #DDE0E0;background:#fff;border-radius:10px;cursor:pointer;transition:border-color 120ms,box-shadow 120ms" style-hover="border-color:#00CCB8;box-shadow:0 8px 24px rgba(10,4,34,0.08)">
+            <div style="width:48px;height:48px;border-radius:8px;background:rgba(0,204,184,0.14);display:flex;align-items:center;justify-content:center">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00A694" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 13h6M9 17h4"></path></svg>
             </div>
             <div style="flex:1">
-              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#8E8CA0;margin-bottom:6px">Wizard 01</div>
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#00A694;margin-bottom:6px">Wizard 01</div>
               <div style="font-size:19px;font-weight:600;color:#0A0422;margin-bottom:8px">Name PDFs</div>
-              <div style="font-size:14px;line-height:1.5;color:#5A5770">Batch-rename production PDFs into a clean, sortable naming convention before you file them.</div>
+              <div style="font-size:14px;line-height:1.5;color:#5A5770">Drop in a folder of mixed PDFs. Get back the same files, renamed to convention and sorted into folders.</div>
             </div>
-            <span style="align-self:flex-start;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:#F1F2F2;color:#8E8CA0">Coming soon</span>
+            <span style="align-self:flex-start;display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:rgba(33,0,229,0.10);color:#2100E5">In Development
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2100E5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
+            </span>
           </div>
 
           <!-- 2. Production Binder Wizard (active) -->
@@ -99,6 +101,312 @@
 
         </div>
       </div>
+    </sc-if>
+
+    <!-- WIZARD 01 · NAME PDFs -->
+    <sc-if value="{{ showNamer }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#0A0422;padding:26px 40px;display:flex;align-items:center;justify-content:space-between;gap:24px">
+        <div style="display:flex;align-items:center;gap:16px">
+          <svg width="40" height="40" viewBox="0 0 200 200" aria-label="TPC"><g fill="none" stroke="#00CCB8" stroke-width="6"><rect x="20" y="20" width="80" height="80"></rect><rect x="100" y="20" width="80" height="80"></rect><rect x="100" y="100" width="80" height="80"></rect></g></svg>
+          <div>
+            <div style="font-size:11px;font-weight:600;letter-spacing:0.16em;text-transform:uppercase;color:#00CCB8;margin-bottom:5px"><span style="text-transform:lowercase">teal</span> · Incentive Operations</div>
+            <div style="font-size:20px;font-weight:500;color:#fff;letter-spacing:-0.01em">Name PDFs</div>
+          </div>
+        </div>
+        <button onClick="{{ onExitToLanding }}" style="display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:0" style-hover="color:#00CCB8">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>All wizards
+        </button>
+      </div>
+
+      <!-- 1 · INTAKE -->
+      <sc-if value="{{ showNamerIntake }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:38px 40px">
+          <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#00A694;margin-bottom:8px">Step 1 of 2</div>
+          <h2 style="margin:0 0 6px;font-size:26px;font-weight:500;letter-spacing:-0.02em;color:#0A0422">Who is this batch from?</h2>
+          <p style="margin:0 0 24px;font-size:15px;color:#5A5770;line-height:1.55;max-width:66ch;text-wrap:pretty">An invoice gets named after whoever is <strong style="font-weight:600;color:#0A0422">doing the billing</strong> — not whoever is being billed. Getting this wrong renames every invoice in the batch after the wrong company, so it's worth a careful minute here.</p>
+
+          <div style="display:flex;gap:10px;margin:0 0 8px">
+            <sc-for list="{{ namerSourceOptions }}" as="opt" hint-placeholder-count="2">
+              <div onClick="{{ opt.onPick }}" style="{{ opt.style }}">{{ opt.label }}</div>
+            </sc-for>
+          </div>
+          <p style="margin:0 0 26px;font-size:13px;color:#8E8CA0">One per batch — never a mix. If this folder holds files from both, run them separately.</p>
+
+          <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:8px">
+            <sc-for list="{{ namerEntities }}" as="ent" hint-placeholder-count="2">
+              <div style="{{ ent.cardStyle }}">
+                <div>
+                  <div style="font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#5A5770">{{ ent.label }}</div>
+                  <div style="margin-top:4px;font-size:12px;font-weight:500;color:{{ ent.hintColor }}">{{ ent.hint }}</div>
+                </div>
+                <input value="{{ ent.nameVal }}" onChange="{{ ent.onName }}" placeholder="{{ ent.namePlaceholder }}" style="width:100%;font-size:14px;padding:10px 12px;border:1px solid #DDE0E0;border-radius:6px;background:#fff;color:#1A1530;outline:none" style-focus="border-color:#00CCB8">
+              </div>
+            </sc-for>
+          </div>
+          <p style="margin:0 0 26px;font-size:13px;color:#8E8CA0;line-height:1.5;max-width:70ch">Only the sender's name is required. Filling in the other one is still worth a second — every invoice's Bill-To is checked against every name given, so a batch labelled with the wrong sender gets flagged instead of quietly mis-named.</p>
+
+          <div style="margin:0 0 26px;border:1px solid #DDE0E0;border-radius:8px;padding:18px 20px;background:#fff">
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#5A5770;margin-bottom:8px">{{ namerVendorNamingLabel }}</div>
+            <p style="margin:0;font-size:13px;color:#5A5770;line-height:1.5;max-width:70ch">Only plain company invoices follow this setting. Receipts, hotel folios and labor line items keep their own naming either way, and an invoice with no PO number on it falls back to invoice-number naming on its own.</p>
+            <sc-if value="{{ showNamerVendorNamingNote }}" hint-placeholder-val="{{ false }}">
+              <p style="margin:8px 0 0;font-size:13px;color:#8E8CA0;line-height:1.5;max-width:70ch">{{ namerVendorNamingNote }}</p>
+            </sc-if>
+            <div style="display:flex;gap:10px;margin-top:14px">
+              <sc-for list="{{ namerVendorNamingChoices }}" as="opt" hint-placeholder-count="2">
+                <div onClick="{{ opt.onPick }}" style="{{ opt.style }}">
+                  <div style="font-size:14px;font-weight:600">{{ opt.label }}</div>
+                  <sc-if value="{{ opt.showPattern }}" hint-placeholder-val="{{ false }}">
+                    <code style="display:block;margin-top:6px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:currentColor;opacity:0.72">{{ opt.pattern }}</code>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <sc-if value="{{ showNamerIntakeError }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:flex-start;gap:10px;margin:0 0 20px;padding:13px 16px;border:1px solid #f0c2c2;background:#fdf2f2;border-radius:8px">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9b2c2c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>
+              <span style="font-size:13px;color:#9b2c2c;line-height:1.5">{{ namerMissingText }}</span>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;align-items:center;gap:16px;padding-top:22px;border-top:1px solid #F1F2F2">
+            <button onClick="{{ onNamerContinue }}" style="{{ namerContinueStyle }}">Continue to files
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
+            </button>
+            <button onClick="{{ onNamerToggleConventions }}" style="border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;color:#00A694;padding:0" style-hover="color:#0A0422">{{ namerConvToggleLabel }}</button>
+          </div>
+
+          <sc-if value="{{ showNamerConventions }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:22px;border:1px solid #DDE0E0;border-radius:10px;overflow:hidden">
+              <div style="padding:14px 18px;background:#FAFBFB;border-bottom:1px solid #DDE0E0;font-size:13px;font-weight:600;color:#0A0422">How files get named</div>
+              <sc-for list="{{ namerConvItems }}" as="c" hint-placeholder-count="3">
+                <div style="padding:14px 18px;border-bottom:1px solid #F1F2F2">
+                  <div style="font-size:13px;font-weight:600;color:#0A0422;margin-bottom:8px">{{ c.label }}</div>
+                  <div style="display:flex;flex-direction:column;gap:7px">
+                    <sc-for list="{{ c.patterns }}" as="p" hint-placeholder-count="2">
+                      <div>
+                        <code style="font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#F1F2F2;padding:3px 7px;border-radius:4px;color:#0A0422">{{ p.text }}</code>
+                        <sc-if value="{{ p.showNote }}" hint-placeholder-val="{{ false }}">
+                          <div style="font-size:12.5px;color:#5A5770;margin-top:5px;line-height:1.5">{{ p.note }}</div>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+              <sc-if value="{{ namerConvMissing }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:16px 18px;font-size:13px;color:#5A5770;line-height:1.55">The naming rules load from the backend so they stay accurate as document types are added. They aren't reachable right now — naming still works, this reference just isn't available.</div>
+              </sc-if>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- 2 · UPLOAD -->
+      <sc-if value="{{ showNamerUpload }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:38px 40px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:8px">
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#00A694">Step 2 of 2</div>
+            <button onClick="{{ onNamerBackToIntake }}" style="display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:#5A5770;padding:0" style-hover="color:#0A0422">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>Edit details
+            </button>
+          </div>
+          <h2 style="margin:0 0 6px;font-size:26px;font-weight:500;letter-spacing:-0.02em;color:#0A0422">Add the PDFs</h2>
+          <p style="margin:0 0 20px;font-size:15px;color:#5A5770">Drag the whole folder in, or pick the files. Residency documents, diversity forms, and vendor invoices can all go in together.</p>
+
+          <div style="display:inline-flex;align-items:center;gap:9px;margin:0 0 22px;padding:9px 14px;border:1px solid #DDE0E0;background:#FAFBFB;border-radius:999px">
+            <span style="width:7px;height:7px;border-radius:50%;background:#00CCB8"></span>
+            <span style="font-size:13px;color:#5A5770">Received from <strong style="font-weight:600;color:#0A0422">{{ namerSourceLabel }}</strong> · {{ namerSourceName }}</span>
+          </div>
+
+          <div onDrop="{{ onNamerDrop }}" onDragOver="{{ onNamerDragOver }}" onDragLeave="{{ onNamerDragLeave }}" style="{{ namerDropStyle }}">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#8E8CA0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:12px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5-5 5 5"></path><path d="M12 5v12"></path></svg>
+            <div style="font-size:15px;font-weight:600;color:#0A0422;margin-bottom:5px">Drop a folder of PDFs here</div>
+            <div style="font-size:13px;color:#5A5770;margin-bottom:16px">Only .pdf files are picked up. Subfolders are included.</div>
+            <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#0A0422;background:#fff;border:1px solid #DDE0E0;padding:9px 16px;border-radius:6px" style-hover="border-color:#00CCB8">Choose files
+              <input type="file" accept=".pdf" multiple="{{ true }}" onChange="{{ onNamerPick }}" style="display:none">
+            </label>
+          </div>
+
+          <sc-if value="{{ namerHasFiles }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:22px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px">
+                <div style="font-size:13px;font-weight:600;color:#0A0422">{{ namerCountLabel }} · {{ namerTotalSize }}</div>
+                <button onClick="{{ onNamerClearFiles }}" style="border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:#8E8CA0;padding:0" style-hover="color:#9b2c2c">Clear all</button>
+              </div>
+              <sc-if value="{{ showNamerBigBatch }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;padding:13px 16px;border:1px solid #f2e2bd;background:#fdfaf1;border-radius:8px">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8a6a1f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><path d="M12 9v4M12 17h.01"></path></svg>
+                  <span style="font-size:13px;color:#8a6a1f;line-height:1.5">{{ namerBigBatchText }}</span>
+                </div>
+              </sc-if>
+              <div style="border:1px solid #DDE0E0;border-radius:8px;max-height:320px;overflow:auto">
+                <sc-for list="{{ namerFileRows }}" as="f" hint-placeholder-count="6">
+                  <div style="{{ f.rowStyle }}">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8E8CA0" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>
+                    <span style="flex:1;font-size:13px;color:#1A1530;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</span>
+                    <span style="font-size:12px;color:#8E8CA0;flex-shrink:0">{{ f.size }}</span>
+                    <button onClick="{{ f.onRemove }}" style="border:none;background:none;cursor:pointer;color:#B8B6C4;padding:2px;display:flex;flex-shrink:0" style-hover="color:#9b2c2c">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+                    </button>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ showNamerError }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:flex-start;gap:10px;margin-top:20px;padding:13px 16px;border:1px solid #f0c2c2;background:#fdf2f2;border-radius:8px">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9b2c2c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>
+              <span style="font-size:13px;color:#9b2c2c;line-height:1.5">{{ namerError }}</span>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;align-items:center;gap:16px;margin-top:26px;padding-top:22px;border-top:1px solid #F1F2F2">
+            <button onClick="{{ onNamerStart }}" style="{{ namerStartStyle }}">Name these files
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
+            </button>
+            <span style="font-size:13px;color:#8E8CA0">Renaming runs on the server — you can close this tab and come back.</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- 3 · RUN / RESULT -->
+      <sc-if value="{{ showNamerRun }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:38px 40px">
+          <h2 style="margin:0 0 6px;font-size:26px;font-weight:500;letter-spacing:-0.02em;color:#0A0422">{{ namerProgressLabel }}</h2>
+          <p style="margin:0 0 22px;font-size:15px;color:#5A5770">Each file is read, classified, and renamed one at a time. Long batches take a while — this page keeps itself up to date.</p>
+
+          <div style="height:8px;background:#F1F2F2;border-radius:999px;overflow:hidden;margin-bottom:8px">
+            <div style="{{ namerBarStyle }}"></div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:26px">
+            <div style="display:flex;align-items:center;gap:9px">
+              <sc-if value="{{ namerRunning }}" hint-placeholder-val="{{ false }}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00A694" stroke-width="2.6" stroke-linecap="round" style="animation:binderSpin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+              </sc-if>
+              <span style="font-size:13px;color:#8E8CA0">{{ namerPct }}%</span>
+              <sc-if value="{{ namerRunning }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:13px;color:#8E8CA0">· still working, updated every few seconds</span>
+              </sc-if>
+            </div>
+            <sc-if value="{{ namerUploading }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ onNamerCancelUpload }}" style="border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:#8E8CA0;padding:0" style-hover="color:#9b2c2c">Cancel upload</button>
+            </sc-if>
+          </div>
+
+          <sc-if value="{{ namerShowStats }}" hint-placeholder-val="{{ true }}">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:24px">
+              <sc-for list="{{ namerStats }}" as="s" hint-placeholder-count="3">
+                <div style="border:1px solid #DDE0E0;border-radius:8px;padding:16px 18px">
+                  <div style="font-size:26px;font-weight:600;letter-spacing:-0.02em;color:{{ s.color }};margin-bottom:3px">{{ s.value }}</div>
+                  <div style="font-size:12.5px;color:#5A5770">{{ s.label }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ namerDone }}" hint-placeholder-val="{{ false }}">
+            <div style="border:1px solid #b6e3d8;background:#f0f9f6;border-radius:10px;padding:22px 24px;margin-bottom:22px">
+              <div style="font-size:16px;font-weight:600;color:#0f7a63;margin-bottom:6px">Your files are ready</div>
+              <p style="margin:0 0 16px;font-size:13.5px;color:#0f7a63;line-height:1.55;max-width:70ch">One folder per document type, plus a <code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px">_manifest.csv</code> listing every file's old name, new name, and why anything was skipped. Files that couldn't be renamed keep their original names and sit in their own folder — nothing is left out.</p>
+              <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+                <button onClick="{{ onNamerDownload }}" style="display:inline-flex;align-items:center;gap:9px;border:none;background:#0A0422;color:#fff;cursor:pointer;font-size:15px;font-weight:600;padding:13px 26px;border-radius:6px">{{ namerDownloadLabel }}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></svg>
+                </button>
+                <sc-if value="{{ showNamerExpiry }}" hint-placeholder-val="{{ false }}">
+                  <span style="font-size:13px;color:#0f7a63">Deleted from the server <strong style="font-weight:600">{{ namerExpiry }}</strong> — download it before then.</span>
+                </sc-if>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ namerJobFailed }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:22px;padding:15px 18px;border:1px solid #f0c2c2;background:#fdf2f2;border-radius:8px">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9b2c2c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>
+              <div>
+                <div style="font-size:13.5px;font-weight:600;color:#9b2c2c;margin-bottom:3px">This job stopped before finishing.</div>
+                <div style="font-size:13px;color:#9b2c2c;line-height:1.5">{{ namerJobError }}</div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ showNamerError }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:22px;padding:13px 16px;border:1px solid #f0c2c2;background:#fdf2f2;border-radius:8px">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9b2c2c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>
+              <span style="font-size:13px;color:#9b2c2c;line-height:1.5">{{ namerError }}</span>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding-top:20px;border-top:1px solid #F1F2F2">
+            <button onClick="{{ onNamerToggleLog }}" style="border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;color:#00A694;padding:0" style-hover="color:#0A0422">{{ namerLogToggleLabel }}</button>
+            <button onClick="{{ onNamerNewBatch }}" style="border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;color:#8E8CA0;padding:0" style-hover="color:#9b2c2c">{{ namerNewBatchLabel }}</button>
+            <sc-if value="{{ showNamerJobId }}" hint-placeholder-val="{{ false }}">
+              <span style="font-size:12px;color:#B8B6C4;margin-left:auto">Job {{ namerJobId }}</span>
+            </sc-if>
+          </div>
+
+          <sc-if value="{{ showNamerConfirmStop }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:18px;padding:16px 18px;border:1px solid #f0c2c2;background:#fdf2f2;border-radius:8px">
+              <div style="font-size:13.5px;color:#9b2c2c;line-height:1.55;margin-bottom:14px">{{ namerConfirmStopText }}</div>
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <button onClick="{{ onNamerConfirmStop }}" style="border:none;background:#9b2c2c;color:#fff;cursor:pointer;font-size:13px;font-weight:600;padding:10px 18px;border-radius:6px">Discard the run</button>
+                <button onClick="{{ onNamerCancelStop }}" style="border:1px solid #DDE0E0;background:#fff;color:#0A0422;cursor:pointer;font-size:13px;font-weight:600;padding:10px 18px;border-radius:6px" style-hover="border-color:#0A0422">Keep it running</button>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ namerShowLog }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:20px">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+                <sc-for list="{{ namerLogTabs }}" as="t" hint-placeholder-count="4">
+                  <div onClick="{{ t.onPick }}" style="{{ t.style }}">{{ t.label }}</div>
+                </sc-for>
+              </div>
+              <sc-if value="{{ showNamerSplitNote }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;padding:12px 15px;border:1px solid #DDE0E0;background:#FAFBFB;border-radius:8px">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8CA0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg>
+                  <span style="font-size:13px;color:#5A5770;line-height:1.5">{{ namerSplitNote }}</span>
+                </div>
+              </sc-if>
+              <div style="border:1px solid #DDE0E0;border-radius:8px;max-height:420px;overflow:auto">
+                <div style="display:grid;grid-template-columns:1.1fr auto 1.3fr;gap:14px;padding:10px 14px;background:#FAFBFB;border-bottom:1px solid #DDE0E0;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#8E8CA0;position:sticky;top:0">
+                  <span>Original</span><span>Folder</span><span>Result</span>
+                </div>
+                <sc-for list="{{ namerLogRows }}" as="r" hint-placeholder-count="8">
+                  <div style="{{ r.rowStyle }}">
+                    <div style="min-width:0">
+                      <div style="font-size:12.5px;color:#5A5770;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.original }}</div>
+                      <sc-if value="{{ r.isSplit }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:inline-flex;align-items:center;gap:5px;margin-top:4px;font-size:11px;font-weight:600;color:#5A5770;background:#F1F2F2;padding:2px 7px;border-radius:4px">
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9v12"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M6 15a9 9 0 0 0 9-9"></path></svg>Split · {{ r.splitLabel }}
+                        </span>
+                      </sc-if>
+                    </div>
+                    <span style="font-size:12px;color:#8E8CA0;white-space:nowrap">{{ r.bucket }}</span>
+                    <div style="display:flex;align-items:flex-start;gap:8px;min-width:0">
+                      <span style="width:7px;height:7px;border-radius:50%;background:{{ r.dotColor }};flex-shrink:0;margin-top:5px"></span>
+                      <div style="min-width:0">
+                        <div style="font-size:12.5px;font-weight:{{ r.resultWeight }};color:{{ r.resultColor }};word-break:break-word">{{ r.resultLabel }}</div>
+                        <sc-if value="{{ r.showDetail }}" hint-placeholder-val="{{ false }}">
+                          <div style="font-size:12px;color:#8E8CA0;margin-top:3px;line-height:1.45">{{ r.resultDetail }}</div>
+                        </sc-if>
+                      </div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+              <sc-if value="{{ showNamerLogCap }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:10px;font-size:12.5px;color:#8E8CA0">{{ namerLogCapNote }}</div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ namerLogEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:20px;padding:18px;border:1px solid #DDE0E0;border-radius:8px;font-size:13px;color:#5A5770">Nothing in this group.</div>
+          </sc-if>
+        </div>
+      </sc-if>
     </sc-if>
 
     <!-- TEMPLATES -->
@@ -683,6 +991,25 @@ class Component extends DCLogic {
       if (this.BACKEND_HOSTS.includes(location.hostname)) return "";
     } catch (e) {}
     return this.BACKEND_FALLBACK;
+  }
+
+  // Wizard 01's job upload can be a multi-GB single POST (100-250+ PDFs in one
+  // request, chunking deliberately deferred — see createNamerJob). On prod,
+  // tealdocwizard.com sits behind Cloudflare, which hard-caps request body size
+  // regardless of plan tier; a batch anywhere near that size gets a 413 before
+  // the backend ever sees it (confirmed in production against a much smaller
+  // batch on a different endpoint). upload.tealdocwizard.com is a dedicated,
+  // DNS-only (unproxied) subdomain pointed at the same Railway service, used
+  // ONLY for this one upload call — every other request keeps going through
+  // Cloudflare as normal. Off prod (dev Railway URL, sandbox, local file)
+  // there's no Cloudflare in front at all, so this just matches BACKEND_URL.
+  UPLOAD_HOSTS_MAP = { "tealdocwizard.com": "https://upload.tealdocwizard.com", "www.tealdocwizard.com": "https://upload.tealdocwizard.com" };
+  get UPLOAD_BACKEND_URL() {
+    try {
+      const mapped = this.UPLOAD_HOSTS_MAP[location.hostname];
+      if (mapped) return mapped;
+    } catch (e) {}
+    return this.BACKEND_URL;
   }
   BACKEND_SECRET = "tpcSSW201005";
 
@@ -3859,7 +4186,332 @@ class Component extends DCLogic {
     publishedMeta: {},
     templatePublishing: null,
     templateNotice: null,
+
+    // ── Wizard 01 · Name PDFs ──────────────────────────────────────────────
+    namerPhase: "intake",        // "intake" | "upload" | "run"
+    namerIntake: {},             // prodcoName/agencyName/vendorNaming/receivedFrom
+    namerFiles: [],              // File[] staged for upload (not persisted)
+    namerJobId: null,
+    namerJob: null,              // last GET /wizard01/jobs/{id} payload
+    namerUploading: false,
+    namerUploadPct: 0,
+    namerError: null,
+    namerConventions: null,      // GET /wizard01/conventions
+    namerShowLog: false,
+    namerLogFilter: "all",
+    namerShowConventions: false,
+    namerIntakeTouched: false,
+    namerDownloading: false,
+    namerConfirmStop: false,
   };
+
+  // ══ Wizard 01 · Name PDFs ═══════════════════════════════════════════════
+  // Job-based, not request/response: classifying 250 files is 30+ minutes of
+  // LLM work, so POST returns a job_id immediately and we poll. The job record
+  // and the result zip share ONE 2-day clock, so a bookmarked job that still
+  // answers `done` is always still downloadable.
+  NAMER_KEY = "tpc_namer_job_v1";
+  NAMER_POLL_MS = 3000;          // backend increments `processed` per file
+  NAMER_BATCH_NUDGE = 120;       // soft courtesy warning, not a backend limit
+
+  // reason_code is a closed enum (backend #3) so each one gets real words.
+  // Anything unrecognized falls through to the raw code — never swallowed.
+  NAMER_REASONS = {
+    missing_name:     "No name found",
+    missing_date:     "No expiration date found",
+    missing_company:  "No company or hotel name found",
+    sender_mismatch:  "Bill-To disagrees with who this batch came from",
+    low_confidence:   "Classified, but not confidently",
+    unclassified:     "Readable, but not a type we handle yet",
+    unreadable:       "Could not be read at all",
+  };
+  namerReasonLabel(code) {
+    if (!code) return "";
+    return this.NAMER_REASONS[code] || String(code).replace(/_/g, " ");
+  }
+
+  // The four folders the zip can contain. "Not Readable" is a real bucket, not
+  // an error state — nothing is ever silently dropped (backend #9).
+  NAMER_BUCKETS = ["Residency", "Diversity Form", "Vendor", "Not Readable"];
+
+  // Which entity's name/address drives the naming. Exactly one per batch,
+  // never mixed — the old tool's regression was naming invoices after who was
+  // BILLED instead of who was BILLING, so this is a required, deliberate pick.
+  // Client is not a choice: a client never bills a production. Addresses are
+  // gone too — they never affected a filename.
+  NAMER_SOURCES = [
+    { id: "prodco", label: "Production Co.", nameKey: "prodcoName", missLabel: "production company name" },
+    { id: "agency", label: "Agency",         nameKey: "agencyName", missLabel: "agency name" },
+  ];
+
+  // Only the SENDER's name is required. The other entity's name is still worth
+  // having (the backend checks each invoice's Bill-To against every name it was
+  // given, which is how a mis-declared batch gets flagged) but never blocks.
+  namerIntakeMissing() {
+    const v = this.state.namerIntake || {};
+    const miss = [];
+    if (!v.receivedFrom) miss.push("who the files came from");
+    const src = this.NAMER_SOURCES.find((s) => s.id === v.receivedFrom);
+    if (src && !(v[src.nameKey] || "").trim()) miss.push(src.missLabel);
+    return miss;
+  }
+  namerIntakeOk() { return this.namerIntakeMissing().length === 0; }
+
+  // Vendor-invoice naming choice. The labels/patterns come from the conventions
+  // payload (each type's entry may carry an `options` array) so they can't drift
+  // from the backend; the two values themselves are the form contract, so a
+  // minimal built-in pair keeps the control usable before that endpoint deploys.
+  NAMER_VENDOR_NAMING_FALLBACK = {
+    label: "Vendor invoice naming",
+    note: "",
+    default: "invoice_number",
+    choices: [
+      { value: "invoice_number", label: "Invoice number", pattern: "" },
+      { value: "po_number", label: "PO number", pattern: "" },
+    ],
+  };
+
+  namerVendorNamingOption() {
+    const fb = this.NAMER_VENDOR_NAMING_FALLBACK;
+    for (const t of this.state.namerConventions || []) {
+      for (const o of t.options || []) {
+        if (o.key !== "vendor_naming") continue;
+        const raw = o.choices || o.options || o.values || [];
+        const choices = raw.map((c) => (typeof c === "string"
+          ? { value: c, label: c, pattern: "" }
+          : { value: c.value, label: c.label || c.value, pattern: c.pattern || c.example || "" }))
+          .filter((c) => !!c.value);
+        return {
+          label: o.label || fb.label,
+          note: o.note || o.description || "",
+          default: o.default || fb.default,
+          choices: choices.length ? choices : fb.choices,
+        };
+      }
+    }
+    return fb;
+  }
+
+  namerVendorNaming() {
+    const v = this.state.namerIntake || {};
+    return v.vendorNaming || this.namerVendorNamingOption().default || "invoice_number";
+  }
+
+  setNamerIntake(key, val) {
+    this.setState((s) => ({ namerIntake: { ...(s.namerIntake || {}), [key]: val } }));
+  }
+
+  // Conventions come from the backend so they can't drift when a 4th document
+  // type ships. A 404 here is expected until that endpoint deploys — the panel
+  // just stays closed rather than showing invented patterns.
+  async loadNamerConventions() {
+    if (this.state.namerConventions) return;
+    try {
+      const res = await fetch(this.BACKEND_URL + "/wizard01/conventions", {
+        headers: { "X-App-Secret": this.BACKEND_SECRET },
+      });
+      if (!res.ok) return;
+      const j = await res.json();
+      const types = Array.isArray(j) ? j : (j.types || j.conventions || []);
+      if (types.length) this.setState({ namerConventions: types });
+    } catch (e) { /* offline / not deployed — silent, never fatal */ }
+  }
+
+  namerAddFiles(list) {
+    const incoming = Array.from(list || []).filter((f) => f && /\.pdf$/i.test(f.name));
+    if (!incoming.length) return;
+    this.setState((s) => {
+      const have = new Set((s.namerFiles || []).map((f) => f.name + "|" + f.size));
+      const merged = (s.namerFiles || []).slice();
+      for (const f of incoming) {
+        const k = f.name + "|" + f.size;
+        if (!have.has(k)) { have.add(k); merged.push(f); }
+      }
+      return { namerFiles: merged, namerError: null };
+    });
+  }
+
+  // Drag-and-drop of a FOLDER only yields files via the entry API; a plain
+  // dataTransfer.files read returns the directory itself and drops everything
+  // inside it. Recurse so "drag the folder in" actually works.
+  async namerDropFiles(dt) {
+    const items = dt && dt.items ? Array.from(dt.items) : [];
+    const entries = items.map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null)).filter(Boolean);
+    if (!entries.length) { this.namerAddFiles(dt && dt.files); return; }
+    const out = [];
+    const readDir = (dirReader) => new Promise((res) => {
+      const acc = [];
+      const step = () => dirReader.readEntries((batch) => {
+        if (!batch.length) return res(acc);
+        acc.push(...batch);
+        step();
+      }, () => res(acc));
+      step();
+    });
+    const walk = async (entry) => {
+      if (entry.isFile) {
+        await new Promise((res) => entry.file((f) => { out.push(f); res(); }, res));
+      } else if (entry.isDirectory) {
+        const kids = await readDir(entry.createReader());
+        for (const k of kids) await walk(k);
+      }
+    };
+    for (const e of entries) await walk(e);
+    this.namerAddFiles(out);
+  }
+
+  namerRemoveFile(idx) {
+    this.setState((s) => ({ namerFiles: (s.namerFiles || []).filter((_, i) => i !== idx) }));
+  }
+
+  // XHR rather than fetch purely for upload progress — a multi-GB single POST
+  // with no visible progress is indistinguishable from a hang. Backend streams
+  // each file to disk as it arrives, so a failure here costs a re-upload and
+  // nothing more: no work has started yet.
+  async createNamerJob() {
+    const files = this.state.namerFiles || [];
+    if (!files.length || !this.namerIntakeOk()) return;
+    const v = this.state.namerIntake || {};
+    const fd = new FormData();
+    files.forEach((f) => fd.append("files", f, f.name));
+    fd.append("agency_name", (v.agencyName || "").trim());
+    fd.append("client_name", v.receivedFrom === "agency" ? (v.clientName || "").trim() : "");
+    fd.append("prodco_name", (v.prodcoName || "").trim());
+    fd.append("received_from", v.receivedFrom || "");
+    fd.append("vendor_naming", this.namerVendorNaming());
+
+    this.setState({ namerUploading: true, namerUploadPct: 0, namerError: null, namerPhase: "run" });
+    try {
+      const j = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", this.UPLOAD_BACKEND_URL + "/wizard01/jobs");
+        xhr.setRequestHeader("X-App-Secret", this.BACKEND_SECRET);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) this.setState({ namerUploadPct: Math.round((e.loaded / e.total) * 100) });
+        };
+        xhr.onload = () => {
+          if (xhr.status === 401) return reject(new Error("The backend rejected the request (bad app secret)."));
+          if (xhr.status === 404) return reject(new Error("This tool isn't deployed on the backend yet (404)."));
+          if (xhr.status === 413) return reject(new Error("The backend refused the batch as too large. Split it into a couple of runs."));
+          if (xhr.status < 200 || xhr.status >= 300) return reject(new Error("Upload failed — HTTP " + xhr.status + (xhr.responseText ? " · " + xhr.responseText.slice(0, 200) : "")));
+          try { resolve(JSON.parse(xhr.responseText)); } catch (e) { reject(new Error("The backend's reply wasn't readable JSON.")); }
+        };
+        xhr.onerror = () => reject(new Error("The upload connection dropped. Nothing was processed — try again."));
+        xhr.onabort = () => reject(new Error("Upload cancelled."));
+        this._namerXhr = xhr;
+        xhr.send(fd);
+      });
+      const id = j.job_id || j.jobId;
+      if (!id) throw new Error("The backend didn't return a job id.");
+      this.setState({ namerJobId: id, namerUploading: false, namerUploadPct: 100 });
+      this.persistNamerJob(id);
+      this.startNamerPoll(id);
+    } catch (e) {
+      this.setState({ namerUploading: false, namerError: e.message || String(e), namerPhase: "upload" });
+    } finally {
+      this._namerXhr = null;
+    }
+  }
+
+  cancelNamerUpload() {
+    try { this._namerXhr && this._namerXhr.abort(); } catch (e) {}
+    this.setState({ namerUploading: false, namerPhase: "upload" });
+  }
+
+  // job_id is a random UUID4 (backend #5), so it's safe in the URL — that's
+  // what makes a 30-minute run survivable: close the tab, come back later.
+  persistNamerJob(id) {
+    try {
+      localStorage.setItem(this.NAMER_KEY, JSON.stringify({ jobId: id, intake: this.state.namerIntake || {}, savedAt: Date.now() }));
+      if (id) location.hash = "job=" + id;
+    } catch (e) {}
+  }
+  clearNamerJob() {
+    try { localStorage.removeItem(this.NAMER_KEY); } catch (e) {}
+    try { if (/job=/.test(location.hash)) location.hash = ""; } catch (e) {}
+  }
+
+  startNamerPoll(id) {
+    this.stopNamerPoll();
+    const tick = async () => {
+      try {
+        const res = await fetch(this.BACKEND_URL + "/wizard01/jobs/" + id, {
+          headers: { "X-App-Secret": this.BACKEND_SECRET },
+        });
+        if (res.status === 404) {
+          this.stopNamerPoll();
+          this.setState({ namerError: "This job has expired or no longer exists. Results are kept for 2 days.", namerJob: null });
+          this.clearNamerJob();
+          return;
+        }
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const j = await res.json();
+        this.setState({ namerJob: j, namerError: null });
+        if (j.state === "done" || j.state === "error") this.stopNamerPoll();
+      } catch (e) {
+        // A single failed poll is nearly always a blip on a long job; keep
+        // polling and only surface it as a soft note, never as a dead end.
+        this.setState({ namerPollWarn: e.message || String(e) });
+      }
+    };
+    tick();
+    this._namerTimer = setInterval(tick, this.NAMER_POLL_MS);
+  }
+  stopNamerPoll() {
+    if (this._namerTimer) { clearInterval(this._namerTimer); this._namerTimer = null; }
+  }
+
+  async downloadNamerZip() {
+    const id = this.state.namerJobId;
+    if (!id) return;
+    this.setState({ namerDownloading: true, namerError: null });
+    try {
+      const res = await fetch(this.BACKEND_URL + "/wizard01/jobs/" + id + "/download", {
+        headers: { "X-App-Secret": this.BACKEND_SECRET },
+      });
+      if (res.status === 409) throw new Error("Still processing — the zip isn't ready yet.");
+      if (res.status === 404) throw new Error("This job's results have expired. Zips are kept for 2 days.");
+      if (!res.ok) throw new Error("Download failed — HTTP " + res.status);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "Named PDFs.zip";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) {
+      this.setState({ namerError: e.message || String(e) });
+    } finally {
+      this.setState({ namerDownloading: false });
+    }
+  }
+
+  async deleteNamerJob() {
+    const id = this.state.namerJobId;
+    this.stopNamerPoll();
+    if (id) {
+      try {
+        await fetch(this.BACKEND_URL + "/wizard01/jobs/" + id, {
+          method: "DELETE", headers: { "X-App-Secret": this.BACKEND_SECRET },
+        });
+      } catch (e) { /* best effort — it expires on its own anyway */ }
+    }
+    this.clearNamerJob();
+    this.setState({ namerJobId: null, namerJob: null, namerFiles: [], namerPhase: "upload", namerError: null, namerShowLog: false, namerConfirmStop: false });
+  }
+
+  fmtExpiry(iso) {
+    if (!iso) return "";
+    const t = Date.parse(iso);
+    if (isNaN(t)) return "";
+    const hrs = Math.round((t - Date.now()) / 3600000);
+    if (hrs <= 0) return "expired";
+    if (hrs < 24) return "in " + hrs + (hrs === 1 ? " hour" : " hours");
+    const d = Math.round(hrs / 24);
+    return "in " + d + (d === 1 ? " day" : " days");
+  }
 
   componentDidMount() {
     try {
@@ -3882,7 +4534,36 @@ class Component extends DCLogic {
       }
     } catch (e) {}
     this.refreshTemplateMeta();   // load which workbook templates are user-overridden
+
+    // Resume a Name PDFs job. The URL hash wins over localStorage so a shared
+    // or bookmarked link opens that job even in a browser that never ran it.
+    let resumeId = null, fromHash = false;
+    try {
+      const m = /job=([A-Za-z0-9-]+)/.exec(location.hash || "");
+      if (m) { resumeId = m[1]; fromHash = true; }
+      if (!resumeId) {
+        const nraw = localStorage.getItem(this.NAMER_KEY);
+        if (nraw) {
+          const nj = JSON.parse(nraw);
+          if (nj && nj.jobId) {
+            resumeId = nj.jobId;
+            if (nj.intake) this.setState({ namerIntake: nj.intake });
+          }
+        }
+      }
+    } catch (e) {}
+    if (resumeId) {
+      // A shared/bookmarked job link opens straight into that job. A job merely
+      // remembered in this browser does not hijack the landing screen.
+      this.setState(fromHash
+        ? { namerJobId: resumeId, namerPhase: "run", view: "namer" }
+        : { namerJobId: resumeId, namerPhase: "run" });
+      this.loadNamerConventions();
+      this.startNamerPoll(resumeId);
+    }
   }
+
+  componentWillUnmount() { this.stopNamerPoll(); }
 
   componentDidUpdate() {
     try { localStorage.setItem(this.KEY, JSON.stringify(this.state)); } catch (e) {}
@@ -4250,12 +4931,12 @@ class Component extends DCLogic {
     return Object.values(byCol);
   }
 
-  // POST crew-freelance invoice PDFs to the backend in batches of 5,
+  // POST crew-freelance invoice PDFs to the backend in batches of 15,
   // concatenating rows / issues / per-file summaries across batches. Envelope
   // matches fringe ({rows, issues, files}) minus the columns key.
   async extractCrewFreelance(fileList) {
     const files = Array.from(fileList || []);
-    const CHUNK = 5;
+    const CHUNK = 10;
     const merged = { rows: [], issues: [], files: [] };
     // Sort by filename before chunking so batch order matches the backend's
     // per-request alphabetical sort (keeps global row order across batches).
@@ -5760,6 +6441,156 @@ class Component extends DCLogic {
     });
     const tn = st.templateNotice;
 
+    // ── Wizard 01 · Name PDFs view model ──────────────────────────────────
+    const nv = st.namerIntake || {};
+    const nSrc = this.NAMER_SOURCES.find((s) => s.id === nv.receivedFrom) || null;
+    const nMissing = this.namerIntakeMissing();
+    const namerEntities = this.NAMER_SOURCES.map((s) => {
+      const isSrc = nv.receivedFrom === s.id;
+      const req = isSrc;
+      return {
+        hint: req ? "Required" : "Optional",
+        hintColor: req ? "#00A694" : "#8E8CA0",
+        id: s.id, label: s.label,
+        nameVal: nv[s.nameKey] || "",
+        namePlaceholder: s.label + " legal name",
+        cardStyle: "border:1px solid " + (isSrc ? "#00CCB8" : "#DDE0E0") + ";border-radius:8px;padding:16px 20px;display:grid;grid-template-columns:190px 1fr;align-items:center;gap:18px;" +
+          (isSrc ? "background:rgba(0,204,184,0.05);" : "background:#fff;"),
+        onName: (e) => this.setNamerIntake(s.nameKey, e.target.value),
+      };
+    });
+    // Client is never a source (a client never bills a production), but on an
+    // agency batch the agency's own client is often on the invoices, so offer
+    // the field — always optional.
+    if (nv.receivedFrom === "agency") {
+      namerEntities.push({
+        id: "client", label: "Client",
+        hint: "Optional", hintColor: "#8E8CA0",
+        nameVal: nv.clientName || "",
+        namePlaceholder: "Client legal name",
+        cardStyle: "border:1px solid #DDE0E0;border-radius:8px;padding:16px 20px;display:grid;grid-template-columns:190px 1fr;align-items:center;gap:18px;background:#fff;",
+        onName: (e) => this.setNamerIntake("clientName", e.target.value),
+      });
+    }
+    const namerSourceOptions = this.NAMER_SOURCES.map((s) => {
+      const on = nv.receivedFrom === s.id;
+      return {
+        id: s.id, label: s.label,
+        onPick: () => this.setNamerIntake("receivedFrom", s.id),
+        style: "flex:1;text-align:center;cursor:pointer;padding:13px 10px;border-radius:6px;font-size:14px;font-weight:600;transition:background 120ms,color 120ms;border:1px solid " +
+          (on ? "#0A0422;background:#0A0422;color:#fff;" : "#DDE0E0;background:#fff;color:#5A5770;"),
+      };
+    });
+
+    const nFiles = st.namerFiles || [];
+    const nBytes = nFiles.reduce((a, f) => a + (f.size || 0), 0);
+    const namerFileRows = nFiles.map((f, i) => ({
+      name: f.name,
+      size: this.fmtSize(f.size || 0),
+      onRemove: () => this.namerRemoveFile(i),
+      rowStyle: "display:flex;align-items:center;gap:12px;padding:9px 14px;" +
+        (i < nFiles.length - 1 ? "border-bottom:1px solid #F1F2F2;" : ""),
+    }));
+
+    const job = st.namerJob || {};
+    const jState = job.state || (st.namerUploading ? "uploading" : "running");
+    const jTotal = job.total || nFiles.length || 0;
+    const jDone = job.processed || 0;
+    const jPct = st.namerUploading
+      ? st.namerUploadPct
+      : (jTotal ? Math.round((jDone / jTotal) * 100) : 0);
+    // Expired / deleted / 404: polling has stopped and there's nothing to come
+    // back to, so this must not read as an in-flight run anywhere.
+    const jDead = !!(st.namerError && !st.namerJob);
+    const namerLogRaw = Array.isArray(job.log) ? job.log : [];
+    const bucketOf = (e) => e.bucket || e.folder || e.type || "";
+    const newNameOf = (e) => e.new_name || e.newName || "";
+    const codeOf = (e) => e.reason_code || e.reasonCode || "";
+    const kindOf = (e) => {
+      const code = codeOf(e);
+      if (code === "unclassified" || code === "unreadable") return "notreadable";
+      if (newNameOf(e)) return "renamed";
+      return code ? "review" : "renamed";
+    };
+    const filt = st.namerLogFilter || "all";
+    // A batch-scanned stack of IDs is ONE upload that becomes N named documents,
+    // so log[] can be longer than `total` and several entries legitimately share
+    // the original upload's filename. Count across the whole log (not the
+    // filtered view) so "2 of 3" stays correct inside a filtered tab.
+    const origOf = (e) => e.filename || e.original_name || "(file)";
+    const splitTotals = {}, splitSeen = {};
+    for (const e of namerLogRaw) { const k = origOf(e); splitTotals[k] = (splitTotals[k] || 0) + 1; }
+    const splitOrdinal = {};
+    for (const e of namerLogRaw) { const k = origOf(e); splitSeen[k] = (splitSeen[k] || 0) + 1; splitOrdinal[e.file_id || e.fileId || (k + "#" + splitSeen[k])] = splitSeen[k]; }
+
+    const namerLogFiltered = namerLogRaw.filter((e) => filt === "all" || kindOf(e) === filt);
+    const NAMER_LOG_CAP = 500;
+    const namerLogRows = namerLogFiltered
+      .slice(0, NAMER_LOG_CAP)
+      .map((e, i, arr) => {
+        const kind = kindOf(e);
+        const code = codeOf(e);
+        const nn = newNameOf(e);
+        const tone = kind === "renamed" ? "#00A694" : kind === "review" ? "#C99A2E" : "#9B7C8E";
+        const orig = origOf(e);
+        const nSplit = splitTotals[orig] || 1;
+        const ord = splitOrdinal[e.file_id || e.fileId || (orig + "#" + (i + 1))] || 0;
+        return {
+          original: orig,
+          isSplit: nSplit > 1,
+          splitLabel: nSplit > 1 ? (ord ? ord + " of " + nSplit : nSplit + " documents") : "",
+          bucket: bucketOf(e) || "—",
+          resultLabel: nn || this.namerReasonLabel(code) || "Not renamed",
+          resultDetail: e.reason_detail || e.reasonDetail || "",
+          showDetail: !!(e.reason_detail || e.reasonDetail),
+          resultColor: nn ? "#0A0422" : tone,
+          resultWeight: nn ? "600" : "500",
+          dotColor: tone,
+          rowStyle: "display:grid;grid-template-columns:1.1fr auto 1.3fr;align-items:start;gap:14px;padding:10px 14px;" +
+            (i < arr.length - 1 ? "border-bottom:1px solid #F1F2F2;" : ""),
+        };
+      });
+    const namerHiddenLog = Math.max(0, namerLogFiltered.length - NAMER_LOG_CAP);
+    const namerLogTabs = [
+      ["all", "All", namerLogRaw.length],
+      ["renamed", "Renamed", job.renamed || 0],
+      ["review", "Need review", job.needs_review || 0],
+      ["notreadable", "Not readable", job.not_readable || 0],
+    ].map(([id, label, n]) => ({
+      label: label + " · " + n,
+      onPick: () => this.setState({ namerLogFilter: id }),
+      style: "cursor:pointer;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid " +
+        (filt === id ? "#0A0422;background:#0A0422;color:#fff;" : "#DDE0E0;background:#fff;color:#5A5770;"),
+    }));
+    const namerStats = [
+      ["Renamed", job.renamed || 0, "#00A694"],
+      ["Need review", job.needs_review || 0, "#C99A2E"],
+      ["Not readable", job.not_readable || 0, "#9B7C8E"],
+    ].map(([label, value, color]) => ({ label, value: String(value), color }));
+
+    const nVn = this.namerVendorNamingOption();
+    const nVnVal = this.namerVendorNaming();
+    const namerVendorNamingChoices = nVn.choices.map((c) => {
+      const on = c.value === nVnVal;
+      return {
+        label: c.label,
+        pattern: c.pattern,
+        showPattern: !!c.pattern,
+        onPick: () => this.setNamerIntake("vendorNaming", c.value),
+        style: "flex:1;cursor:pointer;padding:13px 15px;border-radius:6px;transition:background 120ms,color 120ms,border-color 120ms;border:1px solid " +
+          (on ? "#0A0422;background:#0A0422;color:#fff;" : "#DDE0E0;background:#fff;color:#5A5770;"),
+      };
+    });
+
+    const namerConvItems = (st.namerConventions || []).map((c) => ({
+      label: c.label || c.id || "Document type",
+      patterns: (c.patterns || (c.pattern ? [c.pattern] : [])).map((p) => ({
+        text: typeof p === "string" ? p : (p.pattern || ""),
+        note: typeof p === "string" ? "" : (p.description || p.note || ""),
+        showNote: typeof p !== "string" && !!(p.description || p.note),
+      })),
+    }));
+
     const canContinue = this.canContinue();
     const isReview = st.step === 5;
     const primaryDisabled = !canContinue || st.generating;
@@ -5779,6 +6610,125 @@ class Component extends DCLogic {
       onExitToLanding: () => this.setState({ view: "landing" }),
       onEnterTemplates: () => { this.setState({ view: "templates", templateNotice: null }); this.refreshTemplateMeta(); },
       showTemplates: st.view === "templates",
+
+      // ── Wizard 01 · Name PDFs ──
+      onEnterNamer: () => {
+        this.setState({ view: "namer", namerError: null });
+        this.loadNamerConventions();
+      },
+      showNamer: st.view === "namer",
+      showNamerIntake: st.view === "namer" && st.namerPhase === "intake",
+      showNamerUpload: st.view === "namer" && st.namerPhase === "upload",
+      showNamerRun: st.view === "namer" && st.namerPhase === "run",
+      namerEntities,
+      namerSourceOptions,
+      namerSourceLabel: nSrc ? nSrc.label : "—",
+      namerSourceName: nSrc ? (nv[nSrc.nameKey] || "").trim() : "",
+      namerIntakeOk: nMissing.length === 0,
+      namerIntakeBlocked: nMissing.length > 0,
+      namerMissingText: nMissing.length ? "Still needed: " + nMissing.join(", ") + "." : "",
+      onNamerContinue: () => {
+        if (this.namerIntakeOk()) this.setState({ namerPhase: "upload", namerIntakeTouched: false });
+        else this.setState({ namerIntakeTouched: true });
+      },
+      showNamerIntakeError: !!st.namerIntakeTouched && nMissing.length > 0,
+      onNamerBackToIntake: () => this.setState({ namerPhase: "intake" }),
+      namerContinueStyle: "display:inline-flex;align-items:center;gap:9px;border:none;font-size:15px;font-weight:600;padding:13px 26px;border-radius:6px;transition:background 120ms;" +
+        (nMissing.length ? "background:#DDE0E0;color:#8E8CA0;cursor:not-allowed;" : "background:#0A0422;color:#fff;cursor:pointer;"),
+
+      namerFileRows,
+      namerFileCount: nFiles.length,
+      namerHasFiles: nFiles.length > 0,
+      namerNoFiles: nFiles.length === 0,
+      namerTotalSize: this.fmtSize(nBytes),
+      namerCountLabel: nFiles.length + (nFiles.length === 1 ? " file" : " files"),
+      showNamerBigBatch: nFiles.length > this.NAMER_BATCH_NUDGE,
+      namerBigBatchText: "That's " + nFiles.length + " files (" + this.fmtSize(nBytes) +
+        ") in one upload. It will work, but a dropped connection means starting the upload over — consider splitting it into a couple of runs.",
+      onNamerPick: (e) => { this.namerAddFiles(e.target.files); e.target.value = ""; },
+      onNamerDrop: (e) => {
+        e.preventDefault();
+        this.setState({ dragZone: null });
+        this.namerDropFiles(e.dataTransfer);
+      },
+      onNamerDragOver: (e) => { e.preventDefault(); this.setState({ dragZone: "namer" }); },
+      onNamerDragLeave: () => this.setState({ dragZone: null }),
+      namerDropStyle: "border:1.5px dashed " + (st.dragZone === "namer" ? "#00CCB8" : "#DDE0E0") +
+        ";border-radius:10px;padding:36px 24px;text-align:center;transition:border-color 120ms,background 120ms;" +
+        (st.dragZone === "namer" ? "background:rgba(0,204,184,0.06);" : "background:#FAFBFB;"),
+      onNamerClearFiles: () => this.setState({ namerFiles: [] }),
+      onNamerStart: () => this.createNamerJob(),
+      namerStartStyle: "display:inline-flex;align-items:center;gap:9px;border:none;font-size:15px;font-weight:600;padding:13px 26px;border-radius:6px;" +
+        (nFiles.length ? "background:#0A0422;color:#fff;cursor:pointer;" : "background:#DDE0E0;color:#8E8CA0;cursor:not-allowed;"),
+
+      namerUploading: st.namerUploading,
+      namerPct: jPct,
+      namerBarStyle: "height:100%;background:#00CCB8;border-radius:999px;transition:width 200ms cubic-bezier(0.2,0,0,1);width:" + jPct + "%",
+      namerProgressLabel: jDead
+        ? "This run is no longer available"
+        : st.namerUploading
+        ? "Uploading — " + jPct + "%"
+        : jState === "done"
+          ? "All " + jTotal + " files processed"
+          : jState === "error"
+            ? "The job stopped"
+            : jDone + " of " + jTotal + " processed",
+      // A dead job (expired / 404 / deleted) must not keep claiming it's working:
+      // polling has already stopped, so the spinner would spin forever.
+      namerRunning: (jState === "running" || jState === "uploading") && !jDead,
+      namerDone: jState === "done",
+      namerJobFailed: jState === "error",
+      namerJobError: job.error || job.message || "",
+      namerStats,
+      namerShowStats: !jDead && (jDone > 0 || jState === "done"),
+      namerJobId: st.namerJobId || "",
+      showNamerJobId: !!st.namerJobId,
+      namerExpiry: this.fmtExpiry(job.expires_at || job.expiresAt),
+      showNamerExpiry: !!(job.expires_at || job.expiresAt) && jState === "done",
+      onNamerDownload: () => this.downloadNamerZip(),
+      namerDownloadLabel: st.namerDownloading ? "Preparing…" : "Download zip",
+      onNamerCancelUpload: () => this.cancelNamerUpload(),
+      // Discarding a FINISHED job is harmless. Discarding an in-flight one
+      // throws away a 30-minute run and deletes the only two copies of the job
+      // id, so that case has to be asked for twice.
+      onNamerNewBatch: () => {
+        if (!jDead && (jState === "running" || st.namerUploading)) this.setState({ namerConfirmStop: true });
+        else this.deleteNamerJob();
+      },
+      namerNewBatchLabel: (!jDead && (jState === "running" || st.namerUploading)) ? "Discard this run" : "Start another batch",
+      showNamerConfirmStop: !!st.namerConfirmStop,
+      namerConfirmStopText: "Discard this run? " + jDone + " of " + jTotal +
+        " files are already processed and this can't be undone — the job is deleted from the server.",
+      onNamerConfirmStop: () => this.deleteNamerJob(),
+      onNamerCancelStop: () => this.setState({ namerConfirmStop: false }),
+      showNamerError: !!st.namerError,
+      namerError: st.namerError || "",
+      onNamerToggleLog: () => this.setState({ namerShowLog: !st.namerShowLog }),
+      namerLogToggleLabel: st.namerShowLog ? "Hide file-by-file log" : "Show file-by-file log",
+      namerShowLog: !!st.namerShowLog && namerLogRaw.length > 0,
+      namerLogRows,
+      namerLogTabs,
+      // One multi-page scan can become several named documents, so the log is
+      // counted separately from the upload count — never conflate the two.
+      showNamerSplitNote: namerLogRaw.length > jTotal && jTotal > 0,
+      namerSplitNote: jTotal + (jTotal === 1 ? " upload" : " uploads") + " produced " +
+        namerLogRaw.length + " named documents — a multi-page scan of several IDs is split into one file per person.",
+      showNamerLogCap: namerHiddenLog > 0,
+      namerLogCapNote: "Showing the first " + NAMER_LOG_CAP + " · " + namerHiddenLog +
+        " more are in the zip's _manifest.csv.",
+      namerLogEmpty: !!st.namerShowLog && namerLogRows.length === 0,
+      onNamerToggleConventions: () => {
+        this.setState({ namerShowConventions: !st.namerShowConventions });
+        this.loadNamerConventions();
+      },
+      namerConvToggleLabel: st.namerShowConventions ? "Hide naming rules" : "See the naming rules",
+      showNamerConventions: !!st.namerShowConventions,
+      namerVendorNamingLabel: nVn.label,
+      namerVendorNamingNote: nVn.note,
+      showNamerVendorNamingNote: !!nVn.note,
+      namerVendorNamingChoices,
+      namerConvItems,
+      namerConvMissing: !!st.namerShowConventions && namerConvItems.length === 0,
       templateItems,
       showTemplateNotice: !!tn,
       templateNotice: tn ? tn.msg : "",
