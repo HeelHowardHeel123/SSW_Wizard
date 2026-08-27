@@ -296,7 +296,7 @@ For each record, determine which of these it is:
 
 2. "wire" -- an incoming wire transfer or ACH credit confirmation (money received into the account), e.g. a bank's "Transaction details" screen. Extract vendor_name as the SENDER/originator (e.g. an "ORIG CO NAME" field) ONLY if one is actually shown -- some of these only show the receiving account's own name, never any sender; leave vendor_name empty in that case.
 
-3. "credit_card_single" -- a credit card statement filtered/searched down to ONE specific transaction (e.g. "1 Transactions"). Extract vendor_name as that one merchant, card_brand (e.g. "AMEX"), and account_ending (the digits after "ACCOUNT ENDING").
+3. "credit_card_single" -- a credit card statement filtered/searched down to ONE specific transaction (e.g. "1 Transactions"). Extract vendor_name as that one merchant, card_brand (e.g. "AMEX"), and account_ending (the digits after "ACCOUNT ENDING"). This kind of page still shows a "Card Activity from [X] to [Y]" search-range header even though it's filtered to one transaction -- that range is NOT this record's date; use the actual transaction's own date, printed right next to its own description/amount line, instead.
 
 4. "credit_card_statement" -- a full multi-page credit card statement/activity export covering MANY transactions over a date range for one card. These often belong to a shared corporate account used by several employees -- extract vendor_name as the CARDHOLDER name actually printed on the transaction rows (e.g. "KELLY BAYETT"), never the account number, since the account-ending digits are often shared across several different employees' own exports and won't distinguish them. Extract card_brand, and use the statement's OWN start date (the beginning of "Card Activity from ... to ...") as this record's date.
 
@@ -304,14 +304,14 @@ For each record, determine which of these it is:
 
 6. "check_summary" -- a list of multiple checks with no separable per-check images (or the summary/list page that accompanies separate check images elsewhere in the same PDF -- report it as its own "check_summary" record even when individual check images are also present as their own "check_single" records).
 
-7. "quickbook" -- a QuickBooks-style "Check Detail" report (Vendor / Date Paid / Check No. / Payment Amount / a Bills-paid table). Extract vendor_name, check_number, amount, and date ("Date Paid").
+7. "quickbook" -- a QuickBooks-style "Check Detail" report (Vendor / Date Paid / Check No. / Payment Amount / a Bills-paid table). Extract vendor_name, check_number, amount, date ("Date Paid"), AND bank_name (the "Payment From" account, e.g. "Bank Of America" from "610 - Bank Of America - Checking") -- unlike every other type, bank_name is always part of this record's filename, not just a fallback for when vendor_name is missing.
 
 8. "receipt" -- a merchant-issued transaction receipt (not from a bank), e.g. an emailed Square/Stripe-style receipt. Extract vendor_name (the Merchant) and use the TOTAL amount actually charged -- never just a Subtotal when Tax/Shipping/etc. are broken out separately.
 
 For every record, also extract whichever of these apply:
 - amount: the one dollar figure that matters for this record (see above for which one, depending on type) -- digits and a decimal point only, no "$" sign and no commas (e.g. "36000.00").
 - date: the one date that matters for this record (Send/Posted/Transaction date, Card Activity start date, or Date Paid), in exactly MM/DD/YYYY.
-- bank_name: the bank or financial institution's name, whenever this record has no one specific identifiable party (vendor_name empty) -- this is what the record gets named after instead.
+- bank_name: the bank or financial institution's name. For "quickbook," always extract it (see above). For every other type, extract it whenever this record has no one specific identifiable party (vendor_name empty) -- this is what the record gets named after instead. If the bank's name doesn't appear anywhere as its own clean text but the page is clearly that bank's own online banking portal (recognizable by its exact web address, e.g. "chase.com"/"secure.chase.com" -> "Chase", "bankofamerica.com" -> "Bank Of America"), use that bank's name anyway rather than leaving this empty.
 
 Every page must belong to exactly one record's "pages" list -- never omit a page and never assign one page to two records.
 
@@ -843,7 +843,12 @@ def build_proof_of_payment_filename(
     if proof_type == "credit_card_single":
         if not (vendor_s and amount_s and date_s):
             return None
-        brand_part = f"{brand_s}*{ending_s}" if ending_s else brand_s
+        # "*" is not a valid Windows filename character -- confirmed a real
+        # problem: the backend runs on Linux, where "*" is legal, so the
+        # zip itself would contain an entry no Windows user could actually
+        # extract without their unzip tool silently mangling it. "#" (also
+        # used for check numbers below) is filesystem-safe everywhere.
+        brand_part = f"{brand_s} #{ending_s}" if ending_s else brand_s
         if not brand_part:
             return None
         return f"CC {brand_part} - {vendor_s} - {amount_s} - {date_s}.pdf"
@@ -1847,7 +1852,7 @@ NAMING_CONVENTIONS = [
             {"pattern": "ACH - {Bank Name}.pdf", "folder": "Proof of Payments/ACH Payment", "description": "Multi-payee ACH batch/list, or a batch audit record with no one clear payee"},
             {"pattern": "Wire Transfer - {Vendor} - {Amount} - {Date}.pdf", "folder": "Proof of Payments/Wire Transfer", "description": "Incoming wire/ACH credit with an identifiable sender"},
             {"pattern": "Wire Transfer - {Bank Name}.pdf", "folder": "Proof of Payments/Wire Transfer", "description": "Incoming wire/ACH credit with no sender shown (only the receiving account's own info)"},
-            {"pattern": "CC {Brand}*{Account Ending} - {Vendor} - {Amount} - {Date}.pdf", "folder": "Proof of Payments/Credit Card", "description": "A statement filtered/searched down to one specific transaction"},
+            {"pattern": "CC {Brand} #{Account Ending} - {Vendor} - {Amount} - {Date}.pdf", "folder": "Proof of Payments/Credit Card", "description": "A statement filtered/searched down to one specific transaction"},
             {"pattern": "CC {Brand} - {Cardholder} - {Start Date}.pdf", "folder": "Proof of Payments/Credit Card", "description": "A full multi-page statement export for one card -- named by cardholder, not account-ending digits, since a shared corporate account's ending digits don't distinguish different employees' own exports"},
             {"pattern": "Check #{Number} - {Payee} {Amount}.pdf", "folder": "Proof of Payments/Check", "description": "One check's own scanned image or compact single-check confirmation (payee omitted if the source doesn't show one)"},
             {"pattern": "Check Summary - {Bank Name}.pdf", "folder": "Proof of Payments/Check", "description": "A multi-check list with no separable per-check images -- also produced alongside individual check images when a PDF bundles both a summary list and per-check images together"},
