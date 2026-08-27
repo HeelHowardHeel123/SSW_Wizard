@@ -4250,12 +4250,12 @@ class Component extends DCLogic {
     return Object.values(byCol);
   }
 
-  // POST crew-freelance invoice PDFs to the backend in batches of 15,
+  // POST crew-freelance invoice PDFs to the backend in batches of 5,
   // concatenating rows / issues / per-file summaries across batches. Envelope
   // matches fringe ({rows, issues, files}) minus the columns key.
   async extractCrewFreelance(fileList) {
     const files = Array.from(fileList || []);
-    const CHUNK = 10;
+    const CHUNK = 5;
     const merged = { rows: [], issues: [], files: [] };
     // Sort by filename before chunking so batch order matches the backend's
     // per-request alphabetical sort (keeps global row order across batches).
