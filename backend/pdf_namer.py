@@ -274,6 +274,8 @@ For each form:
 
 Every page must belong to exactly one form's "pages" list -- never omit a page and never assign one page to two forms.
 
+SPECIAL CASE -- a W-9 (or a similar purely-supporting tax/identity document) is only ever its own separate form when it is the ONLY thing present in the entire PDF. If a W-9 appears attached behind (or in front of) a different, more substantial form in this same PDF -- e.g. a Deal Memo followed by that same person's W-9 -- do NOT give it its own entry: fold its page(s) into the pages list of whichever form it's supporting instead, so the combined PDF stays together as one output file named after that primary form. Only report a standalone "form_type": "W9" entry when nothing else at all shares the PDF with it.
+
 Return ONLY a JSON object with exactly this key: {"forms": [{"pages": [...], "owner_type": "company" | "person", "company_name": "...", "last_name": "...", "first_name": "...", "form_type": "...", "relevant_date": "..."}, ...]}
 No explanation. No markdown. No code fences. JSON object only."""
 
