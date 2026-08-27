@@ -227,7 +227,14 @@ async def run_job(job_id: str, uploaded: list[tuple[str, str]]) -> None:
                 final_name = None
                 try:
                     if result.bucket == pdf_namer.BUCKET_RENAMED:
-                        final_name = _write_output(job_id, result.subfolder, result.new_filename, result.output_pdf_bytes)
+                        # Proof of Payments uses "_002"/"_003" collision
+                        # suffixes instead of the " (2)"/" (3)" style used
+                        # everywhere else, per explicit instruction.
+                        suffix_style = "underscore" if result.doc_type == "proof_of_payment" else "paren"
+                        final_name = _write_output(
+                            job_id, result.subfolder, result.new_filename, result.output_pdf_bytes,
+                            suffix_style=suffix_style,
+                        )
                     elif result.bucket == pdf_namer.BUCKET_UNABLE_TO_RENAME:
                         async with lock:
                             n = unable_counters.get(result.subfolder, 0) + 1
@@ -270,20 +277,27 @@ async def run_job(job_id: str, uploaded: list[tuple[str, str]]) -> None:
             _write_status(job_id, s)
 
 
-def _resolve_collision_free_path(dest_dir: str, dest_filename: str) -> str:
+def _resolve_collision_free_path(dest_dir: str, dest_filename: str, suffix_style: str = "paren") -> str:
+    """suffix_style "paren" (default, used everywhere else in this tool)
+    produces "Name (2).pdf", "Name (3).pdf", ...; "underscore" (Proof of
+    Payments only, per explicit instruction) produces "Name_002.pdf",
+    "Name_003.pdf", ... instead."""
     os.makedirs(dest_dir, exist_ok=True)
     base, ext = os.path.splitext(dest_filename)
     candidate = dest_filename
     n = 2
     while os.path.exists(os.path.join(dest_dir, candidate)):
-        candidate = f"{base} ({n}){ext}"
+        if suffix_style == "underscore":
+            candidate = f"{base}_{n:03d}{ext}"
+        else:
+            candidate = f"{base} ({n}){ext}"
         n += 1
     return os.path.join(dest_dir, candidate)
 
 
-def _write_output(job_id: str, subfolder: str, filename: str, data: bytes) -> str:
+def _write_output(job_id: str, subfolder: str, filename: str, data: bytes, suffix_style: str = "paren") -> str:
     dest_dir = os.path.join(_output_dir(job_id), subfolder)
-    final_path = _resolve_collision_free_path(dest_dir, filename)
+    final_path = _resolve_collision_free_path(dest_dir, filename, suffix_style=suffix_style)
     with open(final_path, "wb") as f:
         f.write(data)
     return os.path.basename(final_path)

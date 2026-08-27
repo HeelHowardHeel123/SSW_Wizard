@@ -36,7 +36,7 @@ _BUSINESS_WORDS = {
     "production", "company", "co", "ltd", "llp", "enterprises", "group",
     "studios", "studio", "media", "films", "film", "pictures", "entertainment",
 }
-_UPPERCASE_EXCEPTIONS = {"llc", "inc", "caps", "nda"}
+_UPPERCASE_EXCEPTIONS = {"llc", "inc", "caps", "nda", "amex"}
 _NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"}
 
 
@@ -68,6 +68,7 @@ FOLDER_PETTY_CASH = "Petty Cash"
 FOLDER_PRODCC    = "ProdCC"
 FOLDER_CREW_PAYROLL = "Crew Payroll"
 FOLDER_OTHER_FORMS = "Other Forms"
+FOLDER_PROOF_OF_PAYMENT = "Proof of Payments"
 FOLDER_NOT_READABLE = "Not Readable"
 
 
@@ -117,9 +118,10 @@ TYPE_CLASSIFIER_PROMPT = """You are looking at a single scanned or photographed 
 - "prodcc" -- a Production Credit Card (ProdCC) reimbursement: the crew member paid with their OWN money/personal card and the production owes THEM back. This is normally identifiable ONLY by an explicit cover sheet clearly built for that purpose -- either an internal Purchase Order-style request where the Vendor field names the crew member directly followed by wording like "- CC Reimbursement"/"- CC Reimb" (never "Petty Cash"), or a human-made cover sheet (often an Excel printout) that itself is specifically about a credit card reimbursement. NEVER classify a "Petty Cash Summary"/"Summary of Petty Cash Expenses" form as prodcc, even if its balance-due line seems to run the "company owes the employee" direction -- that form always means petty_cash regardless.
 - "crew_payroll" -- any payroll-company document for the production's crew as a whole (never a single crew member's own invoice): a payroll company's own consolidated invoice for one batch of crew wages (e.g. "New C.A.P.S. LLC," "TakeOne Network Corp. DBA Wrapbook") -- identified by payroll-report page types like "Invoice Fee Summary," "Fringe Recap Report," "Wage/Payroll Register," or "Payroll Check Register," and payroll-specific line items (Corporate/Taxable/Gross Wages, Union Fringes, Employer Taxes, Workers Compensation, Handling Fees); OR a whole-project aggregate export covering every crew member at once for the full project date range, not tied to any one batch/invoice -- a "Fringe Report" (a big table, one row per crew member, of wages/fringes/benefits) or a "Payroll Register" (a running ledger of every payment across the whole project, often hundreds of pages).
 - "misc_form" -- any other standardized production paperwork form not covered above, belonging to either one company or one specific crew member and tied to a specific date/period -- e.g. a state tax withholding return (such as Georgia's "G-7 Quarterly Return for Film Payer," usually filed by the payroll company), a crew member's time card, or similar standardized forms.
+- "proof_of_payment" -- a standalone proof that a payment was sent or received, with NOTHING else in the same PDF: an outgoing ACH/wire payment confirmation from an online banking portal, an incoming wire/ACH credit confirmation, a credit card charge or full statement export, a bank check-cleared/cashed confirmation (possibly bundling scanned check images), a QuickBooks check-payment detail report, or a merchant-issued transaction receipt. If a proof-of-payment screenshot is instead attached BEHIND an invoice or other document in the same PDF, the whole PDF is NOT proof_of_payment -- classify it by that other, more substantial document instead (e.g. "vendor"), and the proof-of-payment page(s) just stay part of it, never extracted separately.
 - "unknown" -- anything else, or if you cannot confidently tell from what's visible.
 
-Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "crew_payroll" | "misc_form" | "unknown"}
+Return ONLY a JSON object with exactly this key: {"document_family": "residency" | "diversity" | "vendor" | "petty_cash" | "prodcc" | "crew_payroll" | "misc_form" | "proof_of_payment" | "unknown"}
 No explanation. No markdown. No code fences. JSON object only."""
 
 ORIENTATION_PROMPT = """You are looking at page images from a single PDF document -- a scan or phone photo submitted as part of a film/TV production crew paperwork batch. For each page, determine how many degrees it needs to be rotated CLOCKWISE for its content (text, photos) to appear upright/right-side-up. Common causes: a phone photo taken in landscape when the document is portrait (or vice versa), or a scanner fed the page sideways or upside-down.
@@ -225,7 +227,7 @@ Determine:
 - is_petty_cash_log: true ONLY for case 3 above -- a multi-custodian aggregate/summary report with no one specific named custodian. false otherwise.
 - has_person_name: true if a single custodian's name can be identified (cases 1 and 2). Always false when is_petty_cash_log is true or has_cover_sheet is false.
 - last_name / first_name: that custodian's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
-- next_document_starts_at_page: pages after the cover sheet are normally either more of its own content or scanned receipt images supporting this same petty cash submission -- never a new document. But sometimes a coordinator batch-scans a completely different, unrelated form onto the end of the same PDF (e.g. a Mileage form, a Time Card, anything that isn't part of this petty cash submission). If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise report 0.
+- next_document_starts_at_page: pages after the cover sheet are normally either more of its own content or scanned receipt images supporting this same petty cash submission -- never a new document. A proof-of-payment page proving THIS submission was paid (a bank confirmation screenshot, a wire/ACH receipt, a cancelled check image, etc.) is also never a new document -- it's supporting backup for this exact submission, not something separate. But sometimes a coordinator batch-scans a completely different, unrelated form onto the end of the same PDF (e.g. a Mileage form, a Time Card, anything that isn't part of this petty cash submission or its own payment backup). If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise report 0.
 
 Return ONLY a JSON object with exactly these keys: {"has_cover_sheet": true or false, "is_petty_cash_log": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "next_document_starts_at_page": 0}
 No explanation. No markdown. No code fences. JSON object only."""
@@ -239,7 +241,7 @@ PRODCC_SYSTEM_PROMPT = """You are analyzing a Production Credit Card (ProdCC) re
 Determine:
 - has_person_name: true if a single named crew member can be identified as this document's owner.
 - last_name / first_name: that crew member's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
-- next_document_starts_at_page: pages here are normally either the PO cover sheet or that same crew member's own scanned credit-card receipts backing up this one reimbursement request -- never a new document. But sometimes a completely different, unrelated form gets batch-scanned onto the end of the same PDF. If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise report 0.
+- next_document_starts_at_page: pages here are normally either the PO cover sheet or that same crew member's own scanned credit-card receipts backing up this one reimbursement request -- never a new document. A proof-of-payment page proving THIS reimbursement was paid (a bank confirmation screenshot, a wire/ACH receipt, etc.) is also never a new document -- it's supporting backup for this exact request, not something separate. But sometimes a completely different, unrelated form gets batch-scanned onto the end of the same PDF. If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise report 0.
 
 Return ONLY a JSON object with exactly these keys: {"has_person_name": true or false, "last_name": "...", "first_name": "...", "next_document_starts_at_page": 0}
 No explanation. No markdown. No code fences. JSON object only."""
@@ -258,7 +260,7 @@ Determine:
 - doc_kind: "invoice" for case 1, "fringe_report" for case 2, "payroll_register" for case 3, "payroll_log_by_line" or "payroll_log_by_payee" for case 4/5 depending on that row-order tell.
 - company_name: ONLY for doc_kind "invoice" -- the payroll company's own short/common name. Prefer its own prominent header/logo/address block (e.g. the big "THE TEAM COMPANIES" logo and "The TEAM Companies, 2300 Empire Avenue..." address on its own invoice) over a smaller "Employer of Record" field elsewhere on the same page, which can name a different, less-recognizable legal entity the payroll company processes this particular job's checks through (e.g. "Talent, Ent. & Media Svcs, LLC" on that same Team Companies invoice) -- the header/letterhead name is the one to use, not the Employer of Record. Normalize whichever name you use the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc"/"Corp", drop a "DBA" business-name wrapper down to just the brand name that follows it, and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS", "TakeOne Network Corp. DBA Wrapbook" -> "Wrapbook"). Never the production company being billed (the "Bill To"/"To" party). Empty string for every other doc_kind.
 - invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed. Prefer a field literally labeled "Invoice Number"/"Invoice #" when one is present; only fall back to another field the payroll company uses instead (e.g. "Payroll ID") when no "Invoice Number" field exists at all. Never the internal "Invoice Group," "Batch," "Client #," or Project/Job number. Empty string if none is printed, or for every other doc_kind.
-- next_document_starts_at_page: every page shown is normally part of this ONE crew payroll submission -- its own Invoice/Invoice Fee Summary/Fringe Recap Report/Wage-Payroll Register/Payroll Check Register sections, or (for a Fringe Report/Payroll Register/Payroll Log) simply more pages of the same running report, are never a new document even though their own section headers change partway through. But sometimes a coordinator batch-scans a completely different, unrelated form onto the end of the same PDF -- e.g. a stack of Mileage forms, Kit Rental records, or anything else that isn't one of this submission's own report sections. If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise (the whole thing shown is this one crew payroll submission, whether it ends within the pages shown or simply continues past all of them) report 0.
+- next_document_starts_at_page: every page shown is normally part of this ONE crew payroll submission -- its own Invoice/Invoice Fee Summary/Fringe Recap Report/Wage-Payroll Register/Payroll Check Register sections, or (for a Fringe Report/Payroll Register/Payroll Log) simply more pages of the same running report, are never a new document even though their own section headers change partway through. A proof-of-payment page proving this batch was paid (a bank confirmation screenshot, an ACH batch record, a cancelled check image, etc.) is also never a new document -- it's supporting backup for this exact submission, not something separate. But sometimes a coordinator batch-scans a completely different, unrelated form onto the end of the same PDF -- e.g. a stack of Mileage forms, Kit Rental records, or anything else that isn't one of this submission's own report sections or its own payment backup. If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise (the whole thing shown is this one crew payroll submission, whether it ends within the pages shown or simply continues past all of them) report 0.
 
 Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register" | "payroll_log_by_line" | "payroll_log_by_payee", "company_name": "...", "invoice_number": "...", "next_document_starts_at_page": 0}
 No explanation. No markdown. No code fences. JSON object only."""
@@ -282,6 +284,38 @@ Every page must belong to exactly one form's "pages" list -- never omit a page a
 SPECIAL CASE -- a W-9 (or a similar purely-supporting tax/identity document) is only ever its own separate form when it is the ONLY thing present in the entire PDF. If a W-9 appears attached behind (or in front of) a different, more substantial form in this same PDF -- e.g. a Deal Memo followed by that same person's W-9 -- do NOT give it its own entry: fold its page(s) into the pages list of whichever form it's supporting instead, so the combined PDF stays together as one output file named after that primary form. Only report a standalone "form_type": "W9" entry when nothing else at all shares the PDF with it.
 
 Return ONLY a JSON object with exactly this key: {"forms": [{"pages": [...], "owner_type": "company" | "person", "company_name": "...", "last_name": "...", "first_name": "...", "form_type": "...", "relevant_date": "..."}, ...]}
+No explanation. No markdown. No code fences. JSON object only."""
+
+PROOF_OF_PAYMENT_MULTI_SYSTEM_PROMPT = """You are analyzing a multi-page PDF that is a standalone proof of payment (or a small batch of them) submitted with nothing else attached -- no invoice, no other document. It records that money moved: a payment sent, a payment received, a credit card charge, a check clearing, a QuickBooks payment record, or a merchant receipt. It can contain more than one distinct record -- e.g. a check-clearing summary list followed by several individual scanned check images, one per check.
+
+Look at every page, in the order given, and group them into distinct proof-of-payment records. A record is usually 1 page. A check's own scanned image is its own record, separate from any summary/list page that also appears in the same PDF -- report the summary/list page as its OWN separate record too, never merged into or replaced by the individual check images.
+
+For each record, determine which of these it is:
+
+1. "ach" -- an outgoing ACH/electronic vendor payment confirmation from a business banking portal (e.g. Chase "Vendor & employee payments," a bank's "Money Movement"/ACH batch screen). Extract vendor_name (the payee, "Pay to") ONLY if this record shows ONE specific payee -- leave it empty if it's a batch/list covering several different payees, or an audit/batch record with no one clear payee.
+
+2. "wire" -- an incoming wire transfer or ACH credit confirmation (money received into the account), e.g. a bank's "Transaction details" screen. Extract vendor_name as the SENDER/originator (e.g. an "ORIG CO NAME" field) ONLY if one is actually shown -- some of these only show the receiving account's own name, never any sender; leave vendor_name empty in that case.
+
+3. "credit_card_single" -- a credit card statement filtered/searched down to ONE specific transaction (e.g. "1 Transactions"). Extract vendor_name as that one merchant, card_brand (e.g. "AMEX"), and account_ending (the digits after "ACCOUNT ENDING").
+
+4. "credit_card_statement" -- a full multi-page credit card statement/activity export covering MANY transactions over a date range for one card. These often belong to a shared corporate account used by several employees -- extract vendor_name as the CARDHOLDER name actually printed on the transaction rows (e.g. "KELLY BAYETT"), never the account number, since the account-ending digits are often shared across several different employees' own exports and won't distinguish them. Extract card_brand, and use the statement's OWN start date (the beginning of "Card Activity from ... to ...") as this record's date.
+
+5. "check_single" -- one check's own scanned image, or a compact single-check bank confirmation (Amount/Account/Check Number, sometimes with no payee shown at all -- that's fine, leave vendor_name empty in that case). Extract check_number always, vendor_name as the "Pay to the order of" payee if visible, and amount.
+
+6. "check_summary" -- a list of multiple checks with no separable per-check images (or the summary/list page that accompanies separate check images elsewhere in the same PDF -- report it as its own "check_summary" record even when individual check images are also present as their own "check_single" records).
+
+7. "quickbook" -- a QuickBooks-style "Check Detail" report (Vendor / Date Paid / Check No. / Payment Amount / a Bills-paid table). Extract vendor_name, check_number, amount, and date ("Date Paid").
+
+8. "receipt" -- a merchant-issued transaction receipt (not from a bank), e.g. an emailed Square/Stripe-style receipt. Extract vendor_name (the Merchant) and use the TOTAL amount actually charged -- never just a Subtotal when Tax/Shipping/etc. are broken out separately.
+
+For every record, also extract whichever of these apply:
+- amount: the one dollar figure that matters for this record (see above for which one, depending on type) -- digits and a decimal point only, no "$" sign and no commas (e.g. "36000.00").
+- date: the one date that matters for this record (Send/Posted/Transaction date, Card Activity start date, or Date Paid), in exactly MM/DD/YYYY.
+- bank_name: the bank or financial institution's name, whenever this record has no one specific identifiable party (vendor_name empty) -- this is what the record gets named after instead.
+
+Every page must belong to exactly one record's "pages" list -- never omit a page and never assign one page to two records.
+
+Return ONLY a JSON object with exactly this key: {"proofs": [{"pages": [...], "proof_type": "ach" | "wire" | "credit_card_single" | "credit_card_statement" | "check_single" | "check_summary" | "quickbook" | "receipt", "vendor_name": "...", "amount": "...", "date": "...", "bank_name": "...", "card_brand": "...", "account_ending": "...", "check_number": "..."}, ...]}
 No explanation. No markdown. No code fences. JSON object only."""
 
 
@@ -741,6 +775,114 @@ def build_misc_form_filename(owner_type: str, last: str, first: str, company: st
     return None
 
 
+_PROOF_OF_PAYMENT_SUBFOLDERS = {
+    "ach": "ACH Payment",
+    "wire": "Wire Transfer",
+    "credit_card_single": "Credit Card",
+    "credit_card_statement": "Credit Card",
+    "check_single": "Check",
+    "check_summary": "Check",
+    "quickbook": "Quickbook Summary",
+    "receipt": "Receipt",
+}
+
+
+def proof_of_payment_subfolder(proof_type: str) -> str:
+    sub = _PROOF_OF_PAYMENT_SUBFOLDERS.get((proof_type or "").strip().lower())
+    return f"{FOLDER_PROOF_OF_PAYMENT}/{sub}" if sub else FOLDER_PROOF_OF_PAYMENT
+
+
+def _format_amount_for_filename(raw: str) -> str:
+    """No "$" sign (may not be filesystem-safe everywhere) -- just digits,
+    comma thousands separators, and two decimal places, e.g. "36000" or
+    "$36,000" -> "36,000.00". Falls back to a sanitized version of
+    whatever was given if it doesn't parse as a plain number."""
+    s = (raw or "").strip().replace("$", "").replace(",", "")
+    if not s:
+        return ""
+    try:
+        value = float(s)
+    except ValueError:
+        return sanitize_component(raw or "")
+    return f"{value:,.2f}"
+
+
+def build_proof_of_payment_filename(
+    proof_type: str, vendor_name: str, amount: str, date: str, bank_name: str,
+    card_brand: str, account_ending: str, check_number: str,
+):
+    """One naming convention per proof_type, always falling back to the
+    bank's name alone when no single distinguishing party (vendor/sender/
+    cardholder/payee) could be identified on that particular record --
+    e.g. "ACH - Big City Sets - 36,000.00 - 2024_10_22.pdf" for a single
+    payee vs. "ACH - Pacific Premier Bank.pdf" for a multi-payee batch
+    list with no one payee to name it after."""
+    proof_type = (proof_type or "").strip().lower()
+    amount_s = _format_amount_for_filename(amount)
+    date_s = reformat_date_for_filename(date) if (date or "").strip() else ""
+    vendor_s = sanitize_component(proper_case(vendor_name)) if vendor_name else ""
+    bank_s = sanitize_component(proper_case(bank_name)) if bank_name else ""
+    brand_s = sanitize_component(proper_case(card_brand)) if card_brand else ""
+    ending_s = sanitize_component((account_ending or "").strip())
+    check_s = sanitize_component((check_number or "").strip())
+
+    if proof_type == "ach":
+        if vendor_s and amount_s and date_s:
+            return f"ACH - {vendor_s} - {amount_s} - {date_s}.pdf"
+        if bank_s:
+            return f"ACH - {bank_s}.pdf"
+        return None
+
+    if proof_type == "wire":
+        if vendor_s and amount_s and date_s:
+            return f"Wire Transfer - {vendor_s} - {amount_s} - {date_s}.pdf"
+        if bank_s:
+            return f"Wire Transfer - {bank_s}.pdf"
+        return None
+
+    if proof_type == "credit_card_single":
+        if not (vendor_s and amount_s and date_s):
+            return None
+        brand_part = f"{brand_s}*{ending_s}" if ending_s else brand_s
+        if not brand_part:
+            return None
+        return f"CC {brand_part} - {vendor_s} - {amount_s} - {date_s}.pdf"
+
+    if proof_type == "credit_card_statement":
+        if not (brand_s and vendor_s and date_s):
+            return None
+        return f"CC {brand_s} - {vendor_s} - {date_s}.pdf"
+
+    if proof_type == "check_single":
+        if not check_s:
+            return None
+        if vendor_s and amount_s:
+            return f"Check #{check_s} - {vendor_s} {amount_s}.pdf"
+        if amount_s:
+            return f"Check #{check_s} - {amount_s}.pdf"
+        return f"Check #{check_s}.pdf"
+
+    if proof_type == "check_summary":
+        if not bank_s:
+            return None
+        return f"Check Summary - {bank_s}.pdf"
+
+    if proof_type == "quickbook":
+        if vendor_s and bank_s and amount_s and date_s:
+            suffix = f" - Check {check_s}" if check_s else ""
+            return f"Quickbook Summary - {bank_s} - {vendor_s} - {amount_s} - {date_s}{suffix}.pdf"
+        if bank_s:
+            return f"Quickbook Summary - {bank_s}.pdf"
+        return None
+
+    if proof_type == "receipt":
+        if not (vendor_s and amount_s and date_s):
+            return None
+        return f"Receipt - {vendor_s} - {amount_s} - {date_s}.pdf"
+
+    return None
+
+
 def build_uncovered_receipts_filename(original_filename: str):
     """A bare stack of receipts with no cover sheet at all can't be named by
     content -- keep whatever the original filename was (it may be the only
@@ -1027,6 +1169,86 @@ async def _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, l
     if not results:
         return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="misc_form", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNCLASSIFIED,
+            reason_detail="Model returned no usable page groupings", provider=provider,
+        )]
+    return results
+
+
+async def _extract_proof_of_payment_multi(pdf_bytes, openai_client, anthropic_client, loop):
+    """A standalone proof-of-payment upload can bundle more than one record
+    -- most notably a check-clearing summary list plus each check's own
+    scanned image. Same render-everything/group/split pattern as Residency
+    and Other Forms."""
+    images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_PAGES_TO_INSPECT)
+    if not images:
+        return [DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="proof_of_payment", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+            reason_detail="No renderable pages found",
+        )]
+
+    user_text = (
+        "Identify every distinct proof-of-payment record across all pages of this PDF and "
+        "group pages accordingly, as described in the system prompt."
+    )
+    parsed, provider = await classify_document(
+        images, user_text, PROOF_OF_PAYMENT_MULTI_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
+    )
+    proofs = (parsed or {}).get("proofs") if parsed else None
+    if not isinstance(proofs, list) or not proofs:
+        return [DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="proof_of_payment", subfolder=FOLDER_NOT_READABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+            reason_detail="Could not read document (both providers failed)", provider=provider,
+        )]
+
+    total_pages = len(images)
+    results = []
+    for proof in proofs:
+        page_nums = [p for p in (proof.get("pages") or []) if isinstance(p, int) and 1 <= p <= total_pages]
+        if not page_nums:
+            continue  # nothing usable to split out for this group
+
+        try:
+            sub_pdf_bytes = extract_pages_as_pdf(pdf_bytes, page_nums)
+        except Exception as e:
+            results.append(DocResult(
+                bucket=BUCKET_NOT_READABLE, doc_type="proof_of_payment", subfolder=FOLDER_NOT_READABLE,
+                output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
+                reason_detail=f"Could not split page(s) {page_nums} into their own file: {e}", provider=provider,
+            ))
+            continue
+
+        proof_type = str(proof.get("proof_type", "")).strip().lower()
+        subfolder = proof_of_payment_subfolder(proof_type)
+        new_name = build_proof_of_payment_filename(
+            proof_type,
+            proof.get("vendor_name", ""),
+            proof.get("amount", ""),
+            proof.get("date", ""),
+            proof.get("bank_name", ""),
+            proof.get("card_brand", ""),
+            proof.get("account_ending", ""),
+            proof.get("check_number", ""),
+        )
+        if not new_name:
+            results.append(DocResult(
+                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="proof_of_payment", subfolder=subfolder,
+                output_pdf_bytes=sub_pdf_bytes, reason_code=REASON_UNCLASSIFIED,
+                reason_detail=f"Missing/unreadable proof-of-payment details on page(s) {page_nums}: {proof!r}",
+                provider=provider,
+            ))
+            continue
+
+        results.append(DocResult(
+            bucket=BUCKET_RENAMED, doc_type="proof_of_payment", subfolder=subfolder,
+            output_pdf_bytes=sub_pdf_bytes, new_filename=new_name, provider=provider,
+        ))
+
+    if not results:
+        return [DocResult(
+            bucket=BUCKET_NOT_READABLE, doc_type="proof_of_payment", subfolder=FOLDER_NOT_READABLE,
             output_pdf_bytes=pdf_bytes, reason_code=REASON_UNCLASSIFIED,
             reason_detail="Model returned no usable page groupings", provider=provider,
         )]
@@ -1508,6 +1730,8 @@ async def process_one_document(
             )
         elif family == "misc_form":
             results = await _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, loop)
+        elif family == "proof_of_payment":
+            results = await _extract_proof_of_payment_multi(pdf_bytes, openai_client, anthropic_client, loop)
         else:
             results = [DocResult(
                 bucket=BUCKET_NOT_READABLE, doc_type="unknown", subfolder=FOLDER_NOT_READABLE,
@@ -1613,6 +1837,35 @@ NAMING_CONVENTIONS = [
             "rather than one flat folder. If one uploaded PDF contains several distinct forms "
             "batch-scanned together, each is split out into its own renamed output file -- one upload "
             "can produce multiple results here, same as Residency."
+        ),
+    },
+    {
+        "type_id": "proof_of_payment",
+        "label": "Proof of Payments",
+        "patterns": [
+            {"pattern": "ACH - {Vendor} - {Amount} - {Date}.pdf", "folder": "Proof of Payments/ACH Payment", "description": "Single-payee outgoing ACH confirmation"},
+            {"pattern": "ACH - {Bank Name}.pdf", "folder": "Proof of Payments/ACH Payment", "description": "Multi-payee ACH batch/list, or a batch audit record with no one clear payee"},
+            {"pattern": "Wire Transfer - {Vendor} - {Amount} - {Date}.pdf", "folder": "Proof of Payments/Wire Transfer", "description": "Incoming wire/ACH credit with an identifiable sender"},
+            {"pattern": "Wire Transfer - {Bank Name}.pdf", "folder": "Proof of Payments/Wire Transfer", "description": "Incoming wire/ACH credit with no sender shown (only the receiving account's own info)"},
+            {"pattern": "CC {Brand}*{Account Ending} - {Vendor} - {Amount} - {Date}.pdf", "folder": "Proof of Payments/Credit Card", "description": "A statement filtered/searched down to one specific transaction"},
+            {"pattern": "CC {Brand} - {Cardholder} - {Start Date}.pdf", "folder": "Proof of Payments/Credit Card", "description": "A full multi-page statement export for one card -- named by cardholder, not account-ending digits, since a shared corporate account's ending digits don't distinguish different employees' own exports"},
+            {"pattern": "Check #{Number} - {Payee} {Amount}.pdf", "folder": "Proof of Payments/Check", "description": "One check's own scanned image or compact single-check confirmation (payee omitted if the source doesn't show one)"},
+            {"pattern": "Check Summary - {Bank Name}.pdf", "folder": "Proof of Payments/Check", "description": "A multi-check list with no separable per-check images -- also produced alongside individual check images when a PDF bundles both a summary list and per-check images together"},
+            {"pattern": "Quickbook Summary - {Bank Name} - {Vendor} - {Amount} - {Date} - Check {Number}.pdf", "folder": "Proof of Payments/Quickbook Summary", "description": "A QuickBooks Check Detail report for one vendor (check number appended only if shown)"},
+            {"pattern": "Quickbook Summary - {Bank Name}.pdf", "folder": "Proof of Payments/Quickbook Summary", "description": "Same report with no identifiable vendor"},
+            {"pattern": "Receipt - {Vendor} - {Amount} - {Date}.pdf", "folder": "Proof of Payments/Receipt", "description": "A merchant-issued transaction receipt (not from a bank) -- amount is the final Total, never a Subtotal shown alongside separate Tax/Shipping lines"},
+        ],
+        "notes": (
+            "Only reaches this folder when the proof of payment is the ENTIRE uploaded PDF by itself. "
+            "If one is instead attached behind an invoice or other document in the same PDF, that whole "
+            "PDF is classified and named as the other document instead (e.g. Vendor Invoices) -- the "
+            "proof-of-payment page(s) just stay part of it, never extracted separately. If one uploaded "
+            "PDF bundles several distinct proof-of-payment records (most commonly a check summary list "
+            "plus each check's own scanned image), each is split out into its own renamed output file. "
+            "Dollar amounts never include a \"$\" sign. Whenever no single distinguishing party (vendor/"
+            "sender/cardholder/payee) can be identified, the filename falls back to the bank name alone -- "
+            "if that exact filename collides with one already produced in this job, an underscore-numbered "
+            "suffix is appended (\"_002\", \"_003\", ...), not the \" (2)\" style used elsewhere in this tool."
         ),
     },
 ]
