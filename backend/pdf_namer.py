@@ -36,7 +36,7 @@ _BUSINESS_WORDS = {
     "production", "company", "co", "ltd", "llp", "enterprises", "group",
     "studios", "studio", "media", "films", "film", "pictures", "entertainment",
 }
-_UPPERCASE_EXCEPTIONS = {"llc", "inc", "caps"}
+_UPPERCASE_EXCEPTIONS = {"llc", "inc", "caps", "nda"}
 _NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"}
 
 
@@ -991,6 +991,13 @@ async def _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, l
         form_type = form.get("form_type", "")
         relevant_date = form.get("relevant_date", "")
 
+        # Each distinct form_type gets its own subfolder under "Other Forms"
+        # (e.g. "Other Forms/G-7 Form", "Other Forms/Kit Rental") rather than
+        # dumping every kind of form into one flat folder together. Falls
+        # back to the flat folder only if form_type itself couldn't be read.
+        form_type_s = sanitize_component(proper_case((form_type or "").strip()))
+        subfolder = f"{FOLDER_OTHER_FORMS}/{form_type_s}" if form_type_s else FOLDER_OTHER_FORMS
+
         new_name = build_misc_form_filename(owner_type, last, first, company, form_type, relevant_date)
         if not new_name:
             if owner_type not in ("company", "person"):
@@ -1000,7 +1007,7 @@ async def _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, l
             else:
                 reason = REASON_MISSING_NAME
             results.append(DocResult(
-                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="misc_form", subfolder=FOLDER_OTHER_FORMS,
+                bucket=BUCKET_UNABLE_TO_RENAME, doc_type="misc_form", subfolder=subfolder,
                 output_pdf_bytes=sub_pdf_bytes, reason_code=reason,
                 reason_detail=(f"Missing/unreadable owner or form details on page(s) {page_nums} "
                                 f"(owner_type={owner_type!r}, company={company!r}, last={last!r}, first={first!r}, "
@@ -1010,7 +1017,7 @@ async def _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, l
             continue
 
         results.append(DocResult(
-            bucket=BUCKET_RENAMED, doc_type="misc_form", subfolder=FOLDER_OTHER_FORMS,
+            bucket=BUCKET_RENAMED, doc_type="misc_form", subfolder=subfolder,
             output_pdf_bytes=sub_pdf_bytes, new_filename=new_name, provider=provider,
         ))
 
@@ -1537,12 +1544,14 @@ NAMING_CONVENTIONS = [
         "type_id": "misc_form",
         "label": "Other Forms (G-7, Time Card, etc.)",
         "patterns": [
-            {"pattern": "{Company} - {Form Type} {Date}.pdf", "folder": "Other Forms", "description": "A standardized form filed/owned by a company as a whole, e.g. \"Wrapbook - G-7 Form 2024_03_31.pdf\" for a Georgia G-7 Quarterly Return filed by the payroll company"},
-            {"pattern": "{Last}, {First} - {Form Type} {Date}.pdf", "folder": "Other Forms", "description": "A standardized form belonging to one specific crew member, e.g. \"Marivee, Cade - Time Card 2023_12_31.pdf\""},
+            {"pattern": "{Company} - {Form Type} {Date}.pdf", "folder": "Other Forms/{Form Type}", "description": "A standardized form filed/owned by a company as a whole, e.g. \"Other Forms/G-7 Form/Wrapbook - G-7 Form 2024_03_31.pdf\" for a Georgia G-7 Quarterly Return filed by the payroll company"},
+            {"pattern": "{Last}, {First} - {Form Type} {Date}.pdf", "folder": "Other Forms/{Form Type}", "description": "A standardized form belonging to one specific crew member, e.g. \"Other Forms/Time Card/Marivee, Cade - Time Card 2023_12_31.pdf\""},
         ],
         "notes": (
             "Catch-all for standardized production paperwork that isn't Residency, Diversity, Vendor, "
-            "Petty Cash, ProdCC, or Crew Payroll. If one uploaded PDF contains several distinct forms "
+            "Petty Cash, ProdCC, or Crew Payroll. Each distinct form_type gets its own subfolder under "
+            "\"Other Forms\" (e.g. \"Other Forms/G-7 Form\", \"Other Forms/Kit Rental\", \"Other Forms/Time Card\") "
+            "rather than one flat folder. If one uploaded PDF contains several distinct forms "
             "batch-scanned together, each is split out into its own renamed output file -- one upload "
             "can produce multiple results here, same as Residency."
         ),
