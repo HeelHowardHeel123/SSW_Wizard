@@ -7,3 +7,5 @@ pdfplumber
 sendgrid
 anthropic
 openpyxl>=3.1
+Pillow
+pillow-heif

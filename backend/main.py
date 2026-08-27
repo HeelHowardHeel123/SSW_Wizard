@@ -117,6 +117,39 @@ Endpoints
   DELETE /templates/{id}           → un-publishes; everyone reverts to their own IndexedDB
                                      override (if any) or the bundled default
 
+  Wizard 01 (Name PDFs) — job-based, since a 100-250+ file batch can run 30+
+  minutes of real LLM work, far past any sane HTTP timeout. See pdf_namer.py
+  (classify/extract/name logic, ported from the standalone rename_tool.py
+  this replaces) and wizard01_jobs.py (job storage/background loop/cleanup).
+  GET    /wizard01/conventions     → static naming-pattern reference per document type,
+                                     not job-specific — {"types": [...]}
+  POST   /wizard01/jobs            → multipart: files[]=<pdf/png/jpg/any image format> (many),
+                                     client_name, agency_name, prodco_name (no address fields —
+                                     they don't affect a filename), received_from ("prodco" /
+                                     "agency", exactly one per batch — never mixed, and never
+                                     "client": a batch is never received FROM the Client),
+                                     vendor_naming ("invoice_number" default / "po_number" —
+                                     Vendor Invoice naming preference; falls back to
+                                     invoice_number per-file whenever a given invoice has no
+                                     PO number on it, regardless of this setting). Streams
+                                     uploads straight to the volume (never buffers a whole
+                                     file), kicks off background processing, returns
+                                     {"job_id": ...} immediately.
+  GET    /wizard01/jobs/{id}       → status JSON: state (running/done/error), total,
+                                     processed, renamed, not_readable, needs_review, log[],
+                                     batch_context. 404 once expired. total/processed track
+                                     UPLOADED files; log[] can have MORE entries than total,
+                                     since one upload can produce several output files --
+                                     Residency splits a batch-scanned stack of different
+                                     people's IDs into one file per person. Every log entry
+                                     (even a non-split one) gets its own fresh file_id.
+  GET    /wizard01/jobs/{id}/download → result zip once state=="done"; 409 if still running,
+                                     404 if expired/unknown. Zip has one folder per type
+                                     (renamed + unable_to_rename files together) plus
+                                     Not Readable/ (unclassifiable, original filenames kept),
+                                     and a top-level _manifest.csv.
+  DELETE /wizard01/jobs/{id}       → deletes a job early.
+
 Environment variables
   OPENAI_API_KEY        (required for invoices + image-based fringe) your OpenAI key
   APP_SHARED_SECRET     (optional) if set, callers must send header X-App-Secret
@@ -125,6 +158,9 @@ Environment variables
                         "/data/templates" — must be on a persistent volume (see ssw_wizard-
                         volume mounted at /data on Railway) or published templates are wiped
                         on every redeploy
+  WIZARD01_STORAGE_PATH (optional) directory Wizard 01 job uploads/output/results are written
+                        to; default "/data/wizard01_jobs" — same persistent volume as above.
+                        Jobs and their result zips expire 2 days after creation.
 """
 
 import os
@@ -158,6 +194,10 @@ from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
 from notify import send_parser_alert, send_run_summary, ALERT_EMAIL
 from talent_extractor import extract_talent, extract_teams_talent, extract_highland_talent
+import shutil
+import uuid as _uuid
+import pdf_namer
+import wizard01_jobs
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -5525,6 +5565,125 @@ async def delete_template(template_id: str, x_app_secret: str = Header(default="
     if os.path.exists(meta_path):
         os.remove(meta_path)
 
+    return {"deleted": True}
+
+
+# ── Wizard 01 (Name PDFs) ─────────────────────────────────────────────────────
+# Job-based: a batch (routinely 100-250+ files, multi-GB) can take 30+ minutes
+# of real LLM work, far past any sane HTTP timeout -- so this is upload ->
+# job id -> background processing -> poll -> download, not one long request.
+# See pdf_namer.py (classify/extract/name logic) and wizard01_jobs.py (job
+# storage, background loop, cleanup) for the actual implementation.
+
+_RECEIVED_FROM_VALID = {"prodco", "agency"}  # never "client" -- a batch is never received FROM the Client
+_VENDOR_NAMING_VALID = {"invoice_number", "po_number"}
+
+
+@app.get("/wizard01/conventions")
+async def wizard01_conventions(x_app_secret: str = Header(default="")):
+    """Static reference data (not job-specific) -- the frontend's naming-rules
+    panel reads this instead of hardcoding patterns that would drift the
+    moment a new document type is added."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+    return {
+        "types": pdf_namer.NAMING_CONVENTIONS,
+        "general_notes": [
+            "A sideways or upside-down page (a phone photo taken the wrong way, "
+            "or a scanner-fed page) is automatically rotated upright in the "
+            "output file -- applies to every document type, not just Residency.",
+            "Any image file is accepted, not just PDF/PNG/JPG -- BMP, GIF, TIFF, "
+            "WEBP, iPhone HEIC/HEIF photos, and more are all converted to a real "
+            "PDF automatically before naming/organizing.",
+        ],
+    }
+
+
+@app.post("/wizard01/jobs")
+async def wizard01_create_job(
+    files:           list[UploadFile] = File(...),
+    client_name:     str              = Form(""),
+    agency_name:     str              = Form(""),
+    prodco_name:     str              = Form(""),
+    received_from:   str              = Form(""),
+    vendor_naming:   str              = Form("invoice_number"),
+    x_app_secret:    str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    received_from = received_from.strip().lower()
+    if received_from not in _RECEIVED_FROM_VALID:
+        raise HTTPException(400, f"received_from must be one of {sorted(_RECEIVED_FROM_VALID)}.")
+    vendor_naming = vendor_naming.strip().lower()
+    if vendor_naming not in _VENDOR_NAMING_VALID:
+        raise HTTPException(400, f"vendor_naming must be one of {sorted(_VENDOR_NAMING_VALID)}.")
+    if not files:
+        raise HTTPException(400, "No files uploaded.")
+
+    # Opportunistic cleanup -- no scheduler exists in this backend, so the
+    # job-creation endpoint (the natural highest-traffic entry point) is
+    # where expired jobs actually get swept.
+    wizard01_jobs.sweep_expired_jobs()
+
+    batch = pdf_namer.BatchContext(
+        client_name=client_name, agency_name=agency_name, prodco_name=prodco_name,
+        received_from=received_from, vendor_naming=vendor_naming,
+    )
+    job_id = wizard01_jobs.create_job(batch)
+
+    # Stream each file straight to the Volume as it arrives -- never buffer
+    # a whole file (let alone the whole batch) into memory. uf.file is a
+    # SpooledTemporaryFile; copyfileobj moves it in bounded chunks.
+    uploaded: list[tuple[str, str]] = []
+    dest_dir = wizard01_jobs.uploads_dir(job_id)
+    for uf in files:
+        file_id = _uuid.uuid4().hex
+        original_filename = uf.filename or "unnamed"
+        dest_path = os.path.join(dest_dir, f"{file_id}__{original_filename}")
+        with open(dest_path, "wb") as out_f:
+            shutil.copyfileobj(uf.file, out_f, length=1024 * 1024)
+        uploaded.append((file_id, original_filename))
+
+    asyncio.create_task(wizard01_jobs.run_job(job_id, uploaded))
+    return {"job_id": job_id}
+
+
+@app.get("/wizard01/jobs/{job_id}")
+async def wizard01_job_status(job_id: str, x_app_secret: str = Header(default="")):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    status = wizard01_jobs.read_status(job_id)
+    if status is None or wizard01_jobs.is_expired(status):
+        raise HTTPException(404, f"No job '{job_id}' (expired or never existed).")
+    return status
+
+
+@app.get("/wizard01/jobs/{job_id}/download")
+async def wizard01_job_download(job_id: str, x_app_secret: str = Header(default="")):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    status = wizard01_jobs.read_status(job_id)
+    if status is None or wizard01_jobs.is_expired(status):
+        raise HTTPException(404, f"No job '{job_id}' (expired or never existed).")
+    if status["state"] != "done":
+        raise HTTPException(409, f"Job '{job_id}' is still {status['state']}.")
+
+    zip_path = wizard01_jobs._zip_path(job_id)
+    if not os.path.exists(zip_path):
+        raise HTTPException(404, f"Job '{job_id}' has no result file.")
+    return FileResponse(zip_path, filename=f"wizard01-{job_id}.zip", media_type="application/zip")
+
+
+@app.delete("/wizard01/jobs/{job_id}")
+async def wizard01_job_delete(job_id: str, x_app_secret: str = Header(default="")):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    if not wizard01_jobs.delete_job(job_id):
+        raise HTTPException(404, f"No job '{job_id}'.")
     return {"deleted": True}
 
 
