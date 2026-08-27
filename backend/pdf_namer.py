@@ -225,8 +225,9 @@ Determine:
 - is_petty_cash_log: true ONLY for case 3 above -- a multi-custodian aggregate/summary report with no one specific named custodian. false otherwise.
 - has_person_name: true if a single custodian's name can be identified (cases 1 and 2). Always false when is_petty_cash_log is true or has_cover_sheet is false.
 - last_name / first_name: that custodian's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
+- next_document_starts_at_page: pages after the cover sheet are normally either more of its own content or scanned receipt images supporting this same petty cash submission -- never a new document. But sometimes a coordinator batch-scans a completely different, unrelated form onto the end of the same PDF (e.g. a Mileage form, a Time Card, anything that isn't part of this petty cash submission). If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise report 0.
 
-Return ONLY a JSON object with exactly these keys: {"has_cover_sheet": true or false, "is_petty_cash_log": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "..."}
+Return ONLY a JSON object with exactly these keys: {"has_cover_sheet": true or false, "is_petty_cash_log": true or false, "has_person_name": true or false, "last_name": "...", "first_name": "...", "next_document_starts_at_page": 0}
 No explanation. No markdown. No code fences. JSON object only."""
 
 PRODCC_SYSTEM_PROMPT = """You are analyzing a Production Credit Card (ProdCC) reimbursement document submitted as part of a film/TV production's Accounts Payable packet. ProdCC is how a crew member gets paid back for production expenses they already paid for with their OWN money/personal card -- the reverse of Petty Cash, where the company hands cash to the crew member up front instead. It will be one of:
@@ -238,8 +239,9 @@ PRODCC_SYSTEM_PROMPT = """You are analyzing a Production Credit Card (ProdCC) re
 Determine:
 - has_person_name: true if a single named crew member can be identified as this document's owner.
 - last_name / first_name: that crew member's name, split, ONLY if has_person_name is true. Empty strings otherwise. A generational suffix (Jr, Sr, II, III, etc.) stays attached to last_name.
+- next_document_starts_at_page: pages here are normally either the PO cover sheet or that same crew member's own scanned credit-card receipts backing up this one reimbursement request -- never a new document. But sometimes a completely different, unrelated form gets batch-scanned onto the end of the same PDF. If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise report 0.
 
-Return ONLY a JSON object with exactly these keys: {"has_person_name": true or false, "last_name": "...", "first_name": "..."}
+Return ONLY a JSON object with exactly these keys: {"has_person_name": true or false, "last_name": "...", "first_name": "...", "next_document_starts_at_page": 0}
 No explanation. No markdown. No code fences. JSON object only."""
 
 CREW_PAYROLL_SYSTEM_PROMPT = """You are analyzing a Crew Payroll document submitted as part of a film/TV production's Accounts Payable packet -- always something a payroll company (e.g. "New C.A.P.S. LLC," "TakeOne Network Corp. DBA Wrapbook") produced for the production's crew as a whole, never any one crew member's own invoice. Ignore individual employee names anywhere in the document entirely -- they never matter for naming this file. It will be one of:
@@ -256,8 +258,9 @@ Determine:
 - doc_kind: "invoice" for case 1, "fringe_report" for case 2, "payroll_register" for case 3, "payroll_log_by_line" or "payroll_log_by_payee" for case 4/5 depending on that row-order tell.
 - company_name: ONLY for doc_kind "invoice" -- the payroll company's own short/common name. Prefer its own prominent header/logo/address block (e.g. the big "THE TEAM COMPANIES" logo and "The TEAM Companies, 2300 Empire Avenue..." address on its own invoice) over a smaller "Employer of Record" field elsewhere on the same page, which can name a different, less-recognizable legal entity the payroll company processes this particular job's checks through (e.g. "Talent, Ent. & Media Svcs, LLC" on that same Team Companies invoice) -- the header/letterhead name is the one to use, not the Employer of Record. Normalize whichever name you use the way someone would casually refer to it in conversation: drop a leading "New "/legal suffix like "LLC"/"Inc"/"Corp", drop a "DBA" business-name wrapper down to just the brand name that follows it, and collapse a dotted initialism into a plain acronym (e.g. "New C.A.P.S. LLC" -> "CAPS", "TakeOne Network Corp. DBA Wrapbook" -> "Wrapbook"). Never the production company being billed (the "Bill To"/"To" party). Empty string for every other doc_kind.
 - invoice_number: ONLY for doc_kind "invoice" -- that batch's own reference number, exactly as printed. Prefer a field literally labeled "Invoice Number"/"Invoice #" when one is present; only fall back to another field the payroll company uses instead (e.g. "Payroll ID") when no "Invoice Number" field exists at all. Never the internal "Invoice Group," "Batch," "Client #," or Project/Job number. Empty string if none is printed, or for every other doc_kind.
+- next_document_starts_at_page: every page shown is normally part of this ONE crew payroll submission -- its own Invoice/Invoice Fee Summary/Fringe Recap Report/Wage-Payroll Register/Payroll Check Register sections, or (for a Fringe Report/Payroll Register/Payroll Log) simply more pages of the same running report, are never a new document even though their own section headers change partway through. But sometimes a coordinator batch-scans a completely different, unrelated form onto the end of the same PDF -- e.g. a stack of Mileage forms, Kit Rental records, or anything else that isn't one of this submission's own report sections. If you can see the page number (1-indexed, within the pages given) where such a genuinely different document begins, report it. Otherwise (the whole thing shown is this one crew payroll submission, whether it ends within the pages shown or simply continues past all of them) report 0.
 
-Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register" | "payroll_log_by_line" | "payroll_log_by_payee", "company_name": "...", "invoice_number": "..."}
+Return ONLY a JSON object with exactly these keys: {"doc_kind": "invoice" | "fringe_report" | "payroll_register" | "payroll_log_by_line" | "payroll_log_by_payee", "company_name": "...", "invoice_number": "...", "next_document_starts_at_page": 0}
 No explanation. No markdown. No code fences. JSON object only."""
 
 MISC_FORM_MULTI_SYSTEM_PROMPT = """You are analyzing a multi-page PDF that may contain one or more separate standardized production paperwork forms -- forms that don't belong to any of Residency, Diversity, Vendor, Petty Cash, ProdCC, or Crew Payroll. Examples include a state tax withholding return (e.g. Georgia's "G-7 Quarterly Return for Film Payer," usually filed by the payroll company on the production's behalf), a crew member's time card, or a Kit/Box Rental fee record (a "Kit / Box Fee" summary page -- Employee, Amount, Date -- paired with its own "Box/Kit Rental Inventory" detail page) -- more form types beyond these can appear too. Each individual form belongs to either ONE company or ONE specific named crew member, and is tied to one specific date/period.
@@ -1086,136 +1089,179 @@ async def _extract_diversity(images_b64, openai_client, anthropic_client, loop, 
     )
 
 
-async def _extract_petty_cash(images_b64, openai_client, anthropic_client, loop, orig_filename_hint):
+async def _copy_off_trailing_pages(pdf_bytes, images_b64, next_start_raw, filename, batch, openai_client, anthropic_client, loop):
+    """Petty Cash / ProdCC / Crew Payroll always keep their own output as
+    the FULL original PDF, unmodified -- but a coordinator can batch-scan
+    an unrelated form onto the end of the same file (e.g. a crew payroll
+    invoice followed by a stack of Mileage/Kit Rental records). That
+    trailing content deserves to also be independently filed/discoverable
+    under its own name, so when the extraction prompt reports the page
+    where such a document starts, this carves out a COPY of just those
+    trailing pages -- the primary document is never touched or shortened,
+    this is purely an extra copy -- and recursively re-runs the full
+    classify+dispatch pipeline on it, since it could be anything (Other
+    Forms, another payroll invoice, etc.). Returns the list of extra
+    DocResults produced this way (empty if no trailing document was
+    found)."""
+    total_pages = len(images_b64)
+    try:
+        next_start = int(next_start_raw)
+    except (TypeError, ValueError):
+        next_start = 0
+    if not (2 <= next_start <= total_pages):
+        return []
+    try:
+        trailing_pdf_bytes = extract_pages_as_pdf(pdf_bytes, list(range(next_start, total_pages + 1)))
+    except Exception:
+        return []
+    return await process_one_document(trailing_pdf_bytes, filename, batch, openai_client, anthropic_client, loop)
+
+
+async def _extract_petty_cash(pdf_bytes, images_b64, openai_client, anthropic_client, loop, orig_filename_hint, batch):
     user_text = "Extract the fields described in the system prompt from this petty cash document."
     parsed, provider = await classify_document(
         images_b64, user_text, PETTY_CASH_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
     )
     if parsed is None:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="petty_cash", subfolder=FOLDER_NOT_READABLE,
-            output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
             reason_detail="Could not read document (both providers failed)", provider=provider,
-        )
+        )]
+
+    extra_results = await _copy_off_trailing_pages(
+        pdf_bytes, images_b64, parsed.get("next_document_starts_at_page"),
+        orig_filename_hint, batch, openai_client, anthropic_client, loop,
+    )
 
     if not bool(parsed.get("has_cover_sheet")):
         # A bare stack of receipts with nothing identifying whose batch this
         # is -- not an error, just nothing to confidently name from content.
         # Keep the original filename (it may be the only clue) under an
         # "aaa" prefix so it sorts to the top for manual review.
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_RENAMED, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
-            output_pdf_bytes=b"", new_filename=build_uncovered_receipts_filename(orig_filename_hint),
+            output_pdf_bytes=pdf_bytes, new_filename=build_uncovered_receipts_filename(orig_filename_hint),
             provider=provider,
-        )
+        )] + extra_results
 
     if bool(parsed.get("is_petty_cash_log")):
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_RENAMED, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
-            output_pdf_bytes=b"", new_filename="Petty Cash Log.pdf", provider=provider,
-        )
+            output_pdf_bytes=pdf_bytes, new_filename="Petty Cash Log.pdf", provider=provider,
+        )] + extra_results
 
     if not bool(parsed.get("has_person_name")):
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
-            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_MISSING_NAME,
             reason_detail="Could not identify a named custodian on this petty cash document", provider=provider,
-        )
+        )] + extra_results
 
     last, first = parsed.get("last_name", ""), parsed.get("first_name", "")
     new_name = build_petty_cash_filename(last, first)
     if not new_name:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
-            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_MISSING_NAME,
             reason_detail=f"Could not derive a usable name (last={last!r}, first={first!r})", provider=provider,
-        )
-    return DocResult(
+        )] + extra_results
+    return [DocResult(
         bucket=BUCKET_RENAMED, doc_type="petty_cash", subfolder=FOLDER_PETTY_CASH,
-        output_pdf_bytes=b"", new_filename=new_name, provider=provider,
-    )
+        output_pdf_bytes=pdf_bytes, new_filename=new_name, provider=provider,
+    )] + extra_results
 
 
-async def _extract_prodcc(images_b64, openai_client, anthropic_client, loop):
+async def _extract_prodcc(pdf_bytes, images_b64, openai_client, anthropic_client, loop, filename, batch):
     user_text = "Extract the fields described in the system prompt from this ProdCC reimbursement document."
     parsed, provider = await classify_document(
         images_b64, user_text, PRODCC_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
     )
     if parsed is None:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="prodcc", subfolder=FOLDER_NOT_READABLE,
-            output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
             reason_detail="Could not read document (both providers failed)", provider=provider,
-        )
+        )]
+
+    extra_results = await _copy_off_trailing_pages(
+        pdf_bytes, images_b64, parsed.get("next_document_starts_at_page"),
+        filename, batch, openai_client, anthropic_client, loop,
+    )
 
     if not bool(parsed.get("has_person_name")):
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="prodcc", subfolder=FOLDER_PRODCC,
-            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_MISSING_NAME,
             reason_detail="Could not identify a named crew member on this ProdCC document", provider=provider,
-        )
+        )] + extra_results
 
     last, first = parsed.get("last_name", ""), parsed.get("first_name", "")
     new_name = build_prodcc_filename(last, first)
     if not new_name:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="prodcc", subfolder=FOLDER_PRODCC,
-            output_pdf_bytes=b"", reason_code=REASON_MISSING_NAME,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_MISSING_NAME,
             reason_detail=f"Could not derive a usable name (last={last!r}, first={first!r})", provider=provider,
-        )
-    return DocResult(
+        )] + extra_results
+    return [DocResult(
         bucket=BUCKET_RENAMED, doc_type="prodcc", subfolder=FOLDER_PRODCC,
-        output_pdf_bytes=b"", new_filename=new_name, provider=provider,
-    )
+        output_pdf_bytes=pdf_bytes, new_filename=new_name, provider=provider,
+    )] + extra_results
 
 
-async def _extract_crew_payroll(images_b64, openai_client, anthropic_client, loop):
+async def _extract_crew_payroll(pdf_bytes, images_b64, openai_client, anthropic_client, loop, filename, batch):
     user_text = "Extract the fields described in the system prompt from this Crew Payroll document."
     parsed, provider = await classify_document(
         images_b64, user_text, CREW_PAYROLL_SYSTEM_PROMPT, openai_client, anthropic_client, loop,
     )
     if parsed is None:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_NOT_READABLE, doc_type="crew_payroll", subfolder=FOLDER_NOT_READABLE,
-            output_pdf_bytes=b"", reason_code=REASON_UNREADABLE,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_UNREADABLE,
             reason_detail="Could not read document (both providers failed)", provider=provider,
-        )
+        )]
+
+    extra_results = await _copy_off_trailing_pages(
+        pdf_bytes, images_b64, parsed.get("next_document_starts_at_page"),
+        filename, batch, openai_client, anthropic_client, loop,
+    )
 
     doc_kind = str(parsed.get("doc_kind", "")).strip().lower()
     if doc_kind == "fringe_report":
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
-            output_pdf_bytes=b"", new_filename="Fringe Report.pdf", provider=provider,
-        )
+            output_pdf_bytes=pdf_bytes, new_filename="Fringe Report.pdf", provider=provider,
+        )] + extra_results
     if doc_kind == "payroll_register":
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
-            output_pdf_bytes=b"", new_filename="Payroll Register.pdf", provider=provider,
-        )
+            output_pdf_bytes=pdf_bytes, new_filename="Payroll Register.pdf", provider=provider,
+        )] + extra_results
     if doc_kind == "payroll_log_by_line":
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
-            output_pdf_bytes=b"", new_filename="Payroll Log by Line #.pdf", provider=provider,
-        )
+            output_pdf_bytes=pdf_bytes, new_filename="Payroll Log by Line #.pdf", provider=provider,
+        )] + extra_results
     if doc_kind == "payroll_log_by_payee":
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
-            output_pdf_bytes=b"", new_filename="Payroll Log by Payee.pdf", provider=provider,
-        )
+            output_pdf_bytes=pdf_bytes, new_filename="Payroll Log by Payee.pdf", provider=provider,
+        )] + extra_results
 
     company = parsed.get("company_name", "")
     invoice_number = parsed.get("invoice_number", "")
     new_name = build_vendor_invoice_filename(company, invoice_number)
     if not new_name:
-        return DocResult(
+        return [DocResult(
             bucket=BUCKET_UNABLE_TO_RENAME, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
-            output_pdf_bytes=b"", reason_code=REASON_MISSING_COMPANY,
+            output_pdf_bytes=pdf_bytes, reason_code=REASON_MISSING_COMPANY,
             reason_detail=f"Could not identify the payroll company (company={company!r})", provider=provider,
-        )
-    return DocResult(
+        )] + extra_results
+    return [DocResult(
         bucket=BUCKET_RENAMED, doc_type="crew_payroll", subfolder=FOLDER_CREW_PAYROLL,
-        output_pdf_bytes=b"", new_filename=new_name, provider=provider,
-    )
+        output_pdf_bytes=pdf_bytes, new_filename=new_name, provider=provider,
+    )] + extra_results
 
 
 async def _extract_vendor(images_b64, openai_client, anthropic_client, loop, batch: BatchContext):
@@ -1364,10 +1410,16 @@ async def process_one_document(
     family's extraction. Any unexpected exception is caught here so one bad
     file never kills a job.
 
-    Returns a LIST of DocResult, not one -- for every family except
-    Residency this is always a single-element list (one uploaded file, one
-    output file), but Residency can legitimately split one uploaded file
-    into several (a batch-scanned stack of different people's IDs)."""
+    Returns a LIST of DocResult, not one. Residency and Other Forms can
+    legitimately split one uploaded file into several (a batch-scanned
+    stack of different people's IDs, or several distinct forms scanned
+    together). Petty Cash, ProdCC, and Crew Payroll normally return just
+    their own single result (the full original PDF, untouched), but can
+    return extra results too: if an unrelated form was batch-scanned onto
+    the end of the same file, a COPY of just those trailing pages is
+    carved out and recursively run back through this same function, so the
+    original document is never split or shortened -- the trailing form
+    just also gets independently filed under its own name."""
     try:
         pdf_bytes = load_source_as_pdf_bytes(raw_bytes, filename)
     except Exception as e:
@@ -1436,17 +1488,24 @@ async def process_one_document(
             result.output_pdf_bytes = pdf_bytes
             results = [result]
         elif family == "petty_cash":
-            result = await _extract_petty_cash(classify_images, openai_client, anthropic_client, loop, filename)
-            result.output_pdf_bytes = pdf_bytes
-            results = [result]
+            # Re-render at a higher page cap than the classify pass -- need
+            # enough of the document visible to notice a trailing unrelated
+            # form batch-scanned onto the end of it (see next_document_
+            # starts_at_page in the system prompt).
+            petty_cash_images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_PAGES_TO_INSPECT)
+            results = await _extract_petty_cash(
+                pdf_bytes, petty_cash_images or classify_images, openai_client, anthropic_client, loop, filename, batch,
+            )
         elif family == "prodcc":
-            result = await _extract_prodcc(classify_images, openai_client, anthropic_client, loop)
-            result.output_pdf_bytes = pdf_bytes
-            results = [result]
+            prodcc_images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_PAGES_TO_INSPECT)
+            results = await _extract_prodcc(
+                pdf_bytes, prodcc_images or classify_images, openai_client, anthropic_client, loop, filename, batch,
+            )
         elif family == "crew_payroll":
-            result = await _extract_crew_payroll(classify_images, openai_client, anthropic_client, loop)
-            result.output_pdf_bytes = pdf_bytes
-            results = [result]
+            payroll_images = render_pdf_bytes_to_images_b64(pdf_bytes, max_pages=MAX_PAGES_TO_INSPECT)
+            results = await _extract_crew_payroll(
+                pdf_bytes, payroll_images or classify_images, openai_client, anthropic_client, loop, filename, batch,
+            )
         elif family == "misc_form":
             results = await _extract_misc_form_multi(pdf_bytes, openai_client, anthropic_client, loop)
         else:
