@@ -510,10 +510,16 @@ async def classify_document(images_b64, user_text, system_prompt, openai_client,
     """Tries GPT-4o first; falls back to Claude if GPT refuses/errors/comes
     back empty. Returns (parsed_dict_or_None, provider_used). Runs the
     (synchronous) SDK calls in the executor so this can be awaited alongside
-    other files' calls under a semaphore. detail="low" is worth passing for
-    a coarse judgment call (e.g. orientation) made over many images at
-    once, where GPT-4o's high-detail mode would multiply token cost for no
-    real accuracy benefit."""
+    other files' calls under a semaphore. detail="low" is available for a
+    genuinely coarse judgment call made over many images at once, where
+    GPT-4o's high-detail mode would multiply token cost for no real
+    accuracy benefit -- but confirmed NOT a good fit for orientation
+    detection specifically (see correct_page_orientations): judging which
+    way is up in a phone photo (a hand holding a card, background clutter,
+    the card filling only part of the frame) degrades badly at low
+    resolution even though reading printed text tends to stay legible,
+    causing real false-positive rotations on already-upright Residency
+    photos in production testing."""
     import functools
     try:
         raw = await loop.run_in_executor(
@@ -601,7 +607,7 @@ async def correct_page_orientations(pdf_bytes: bytes, openai_client, anthropic_c
 
     user_text = "Determine the needed rotation for each page, in order, as described in the system prompt."
     parsed, _provider = await classify_document(
-        images, user_text, ORIENTATION_PROMPT, openai_client, anthropic_client, loop, detail="low",
+        images, user_text, ORIENTATION_PROMPT, openai_client, anthropic_client, loop,
     )
     pages_info = (parsed or {}).get("pages") if parsed else None
     if not isinstance(pages_info, list):
