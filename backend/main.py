@@ -185,7 +185,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from parsers.base import FRINGE_FIELDS, empty_row, parse_amount, clean_fringe_name, _NUMERIC_FIELDS as _FRINGE_NUMERIC_FIELDS
+from parsers.base import FRINGE_FIELDS, empty_row, parse_amount, clean_fringe_name, fmt_street_address, _NUMERIC_FIELDS as _FRINGE_NUMERIC_FIELDS
 from payroll_reconciler import reconcile_payroll
 from timecard_parser import extract_timecards
 from timecard_reconciler import match_timecards
@@ -2224,6 +2224,24 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
             else ". (Email alert failed — check SENDGRID_API_KEY)"
         )
         issues.append(alert_msg)
+
+    # Normalize free-text fields to proper case regardless of which parser
+    # produced the row (CAPS static, Wrapbook, Teams, Revolution, AI-fallback,
+    # ...) -- casing consistency shouldn't depend on which of those paths a
+    # given file happened to route through. Confirmed on a real ADQ 005 run:
+    # 13 of 55 rows came through raw ALL CAPS (name, address, city) because
+    # they'd fallen through to a path that skips clean_fringe_name's
+    # from_caps handling. Only touches human-readable text fields -- never
+    # state codes, invoice numbers, SSNs, or dollar amounts.
+    for r in rows:
+        if r.get("worker"):
+            r["worker"] = pdf_namer.proper_case(r["worker"])
+        if r.get("jobTitle"):
+            r["jobTitle"] = pdf_namer.proper_case(r["jobTitle"])
+        if r.get("city"):
+            r["city"] = pdf_namer.proper_case(r["city"])
+        if r.get("street"):
+            r["street"] = fmt_street_address(r["street"])
 
     return {
         "rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries,
