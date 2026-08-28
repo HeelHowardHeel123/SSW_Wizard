@@ -4877,12 +4877,17 @@ class Component extends DCLogic {
     return "";
   }
 
-  // POST payroll PDFs to the backend in batches of 15 (payload size + progress
-  // granularity, not a proxy deadline), concatenating rows / issues / per-file
-  // summaries across batches.
+  // POST payroll PDFs to the backend in batches of 5, matching the backend's
+  // own concurrency cap (5 concurrent per request) so one request's worst
+  // case is a single concurrent round, not several sequential ones. Real
+  // invoices needing full parser/AI extraction (as opposed to a cheap
+  // register-only skip) can take ~40s per round; 13 files at the old chunk
+  // size of 15 meant 3 sequential rounds in one request and a Cloudflare 524
+  // (proxy timeout) on a real ADQ 005 run once a detection bug that was
+  // silently skipping most of those files got fixed.
   async extractFringe(fileList, hints) {
     const files = Array.from(fileList || []);
-    const CHUNK = 15;
+    const CHUNK = 5;
     const merged = { rows: [], issues: [], files: [] };
     // Sort by filename before chunking so batch order matches the backend's
     // per-request alphabetical sort (keeps global row order across batches).
