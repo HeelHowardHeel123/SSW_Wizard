@@ -227,9 +227,38 @@ def _match_invoice(
 _UNPLACED = 10 ** 9  # sort-key filler for a row with no position on that axis
 
 
+def _sort_name_key(name: str) -> str:
+    """Sortable "last, first" string for _sort_key_name_invoice.
+
+    _normalize_name is built for word-order-insensitive EQUALITY (so "DeMunn,
+    Kevin" matches "Kevin DeMunn"), which it achieves by alphabetizing a
+    name's own words against each other -- fine for comparing two names, but
+    it throws away which word was the surname. Using it as a sort key made
+    the effective sort order flip between by-first-name and by-last-name
+    row to row, depending on which of a given person's words happened to be
+    alphabetically smaller (confirmed on a real ADQ 005 run: "Barrera,
+    Adrian" sorted by first name since "adrian" < "barrera", but "Azih,
+    Fidelis" sorted by last name since "azih" < "fidelis" -- neither
+    consistent nor useful as a display order).
+
+    This instead preserves actual Last/First order, accepting both "Last,
+    First" (how PDFs format it) and "First Last" (how some Production
+    Reports format it, no comma) and always sorting by surname.
+    """
+    clean = re.sub(r"\s+", " ", str(name or "").strip().lower())
+    if not clean:
+        return ""
+    if "," in clean:
+        return clean
+    parts = clean.split(" ")
+    if len(parts) < 2:
+        return clean
+    return f"{parts[-1]}, {' '.join(parts[:-1])}"
+
+
 def _sort_key_name_invoice(entry: dict) -> tuple:
     row = entry["row"]
-    return (_normalize_name(row.get("worker")), _norm_invoice(row.get("invoiceNo")).zfill(20))
+    return (_sort_name_key(row.get("worker")), _norm_invoice(row.get("invoiceNo")).zfill(20))
 
 
 def _sort_key_invoice_pdf_layout(entry: dict) -> tuple:
