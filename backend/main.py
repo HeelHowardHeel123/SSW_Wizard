@@ -1657,12 +1657,20 @@ def _is_wrapbook_register_only(pdf_bytes: bytes) -> bool:
     Recap didn't start until page 12, 21, and 25 -- a page-limited scan found the
     register, never found the fringe page, and misclassified the whole invoice as
     a standalone register, silently dropping every row it would have produced.
+
+    Whitespace is collapsed before matching -- pdfplumber's extract_text() doesn't
+    always join words on the same visual line with a space; on some pages it
+    emits one word per line, so "Fringe Recap Report" comes back as
+    "fringe\nrecap\nreport" and the literal "fringe recap" substring never
+    matches. Confirmed on 9 of 13 real ADQ 005 CAPS invoices: each one had its
+    own Fringe Recap Report page (verified by hand), but the un-normalized check
+    still misclassified them as standalone registers and dropped every row.
     """
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             has_register = has_fringe = False
             for pg in pdf.pages:
-                text = (pg.extract_text() or "").lower()
+                text = re.sub(r"\s+", " ", (pg.extract_text() or "").lower())
                 if "payroll register" in text and "xxx-xx-" in text:
                     has_register = True
                 if "fringe report" in text or "fringe recap" in text:
