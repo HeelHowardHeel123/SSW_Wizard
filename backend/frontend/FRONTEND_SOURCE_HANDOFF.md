@@ -1,4 +1,4 @@
-# Frontend source handoff — rebuild for the main push (Aug 27, 2026)
+# Frontend source handoff — rebuild for the main push (Aug 31, 2026)
 
 ## Short answer
 
@@ -53,10 +53,13 @@ above), `backend/main.py`, `requirements.txt`.
    `BACKEND_URL` unchanged. Status polling, download and delete all stay on
    `BACKEND_URL`. **No backend code change — the FastAPI app just needs to
    answer that second hostname, and the DNS record has to exist.**
-4. **Wizard 01's landing card pill reads "In Development"** (electric blue)
-   instead of "Active" — the backend endpoints aren't live yet and the card
-   shouldn't promise they are. Flip it back to the aquamarine "Active" pill when
-   `/wizard01/*` ships.
+4. **`extractFringe` chunk size 15 → 5**, matching the backend's own
+   5-concurrent cap so one request's worst case is a single ~40s round instead
+   of three sequential ones. The old value tripped Cloudflare's ~100s proxy
+   timeout (**524**) on a real 13-file ADQ 005 run. Don't raise it again without
+   moving that call off the Cloudflare proxy.
+5. **Wizard 01's landing card pill is back to "Active"** (aquamarine) now that
+   the wizard is going live.
 
 ## Post-rebuild injection — re-verify on any future rebuild
 

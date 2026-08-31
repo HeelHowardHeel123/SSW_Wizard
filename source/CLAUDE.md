@@ -425,6 +425,13 @@
   slot was added. `/extract-billings` also had `work_state` hardcoded to "IL";
   it now sends GA on GA runs.
 
+## Upload batching
+- `extractFringe` posts payroll PDFs in batches of **5** (`CHUNK = 5`), matching
+  the backend's own 5-concurrent cap so one request is a single concurrent round.
+  A full parser/AI round is ~40s; the old chunk of 15 meant 3 sequential rounds
+  in one request and a Cloudflare **524** proxy timeout (~100s) on a real 13-file
+  ADQ 005 run. Do not raise it without moving the call off the Cloudflare proxy.
+
 ## Engine notes
 - **Row insertion now shifts `<mergeCells>`** (`shiftMergeCells`, called from
   `insertRowsIntoSheet` and `cloneRowBlock`). merge refs are absolute strings, so

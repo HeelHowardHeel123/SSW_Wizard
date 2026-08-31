@@ -41,7 +41,7 @@
         <p style="margin:0 0 28px;font-size:15px;color:#5A5770">Pick the tool for the task. More are on the way.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
 
-          <!-- 1. Name PDFs (in development) -->
+          <!-- 1. Name PDFs (active) -->
           <div onClick="{{ onEnterNamer }}" style="display:flex;flex-direction:column;gap:16px;padding:26px;border:1px solid #DDE0E0;background:#fff;border-radius:10px;cursor:pointer;transition:border-color 120ms,box-shadow 120ms" style-hover="border-color:#00CCB8;box-shadow:0 8px 24px rgba(10,4,34,0.08)">
             <div style="width:48px;height:48px;border-radius:8px;background:rgba(0,204,184,0.14);display:flex;align-items:center;justify-content:center">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00A694" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M9 13h6M9 17h4"></path></svg>
@@ -51,8 +51,8 @@
               <div style="font-size:19px;font-weight:600;color:#0A0422;margin-bottom:8px">Name PDFs</div>
               <div style="font-size:14px;line-height:1.5;color:#5A5770">Drop in a folder of mixed PDFs. Get back the same files, renamed to convention and sorted into folders.</div>
             </div>
-            <span style="align-self:flex-start;display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:rgba(33,0,229,0.10);color:#2100E5">In Development
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2100E5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
+            <span style="align-self:flex-start;display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:rgba(0,204,184,0.20);color:#00A694">Active
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00A694" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
             </span>
           </div>
 
@@ -4884,7 +4884,8 @@ class Component extends DCLogic {
   // register-only skip) can take ~40s per round; 13 files at the old chunk
   // size of 15 meant 3 sequential rounds in one request and a Cloudflare 524
   // (proxy timeout) on a real ADQ 005 run once a detection bug that was
-  // silently skipping most of those files got fixed.
+  // silently skipping most of those files got fixed. Results (rows / issues /
+  // per-file summaries) are concatenated across batches as before.
   async extractFringe(fileList, hints) {
     const files = Array.from(fileList || []);
     const CHUNK = 5;
