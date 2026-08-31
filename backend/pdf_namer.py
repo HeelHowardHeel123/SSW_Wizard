@@ -1674,15 +1674,10 @@ async def process_one_document(
     except Exception:
         pass
 
-    try:
-        # Fix orientation next, before anything else looks at this file --
-        # a sideways/upside-down scan (phone photo, misfed scanner page)
-        # would otherwise confuse classification/extraction too. A failure
-        # here is never fatal to the rest of the pipeline; just proceed with
-        # whatever orientation the file already had.
-        pdf_bytes = await correct_page_orientations(pdf_bytes, openai_client, anthropic_client, loop)
-    except Exception:
-        pass
+    # Orientation auto-correction is intentionally disabled for now -- the
+    # file is processed and named in whatever orientation it was uploaded in.
+    # correct_page_orientations() below is left in place to be re-wired in
+    # later once a more reliable detection approach is in place.
 
     try:
         # A quick, cheap look (first few pages) is enough to tell the family
