@@ -192,7 +192,7 @@ from timecard_reconciler import match_timecards
 from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
-from notify import send_parser_alert, send_run_summary, ALERT_EMAIL
+from notify import send_run_summary
 from talent_extractor import extract_talent, extract_teams_talent, extract_highland_talent
 import shutil
 import uuid as _uuid
@@ -2204,26 +2204,27 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
             for r in src_rows:
                 r["invoiceNo"] = label
 
-    # Send one email per generation event (initial discovery or retry)
+    # One entry per generation event (initial discovery or retry) -- the actual
+    # generated code rides along in the response for the frontend to offer as
+    # a direct download, rather than emailing it (SendGrid needs an account
+    # with available credits, and it's easy to miss an email entirely).
+    generated_parsers = []
     for info in alert_queue:
         company_name = info["company_name"]
-        sent = send_parser_alert(
-            company_name,
-            info["file_count"],
-            info["row_count"],
-            info["code"],
-            is_update=info.get("is_update", False),
+        verb         = "Updated parser" if info.get("is_update") else "New parser"
+        issues.append(
+            f"{verb} for '{company_name}' — {info['file_count']} file(s) processed with AI "
+            "extraction. Parser code available for download below -- review before adding to backend/parsers/."
         )
-        verb      = "Updated parser" if info.get("is_update") else "New parser"
-        alert_msg = (
-            f"{verb} for '{company_name}' — "
-            f"{info['file_count']} file(s) processed with AI extraction"
-        )
-        alert_msg += (
-            f". Parser code emailed to {ALERT_EMAIL} for review." if sent
-            else ". (Email alert failed — check SENDGRID_API_KEY)"
-        )
-        issues.append(alert_msg)
+        slug = re.sub(r"[^a-z0-9]+", "_", company_name.lower()).strip("_")
+        generated_parsers.append({
+            "company_name": company_name,
+            "filename":     f"{slug}_fringe.py",
+            "code":         info["code"],
+            "is_update":    info.get("is_update", False),
+            "file_count":   info["file_count"],
+            "row_count":    info["row_count"],
+        })
 
     # Normalize free-text fields to proper case regardless of which parser
     # produced the row (CAPS static, Wrapbook, Teams, Revolution, AI-fallback,
@@ -2246,6 +2247,7 @@ async def _run_extract(files, x_app_secret, payroll_hints: str = ""):
     return {
         "rows": rows, "issues": issues, "columns": FRINGE_FIELDS, "files": file_summaries,
         "loan_out_rows": _loan_out_rows_from_fringe(rows),
+        "generated_parsers": generated_parsers,
     }
 
 
