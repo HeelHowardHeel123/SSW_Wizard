@@ -84,6 +84,12 @@ Requirements:
 - Parse the specific layout of the company's fringe/payroll report
 - Return (rows, issues); rows must use empty_row() as the base dict
 - Handle multi-page PDFs; wrap body in try/except and append to issues on error
+- Before assigning the worker's name to row['worker'], call
+  clean_fringe_name(name, from_caps=True) if the name was extracted in ALL
+  CAPS (most payroll registers print names this way) -- it strips stray
+  asterisks and middle initials and title-cases the result (e.g.
+  "SMITH, JOHN M*" -> "Smith, John"). Use from_caps=False if the name was
+  already mixed-case in the source.
 
 Canonical fields to populate per row:
   worker, ssn, invoiceNo, invoiceDate, workDates, union, wages, reimbRent,
