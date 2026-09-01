@@ -157,7 +157,12 @@ def _parse_json(raw: str) -> dict | None:
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def make_exec_parser(code: str):
-    """exec() a generated parser module and return its extract function, or None."""
+    """exec() a generated parser module and return its extract function, or None.
+
+    Logs the real failure reason instead of swallowing it -- a debug run
+    against 13 real CAPS invoices (2026-09-01) found this failing on 4 of 7
+    attempts, and with no visibility into why it was impossible to tell a
+    syntax error apart from a disallowed import or a runtime error."""
     try:
         import pdfplumber as _pdf
         from parsers.base import empty_row, parse_amount, clean_fringe_name
@@ -171,8 +176,12 @@ def make_exec_parser(code: str):
         }
         exec(compile(code, "<ai_generated>", "exec"), ns)  # noqa: S102
         fn = ns.get("extract")
-        return fn if callable(fn) else None
-    except Exception:
+        if not callable(fn):
+            print("[make_exec_parser] generated module has no callable 'extract' function", flush=True)
+            return None
+        return fn
+    except Exception as e:
+        print(f"[make_exec_parser] generated code failed to compile/exec: {e!r}", flush=True)
         return None
 
 
