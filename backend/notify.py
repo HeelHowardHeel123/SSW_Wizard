@@ -25,6 +25,7 @@ def send_parser_alert(
     Returns True if sent successfully, False on any failure.
     """
     if not SENDGRID_API_KEY:
+        print("[send_parser_alert] SENDGRID_API_KEY is not set -- skipping send", flush=True)
         return False
 
     try:
@@ -80,7 +81,11 @@ def send_parser_alert(
         SendGridAPIClient(SENDGRID_API_KEY).send(msg)
         return True
 
-    except Exception:
+    except Exception as e:
+        body = getattr(e, "body", None)
+        if isinstance(body, bytes):
+            body = body.decode(errors="replace")
+        print(f"[send_parser_alert] send failed: {e!r}" + (f" -- body: {body}" if body else ""), flush=True)
         return False
 
 
@@ -107,6 +112,7 @@ def send_run_summary(
     runs: [{endpoint, files: [{filename, company, rows, issues}], issues}]
     """
     if not SENDGRID_API_KEY:
+        print("[send_run_summary] SENDGRID_API_KEY is not set -- skipping send", flush=True)
         return False
 
     try:
@@ -166,5 +172,9 @@ def send_run_summary(
         SendGridAPIClient(SENDGRID_API_KEY).send(msg)
         return True
 
-    except Exception:
+    except Exception as e:
+        body = getattr(e, "body", None)
+        if isinstance(body, bytes):
+            body = body.decode(errors="replace")
+        print(f"[send_run_summary] send failed: {e!r}" + (f" -- body: {body}" if body else ""), flush=True)
         return False
