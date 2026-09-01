@@ -48,7 +48,7 @@ COMPANY  = "wrapbook"
 MARKERS  = ["EMPLOYER PAYROLL", "TakeOne Network Corp"]
 PRIORITY = 10
 
-_PAYROLL_NO_RE = re.compile(r"Payroll #:\s*0*(\d+)")
+_PAYROLL_NO_RE = re.compile(r"Payroll (?:ID|#):\s*0*(\d+)")
 _PAY_DATE_RE   = re.compile(r"Pay Date:\s*(\d{1,2}/\d{1,2}/\d{4})")
 _DOLLAR_RE     = re.compile(r"^\$[\d,]+\.\d{2}$")
 
