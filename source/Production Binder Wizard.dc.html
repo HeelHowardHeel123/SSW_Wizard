@@ -4913,6 +4913,9 @@ class Component extends DCLogic {
       merged.rows.push(...(j.rows || []));
       merged.issues.push(...(j.issues || []));
       merged.files.push(...(j.files || []));
+      // Auto-generated parser for an unrecognised payroll format. Used to be
+      // emailed via SendGrid (needed available credits, easy to miss); it now
+      // comes back inline as code and the success screen offers it as a .py.
       merged.generatedParsers.push(...(j.generated_parsers || []));
       this.harvestLoanOuts(j);
     }
@@ -5206,6 +5209,8 @@ class Component extends DCLogic {
       pdfRows = (fr.rows || []).map((r) => ({ ...r, _src: "pdf" }));
       issues.push(...(fr.issues || []));
       fileSummary.push(...(fr.files || []));
+      // Payroll PDFs are the only GA source that can generate a parser — the
+      // Production Report and timecards never do.
       generatedParsers.push(...(fr.generatedParsers || []));
     }
     // Timecards are a supporting source only — they never produce output rows,
@@ -5538,8 +5543,8 @@ class Component extends DCLogic {
     this._payrollCount = fringe.count;
     this._fringeCount = fringe.count + freelance.count + hours.count;
     this._fringeIssues = [...fringe.issues, ...freelance.issues, ...hours.issues];
-    this._generatedParsers = [...(fringe.generatedParsers || [])];
     this._fringeFiles = [...fringe.files, ...freelance.files, ...hours.files];
+    this._generatedParsers = [...(fringe.generatedParsers || [])];
     // Per-endpoint run data for the consolidated run-summary email (/send-run-summary).
     // Kept separate (not merged like _fringeFiles) so each run entry reports its
     // own endpoint + files. Backend file summaries already carry {filename,
@@ -6120,6 +6125,21 @@ class Component extends DCLogic {
     }
   }
 
+  // Save an auto-generated parser as a .py file. Replaces the old SendGrid
+  // email hand-off, which depended on available credits and was easy to miss.
+  downloadGeneratedParser(gp) {
+    try {
+      const blob = new Blob([gp.code || ""], { type: "text/x-python;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = gp.filename || "generated_parser.py";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) {
+      this.setState({ genError: "Could not save the generated parser: " + (e.message || e) });
+    }
+  }
+
   // Save a "files needing attention" list as a plain .txt so the info isn't lost on navigation.
   downloadIssuesTxt(heading, issues) {
     try {
@@ -6140,22 +6160,6 @@ class Component extends DCLogic {
       setTimeout(() => URL.revokeObjectURL(url), 4000);
     } catch (e) {
       this.setState({ genError: "Could not save the list: " + (e.message || e) });
-    }
-  }
-
-  // Save an auto-generated payroll parser's code as a standalone .py, right from
-  // the success screen -- the backend used to only email this, which depended on
-  // SendGrid having available credits and someone actually checking that inbox.
-  downloadGeneratedParser(gp) {
-    try {
-      const blob = new Blob([gp.code || ""], { type: "text/x-python;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = gp.filename || "generated_parser.py";
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-    } catch (e) {
-      this.setState({ genError: "Could not save the generated parser: " + (e.message || e) });
     }
   }
 
@@ -6404,7 +6408,9 @@ class Component extends DCLogic {
     // extraction summary (success screen)
     const genFiles = st.genFiles || [];
     const genIssues = st.genIssues || [];
-    // parser messages are informational (amber notice), not errors
+    // Parser messages are informational (amber notice), not errors. The notice
+    // itself is driven by the structured generated_parsers payload now, not by
+    // pattern-matching issue strings.
     const parserRe = /^(New|Updated) parser for/i;
     const otherIssues = genIssues.filter((m) => !parserRe.test(String(m)));
     const generatedParsersRaw = st.genGeneratedParsers || [];

@@ -425,6 +425,22 @@
   slot was added. `/extract-billings` also had `work_state` hardcoded to "IL";
   it now sends GA on GA runs.
 
+## Auto-generated payroll parsers
+- `/extract-fringe` and `/extract-payroll` return **`generated_parsers[]`**
+  (`company_name`, `filename`, `code`, `is_update`, `file_count`, `row_count`)
+  when they meet an unrecognised payroll format. This REPLACED the old SendGrid
+  email hand-off (needed available credits, easy to miss) — the old
+  "Parser code emailed to …" issue-text suffix is gone, and the amber notice on
+  the success screen must never claim an email was sent.
+- `extractFringe` merges the field across its chunked batches; `parsePayrollRows`
+  (IL) and `parseGaPayrollRows` (GA, payroll-PDF branch only — the Production
+  Report and timecards never generate parsers) thread it up into
+  `this._generatedParsers`, reset per run, surfaced as `genGeneratedParsers`.
+- The notice is driven by that **structured payload**, not by regex-matching
+  issue strings (the old `parserMsgs` filter). `downloadGeneratedParser()` saves
+  `code` as a `.py` blob; `parserRe` survives only to keep parser issue text out
+  of "Files needing attention".
+
 ## Upload batching
 - `extractFringe` posts payroll PDFs in batches of **5** (`CHUNK = 5`), matching
   the backend's own 5-concurrent cap so one request is a single concurrent round.

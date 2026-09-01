@@ -1,4 +1,4 @@
-# Frontend source handoff — rebuild for the main push (Aug 31, 2026)
+# Frontend source handoff — rebuild for the main push (Sep 1, 2026)
 
 ## Short answer
 
@@ -6,7 +6,7 @@ Still **no git on my side.** Everything you need is in this package — commit i
 yourself. `source/` is the canonical frontend source; `backend/frontend/index.html`
 is the build artifact committed alongside it. Both are current as of today.
 
-Only **Wizard 01 (Name PDFs)** changed since the Aug 23 note. Wizard 02/03/04,
+Since the Aug 23 note: **Wizard 01 (Name PDFs)** plus one Wizard 02 success-screen change (auto-generated parsers are now an in-app download, matching the dev-branch backend). Wizard 02/03/04,
 the workbook engine, the bundled templates, and every GA/IL tab mapping are
 byte-identical to what you already merged.
 
@@ -60,6 +60,18 @@ above), `backend/main.py`, `requirements.txt`.
    moving that call off the Cloudflare proxy.
 5. **Wizard 01's landing card pill is back to "Active"** (aquamarine) now that
    the wizard is going live.
+6. **Auto-generated parsers are an in-app download, not an email.** Consumes the
+   new `generated_parsers[]` field on `/extract-fringe` and `/extract-payroll`
+   (`company_name`, `filename`, `code`, `is_update`, `file_count`, `row_count`).
+   Merged across `extractFringe`'s chunked batches, threaded through
+   `parsePayrollRows` (IL) and `parseGaPayrollRows` (GA — payroll-PDF branch
+   only), reset per run, surfaced as `genGeneratedParsers`. The amber success-screen
+   notice is now driven by that structured payload rather than by regex-matching
+   issue strings, and each parser gets its own "Download New/Updated: {company} —
+   {filename}" button saving `code` as a `.py`. The old hardcoded (and often
+   false) "emailed to sward@tpc.us for review" claim is gone. Verified in the
+   sandbox: notice renders only when a run returns parsers, and the buttons emit
+   a `text/x-python` blob download.
 
 ## Post-rebuild injection — re-verify on any future rebuild
 
