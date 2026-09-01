@@ -264,10 +264,15 @@ def extract_unknown(
     )
     codegen_user = "\n".join(codegen_user_parts)
     try:
+        # A debug run against 13 real CAPS invoices (2026-09-01) found this
+        # generating ~250+ line parser modules and getting cut off well
+        # before finishing every single time at 3000 -- every failure was a
+        # truncated file (mid string literal, mid function call, or the
+        # response ending before the closing ``` fence at all), not bad code.
         if anthropic_key:
-            code = _claude(anthropic_key, _CODEGEN_SYSTEM, codegen_user, max_tokens=3000)
+            code = _claude(anthropic_key, _CODEGEN_SYSTEM, codegen_user, max_tokens=8000)
         else:
-            code = _gpt(client, _CODEGEN_SYSTEM, codegen_user, max_tokens=3000)
+            code = _gpt(client, _CODEGEN_SYSTEM, codegen_user, max_tokens=8000)
         m_fen = re.search(r"```(?:python)?\s*([\s\S]+?)```", code)
         if m_fen:
             code = m_fen.group(1).strip()
