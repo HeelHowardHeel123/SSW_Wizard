@@ -192,6 +192,120 @@ def _parse_page(text: str, page_num: int) -> tuple[list[dict], list[str]]:
     return rows, issues
 
 
+# ─── Rotated-page handling ──────────────────────────────────────────────────
+# Some CAPS invoices render their Fringe Recap Report page rotated --
+# pdfplumber's extract_text() then comes back at roughly one word per line
+# (confirmed real: "Fringe\nRecap\nReport" instead of "Fringe Recap Report"),
+# which breaks both the marker check above (fixed in registry.py) and the
+# newline-based _parse_page/_parse_employee_line above (every "line" is a
+# single word, so _WORK_DATES_RE never finds a match). Word ORDER survives
+# correctly even though line grouping doesn't, so this rejoins the page into
+# one space-separated string and derives employee rows from fixed anchors --
+# the Work Dates range, always immediately preceded by the employee's own
+# SSN -- instead of splitting on newlines. Confirmed on a real 9-file batch
+# (ADQ 005, "New C.A.P.S. LLC"/"Cast & Crew" -- actually ordinary CAPS
+# invoices misclassified as unrecognized for exactly this reason): unlike
+# the normal layout, a loan-out's company name here sits BEFORE the
+# employee's own name (between the previous employee's amounts and this
+# employee's name), not after -- confirmed consistent across repeat
+# appearances of the same loan-out (same company both times).
+
+def _is_rotated_page(text: str) -> bool:
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return False
+    short = sum(1 for ln in lines if len(ln.split()) <= 2)
+    return (short / len(lines)) > 0.7
+
+
+def _is_amount_token(tok: str) -> bool:
+    val = parse_amount(tok)
+    return val is not None and bool(re.search(r"\d", tok))
+
+
+def _parse_rotated_fringe_page(text: str, page_num: int) -> tuple[list[dict], list[str]]:
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    blob = " ".join(lines)
+
+    invoice_no = invoice_date = work_dates = ""
+    m = _INVOICE_RE.search(blob)
+    if m:
+        invoice_no, invoice_date, work_dates = m.group(1), m.group(2), m.group(3)
+
+    tokens = blob.split()
+    n = len(tokens)
+    anchors = []
+    i = 0
+    while i < n - 2:
+        if (re.match(r"^\d{2}/\d{2}(?:/\d{2,4})?$", tokens[i])
+                and tokens[i + 1] == "-"
+                and re.match(r"^\d{2}/\d{2}/\d{2,4}$", tokens[i + 2])
+                and i > 0 and _SSN_RE.match(tokens[i - 1])):
+            anchors.append((i - 1, i + 2))
+        i += 1
+
+    rows: list[dict] = []
+    for ssn_idx, wd_end in anchors:
+        union_idx = wd_end + 1
+        if union_idx >= n:
+            continue
+        union = tokens[union_idx]
+        amt_start = union_idx + 1
+        amt_toks = tokens[amt_start: amt_start + len(_AMOUNT_FIELDS)]
+        if len(amt_toks) < len(_AMOUNT_FIELDS):
+            continue
+        amounts = [parse_amount(t) for t in amt_toks]
+
+        # Walk backward from this employee's own SSN, collecting name tokens
+        # until hitting either an amount (the previous employee's total --
+        # done) or an SSN/EIN-shaped token (this employee's OWN loan-out
+        # company's EIN) -- then keep walking to collect the company name
+        # itself, stopping at the next amount.
+        name_tokens: list[str] = []
+        company_tokens: list[str] = []
+        mode = "name"
+        j = ssn_idx - 1
+        while j >= 0:
+            tok = tokens[j]
+            if mode == "name":
+                if _SSN_RE.match(tok):
+                    mode = "company"
+                    j -= 1
+                    continue
+                if _is_amount_token(tok):
+                    break
+                name_tokens.insert(0, tok)
+            else:
+                if _is_amount_token(tok) or _SSN_RE.match(tok):
+                    break
+                company_tokens.insert(0, tok)
+            j -= 1
+
+        name_raw = " ".join(name_tokens).strip().rstrip("*").strip()
+        if not name_raw:
+            continue
+
+        row = empty_row()
+        row["payrollCompany"] = "caps"
+        row["worker"]         = clean_fringe_name(name_raw, from_caps=True)
+        row["ssn"]            = tokens[ssn_idx][-4:]
+        row["workDates"]      = f"{tokens[wd_end - 2]} - {tokens[wd_end]}"
+        row["union"]          = union
+        for idx, field in enumerate(_AMOUNT_FIELDS):
+            row[field] = amounts[idx] if idx < len(amounts) else None
+        if company_tokens:
+            row["loanOut"]        = True
+            row["type"]           = "Loan Out"
+            row["loanOutCompany"] = _parse_company_line(" ".join(company_tokens))
+        row["invoiceNo"]        = invoice_no
+        row["invoiceDate"]      = invoice_date
+        row["invoiceWorkDates"] = work_dates
+        row["sourcePage"]       = page_num
+        rows.append(row)
+
+    return rows, []
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def _ssn_last4(ssn: str) -> str:
@@ -213,10 +327,17 @@ def extract(pdf_bytes: bytes, **_) -> tuple[list[dict], list[str]]:
             found_any = False
             for pg_idx, pg in enumerate(pdf.pages):
                 text = pg.extract_text() or ""
-                if "Fringe Recap Report" not in text:
+                # Whitespace-normalized check -- a rotated page can extract
+                # this marker as "Fringe\nRecap\nReport", which a raw
+                # substring check would miss even though it's genuinely
+                # present (same fix as registry.py's marker matching).
+                if "fringe recap report" not in " ".join(text.lower().split()):
                     continue
                 found_any = True
-                page_rows, page_issues = _parse_page(text, pg_idx + 1)
+                if _is_rotated_page(text):
+                    page_rows, page_issues = _parse_rotated_fringe_page(text, pg_idx + 1)
+                else:
+                    page_rows, page_issues = _parse_page(text, pg_idx + 1)
                 rows.extend(page_rows)
                 issues.extend(page_issues)
         if not found_any:
