@@ -2305,6 +2305,7 @@ _PRODUCTION_REPORT_TARGET_FIELDS = {
     "platFee":        "payroll platform / processing fee (e.g. \"Platform Fee\", \"Plat Fee\")",
     "total":          "grand total for this row",
     "loanOutCompany": "the loan-out company / corp name, if this payee is paid through a loan-out corporation",
+    "workerType":     "the payee's employment classification for this row, if the report has a column that states it directly (e.g. \"Worker Type\") -- typical values are \"employee\" (regular W-2) vs \"loan_out\"/\"loan out\"/\"corp\"/\"1099\". This is a direct statement of loan-out status, not a dollar amount -- map it here even though it's a plain text/category field, not a wage column.",
     "jobTitle":       "job title / crew position",
     "daysWorked":     "number of days worked",
     "withholdingsIL": "Illinois state income tax withheld",
@@ -2451,6 +2452,7 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
 
     we_start = we_end = start_date = end_date = ""
     loan_out_indicator_sum = 0.0
+    worker_type_is_loan_out = None  # None = report has no such column; True/False = it said so directly
     for original_header, raw_value in raw_row.items():
         field = header_map.get(original_header)
         if not field:
@@ -2459,6 +2461,11 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             amt = parse_amount(raw_value)
             if amt:
                 loan_out_indicator_sum += amt
+            continue
+        if field == "workerType":
+            wt = str(raw_value or "").strip().lower()
+            if wt:
+                worker_type_is_loan_out = bool(re.search(r"loan|corp|1099", wt))
             continue
         value = _format_production_report_value(field, raw_value)
         if value is None:
@@ -2492,13 +2499,17 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
         else:
             row[field] = value
 
-    # Loan-out determination: default NO unless something explicitly says
-    # otherwise. Georgia's own loan-out tax lands in corpTaxGA (a real,
-    # usable dollar figure), so a nonzero corpTaxGA counts on its own --
-    # every OTHER state's loan-out tax column only ever feeds the generic
-    # indicator sum above, since we don't track those states' corp tax as
-    # a real field.
-    if row.get("corporate") or row.get("loanOutCompany") or row.get("corpTaxGA") or loan_out_indicator_sum:
+    # Loan-out determination. Worker Type (or equivalent) is authoritative
+    # when the report states it directly -- it's a direct classification,
+    # not an inference. Confirmed necessary on a real report (IKEA 001):
+    # its "Total Loan-out / W2 Earnings" column applies to EVERY payee
+    # regardless of type, so if that got mapped to "corporate" instead of
+    # "wages", the old wage-field-presence heuristic below would wrongly
+    # flag every single row as a loan-out. Only fall back to that heuristic
+    # when the report has no worker-type column to ask directly.
+    if worker_type_is_loan_out is not None:
+        row["loanOut"] = worker_type_is_loan_out
+    elif row.get("corporate") or row.get("loanOutCompany") or row.get("corpTaxGA") or loan_out_indicator_sum:
         row["loanOut"] = True
 
     # Prefer the pay-period week-ending pair when present; only fall back to
