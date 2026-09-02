@@ -96,6 +96,18 @@ def find_parsers(pdf_bytes: bytes) -> list:
     if not texts:
         return []  # image-only — handled upstream
 
+    # Whitespace-normalized copy for marker matching only -- a rotated page
+    # commonly extracts with one word per line (e.g. a real CAPS "Fringe
+    # Recap Report" page came back as "fringe\nrecap\nreport"), which a plain
+    # substring check against the raw per-page text never matches even
+    # though the marker is genuinely present. Confirmed on a real batch of 9
+    # CAPS invoices that were misclassified as an unrecognized payroll
+    # company for exactly this reason -- same failure shape as the identical
+    # bug already fixed in _is_wrapbook_register_only. Collapsing whitespace
+    # is a no-op for markers that were already on one line, so this only
+    # ever makes matching more permissive, never less.
+    normalized_texts = [" ".join(t.split()) for t in texts]
+
     result = []
     for mod in _STATIC + _RUNTIME:
         matched = False
@@ -103,7 +115,8 @@ def find_parsers(pdf_bytes: bytes) -> list:
             matched = mod.can_parse(pdf_bytes)
         else:
             for marker in getattr(mod, "MARKERS", []):
-                if any(marker.lower() in t for t in texts):
+                marker_norm = " ".join(marker.lower().split())
+                if any(marker_norm in t for t in normalized_texts):
                     matched = True
                     break
         if matched:
