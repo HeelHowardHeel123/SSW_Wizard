@@ -27,6 +27,20 @@
 <div style="min-height:100vh;background:#F1F2F2;display:flex;justify-content:center;padding:40px 24px;color:#1A1530">
   <div style="width:100%;max-width:980px;background:#FFFFFF;border-radius:10px;box-shadow:0 24px 60px rgba(10,4,34,0.10),0 2px 6px rgba(10,4,34,0.06);overflow:hidden;align-self:flex-start">
 
+    <!-- START-OVER CONFIRM -->
+    <sc-if value="{{ resetConfirm }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;inset:0;z-index:60;background:rgba(10,4,34,0.55);display:flex;align-items:center;justify-content:center;padding:24px">
+        <div style="width:100%;max-width:440px;background:#fff;border-radius:10px;padding:26px 28px;box-shadow:0 24px 60px rgba(10,4,34,0.28)">
+          <h3 style="margin:0 0 8px;font-size:20px;font-weight:500;letter-spacing:-0.01em;color:#0A0422">Start over?</h3>
+          <p style="margin:0 0 22px;font-size:14px;line-height:1.55;color:#5A5770;text-wrap:pretty">This clears everything in both wizards — the project details, every staged upload, any generated results, and the link to a running Name PDFs job. It can't be undone.</p>
+          <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+            <button onClick="{{ onCancelReset }}" style="border:1px solid #DDE0E0;cursor:pointer;background:#fff;color:#1A1530;font-size:14px;font-weight:600;padding:11px 18px;border-radius:6px" style-hover="border-color:#0A0422">Keep working</button>
+            <button onClick="{{ onConfirmReset }}" style="border:1px solid #9b2c2c;cursor:pointer;background:#fff;color:#9b2c2c;font-size:14px;font-weight:600;padding:11px 18px;border-radius:6px" style-hover="background:#fdf1f1">Clear everything</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
     <!-- LANDING -->
     <sc-if value="{{ showLanding }}" hint-placeholder-val="{{ true }}">
       <div style="background:#0A0422;padding:26px 40px;display:flex;align-items:center;gap:16px">
@@ -113,9 +127,14 @@
             <div style="font-size:20px;font-weight:500;color:#fff;letter-spacing:-0.01em">Name PDFs</div>
           </div>
         </div>
-        <button onClick="{{ onExitToLanding }}" style="display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:0" style-hover="color:#00CCB8">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>All wizards
-        </button>
+        <div style="display:flex;align-items:center;gap:14px">
+          <button onClick="{{ onExitToLanding }}" style="display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:0" style-hover="color:#00CCB8">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>All wizards
+          </button>
+          <button onClick="{{ onAskReset }}" style="display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,0.28);background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:7px 12px;border-radius:6px;transition:border-color 120ms,color 120ms" style-hover="border-color:#00CCB8;color:#00CCB8">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"></path><path d="M3 3v5h5"></path></svg>Start over
+          </button>
+        </div>
       </div>
 
       <!-- 1 · INTAKE -->
@@ -419,9 +438,14 @@
             <div style="font-size:20px;font-weight:500;color:#fff;letter-spacing:-0.01em">Templates</div>
           </div>
         </div>
-        <button onClick="{{ onExitToLanding }}" style="display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:0" style-hover="color:#00CCB8">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>All wizards
-        </button>
+        <div style="display:flex;align-items:center;gap:14px">
+          <button onClick="{{ onExitToLanding }}" style="display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:0" style-hover="color:#00CCB8">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>All wizards
+          </button>
+          <button onClick="{{ onAskReset }}" style="display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,0.28);background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:7px 12px;border-radius:6px;transition:border-color 120ms,color 120ms" style-hover="border-color:#00CCB8;color:#00CCB8">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"></path><path d="M3 3v5h5"></path></svg>Start over
+          </button>
+        </div>
       </div>
       <div style="padding:38px 40px">
         <h2 style="margin:0 0 6px;font-size:26px;font-weight:500;letter-spacing:-0.02em;color:#0A0422">Active workbook templates</h2>
@@ -670,7 +694,12 @@
           <button onClick="{{ onExitToLanding }}" style="display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:0" style-hover="color:#00CCB8">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>All wizards
           </button>
-          <div style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.72);white-space:nowrap">Step {{ stepPos }} of {{ stepTotal }}</div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.72);white-space:nowrap">Step {{ stepPos }} of {{ stepTotal }}</div>
+            <button onClick="{{ onAskReset }}" style="display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,0.28);background:none;cursor:pointer;font-size:12px;font-weight:600;color:rgba(255,255,255,0.72);padding:7px 12px;border-radius:6px;transition:border-color 120ms,color 120ms" style-hover="border-color:#00CCB8;color:#00CCB8">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"></path><path d="M3 3v5h5"></path></svg>Start over
+          </button>
+          </div>
         </div>
       </div>
 
@@ -4220,6 +4249,7 @@ class Component extends DCLogic {
     namerIntakeTouched: false,
     namerDownloading: false,
     namerConfirmStop: false,
+    resetConfirm: false,
   };
 
   // ══ Wizard 01 · Name PDFs ═══════════════════════════════════════════════
@@ -4581,6 +4611,69 @@ class Component extends DCLogic {
   }
 
   componentWillUnmount() { this.stopNamerPoll(); }
+
+  // ══ Global reset ════════════════════════════════════════════════════════
+  // "Start over" from any wizard header: drops every piece of run data (both
+  // wizards) and lands on the landing screen. Two-step confirm, for the same
+  // reason discarding an in-flight namer run is (namerConfirmStop): this can
+  // destroy a 30-minute job plus the only two copies of its id (hash +
+  // localStorage). Cached lookups that aren't the user's work — conventions,
+  // template metadata — are deliberately kept.
+  resetEverything() {
+    this.stopNamerPoll();
+    this.clearNamerJob();
+    this.setState({
+      view: "landing",
+      resetConfirm: false,
+      step: 1,
+      workbookType: null,
+      commSummary: null,
+      project: {},
+      uploads: {},
+      payrollHints: "",
+      gaSortOption: "name_invoice",
+      talentPayrollHints: "",
+      talentPayrollCo: "er",
+      dragZone: null,
+      generated: false,
+      generating: false,
+      genLog: [],
+      genError: null,
+      genWritten: 0,
+      genGaAp: 0,
+      genGaPetty: 0,
+      genGaProdCC: 0,
+      genGaHotel: 0,
+      genFringe: 0,
+      genPayroll: 0,
+      genFiles: [],
+      genIssues: [],
+      genGeneratedParsers: [],
+      genTalent: 0,
+      genTalentIssues: [],
+      genTalentSummary: null,
+      genTalentPtip: false,
+      genBilling: 0,
+      genSubVendor: 0,
+      parserNoticeDismissed: false,
+      templatePublishing: null,
+      templateNotice: null,
+      namerPhase: "intake",
+      namerIntake: {},
+      namerFiles: [],
+      namerJobId: null,
+      namerJob: null,
+      namerUploading: false,
+      namerUploadPct: 0,
+      namerError: null,
+      namerShowLog: false,
+      namerLogFilter: "all",
+      namerShowConventions: false,
+      namerIntakeTouched: false,
+      namerDownloading: false,
+      namerConfirmStop: false,
+    });
+  }
 
   componentDidUpdate() {
     try { localStorage.setItem(this.KEY, JSON.stringify(this.state)); } catch (e) {}
@@ -6660,7 +6753,11 @@ class Component extends DCLogic {
       showWizard: st.view === "binder" && !st.generated,
       showSuccess: st.view === "binder" && st.generated,
       onEnterBinder: () => this.setState({ view: "binder" }),
-      onExitToLanding: () => this.setState({ view: "landing" }),
+      onExitToLanding: () => this.setState({ view: "landing", resetConfirm: false }),
+      resetConfirm: !!st.resetConfirm,
+      onAskReset: () => this.setState({ resetConfirm: true }),
+      onCancelReset: () => this.setState({ resetConfirm: false }),
+      onConfirmReset: () => this.resetEverything(),
       onEnterTemplates: () => { this.setState({ view: "templates", templateNotice: null }); this.refreshTemplateMeta(); },
       showTemplates: st.view === "templates",
 
