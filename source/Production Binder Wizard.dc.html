@@ -1007,12 +1007,16 @@ class Component extends DCLogic {
   // the backend ever sees it (confirmed in production against a much smaller
   // batch on a different endpoint). upload.tealdocwizard.com is a dedicated,
   // DNS-only (unproxied) subdomain pointed at the same Railway service, used
-  // for that upload AND for extractFringe() (Crew Payroll) — a batch with an
+  // for that upload, for extractFringe() (Crew Payroll) — a batch with an
   // unrecognized payroll format can take 60-125+s for AI-fallback extraction,
   // over Cloudflare's ~100s gateway timeout, confirmed in production as a real
-  // 524 on a 13-file ADQ 005 batch. Every other request still goes through
-  // Cloudflare as normal. Off prod (dev Railway URL, sandbox, local file)
-  // there's no Cloudflare in front at all, so this just matches BACKEND_URL.
+  // 524 on a 13-file ADQ 005 batch — and for the ProdCo Sub-Vendors call,
+  // whose 10-file chunks measured 13-85s direct-to-Railway and hung for the
+  // full 360s client timeout through the Cloudflare-proxied host (IL OOS
+  // Abbott Laboratories Road To Rivalry run, Sep 2026). Every other request
+  // still goes through Cloudflare as normal. Off prod (dev Railway URL,
+  // sandbox, local file) there's no Cloudflare in front at all, so this just
+  // matches BACKEND_URL.
   UPLOAD_HOSTS_MAP = { "tealdocwizard.com": "https://upload.tealdocwizard.com", "www.tealdocwizard.com": "https://upload.tealdocwizard.com" };
   get UPLOAD_BACKEND_URL() {
     try {
@@ -1944,7 +1948,7 @@ class Component extends DCLogic {
       fd.append("prodco_address", p.prodCompanyAddress || "");
       fd.append("sub_prodco_name", p.subProdCo || "");
       fd.append("sub_prodco_address", p.subProdCoAddress || "");
-      const j = await this.postExtract(this.BACKEND_URL + "/extract-prodco-subvendors", fd);
+      const j = await this.postExtract(this.UPLOAD_BACKEND_URL + "/extract-prodco-subvendors", fd);
       merged.rows.push(...(j.rows || []));
       merged.issues.push(...(j.issues || []));
       merged.files.push(...(j.files || []));
