@@ -724,6 +724,21 @@
         </div>
       </div>
 
+      <!-- Top nav — same handlers as the footer, so you can change steps
+           without scrolling a long form to the bottom. -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 40px;border-bottom:1px solid #F1F2F2;background:#FAFBFB">
+        <sc-if value="{{ showBack }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ onBack }}" style="display:inline-flex;align-items:center;gap:7px;border:1px solid #DDE0E0;cursor:pointer;background:#fff;color:#1A1530;font-size:13.5px;font-weight:600;padding:9px 16px;border-radius:6px;transition:border-color 120ms" style-hover="border-color:#0A0422">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>Back
+          </button>
+        </sc-if>
+        <sc-if value="{{ hideBack }}" hint-placeholder-val="{{ true }}"><span></span></sc-if>
+        <button onClick="{{ onPrimary }}" disabled="{{ primaryDisabled }}" style="{{ primaryStyleTop }}" style-hover="{{ primaryHover }}">
+          <span>{{ primaryLabel }}</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ primaryIconColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"></path></svg>
+        </button>
+      </div>
+
       <!-- Content -->
       <div style="padding:38px 40px 8px;min-height:300px">
 
@@ -1174,7 +1189,7 @@ class Component extends DCLogic {
     { id: "il_local", label: "Illinois Local", active: true },
     { id: "il_oos", label: "Illinois OOS", active: true },
     { id: "ga", label: "Georgia", active: true },
-    { id: "tx", label: "Texas", active: false },
+    { id: "tx", label: "Texas", active: true, dev: true },
   ];
 
   // Comm-summary options depend on the selected workbook. Local uses the "-L"
@@ -1187,6 +1202,7 @@ class Component extends DCLogic {
       { id: "lllo", label: "Comm Summary (L-L, L-O)" },
     ],
     ga: [],
+    tx: [],
     il_oos: [
       { id: "oono", label: "Comm Summary (O-O, N-O)" },
       { id: "ao", label: "Comm Summary (A-O)" },
@@ -1194,7 +1210,7 @@ class Component extends DCLogic {
     ],
   };
   get COMMS() { return this.COMMS_BY_WB[this.state.workbookType] || this.COMMS_BY_WB.il_local; }
-  // Workbooks with no comm-summary variants (Georgia) skip the step-2 choice.
+  // Workbooks with no comm-summary variants (Georgia, Texas) skip step 2.
   get hasComms() { return this.COMMS.length > 0; }
 
   IL_SECTIONS = [
@@ -1292,7 +1308,54 @@ class Component extends DCLogic {
     ]},
   ];
 
-  get SECTIONS() { return this.isGa ? this.GA_SECTIONS : this.IL_SECTIONS; }
+  // Step-3 fields for Texas. Project Title first, then the dates, then the same
+  // dynamic Client / Agency / Production Company block Illinois and Georgia use
+  // (name + address, repeatable by count) — Texas jobs regularly carry more than
+  // one agency or prodco. Everything after that follows the given field list,
+  // grouped so the types stay honest: bids are currency, documents are the date
+  // each one was received.
+  TX_SECTIONS = [
+    { title: "Project Title", fields: [
+      { key: "projectTitle", label: "Project Title", type: "text" },
+    ]},
+    { title: "Dates", fields: [
+      { key: "awardDate", label: "Award Date", type: "date" },
+      { key: "prePro", label: "Pre Pro Date", type: "date" },
+      { key: "shoot", label: "Shoot Date(s)", type: "multidate" },
+      { key: "wrap", label: "Production Wrap Date", type: "date" },
+      { key: "post", label: "Post Production Date", type: "date" },
+    ]},
+    { title: "Client, Agency & Production Company", dynamic: true, fields: [] },
+    { title: "Brand & Payors", fields: [
+      { key: "clientBrand", label: "Client Brand", type: "text" },
+      { key: "product", label: "Product", type: "text" },
+      { key: "crewPayroll", label: "Crew Payroll Company", type: "text" },
+      { key: "celebPayroll", label: "Celebrity Payroll Company", type: "text" },
+      { key: "talentPayroll", label: "Talent Payroll Company", type: "text" },
+      { key: "prodInsurance", label: "Production Insurance", type: "text" },
+      { key: "otherPayor2", label: "Other Payor 2", type: "text" },
+      { key: "otherPayor3", label: "Other Payor 3", type: "text" },
+      { key: "celebNames", label: "Celebrity Name(s)", type: "text" },
+    ]},
+    { title: "Job & Bids", fields: [
+      { key: "agencyJobDesc", label: "Job Description", type: "text" },
+      { key: "agencyJobName", label: "Agency Job Name", type: "text" },
+      { key: "agencyJobNumber", label: "Agency Job Number", type: "text" },
+      { key: "aicpBid", label: "AICP Bid", type: "currency" },
+      { key: "aicpBidTxOnly", label: "AICP Bid TX Only", type: "currency" },
+      { key: "agencyEstimate", label: "Agency Estimate", type: "currency" },
+    ]},
+    { title: "Documents", fields: [
+      { key: "awardLetter", label: "Award Letter", type: "date" },
+      { key: "grantAgreement", label: "Grant Agreement", type: "date" },
+      { key: "callSheet", label: "Call Sheet", type: "date" },
+      { key: "productionContract", label: "Production Contract", type: "date" },
+      { key: "txApplication", label: "Application", type: "date" },
+      { key: "preProBook", label: "Pre-Production Book", type: "date" },
+    ]},
+  ];
+
+  get SECTIONS() { return this.isTx ? this.TX_SECTIONS : this.isGa ? this.GA_SECTIONS : this.IL_SECTIONS; }
 
   // Hotel Charges Summary H4/J4 inputs, defaulted to the template's own values
   // so a run with an untouched Step 3 reproduces the shipped sheet exactly.
@@ -1351,6 +1414,11 @@ class Component extends DCLogic {
   // chosen comm sheet. `GA_ANCHOR_SHEET` is just the sheet the engine opens.
   GA_ANCHOR_SHEET = "Overview";
   get isGa() { return this.state.workbookType === "ga"; }
+  get isTx() { return this.state.workbookType === "tx"; }
+  // Texas mirrors Georgia's Documents step (same folders, same placements) while
+  // its own tab work is in development, so the upload-zone filters treat the two
+  // as one shape. Step-3 fields and the build itself are NOT shared.
+  get isGaLike() { return this.isGa || this.isTx; }
 
   // Comm-summary row offset applied to every cell at row >= 12 (rows 1-11 are
   // identical across all tabs). Per (workbook, comm) because the shared `lllo`
@@ -4831,7 +4899,9 @@ class Component extends DCLogic {
     };
     group(nAg, "agency", "Agency", "numAgencies", "Number of Agencies", 1, 1);
     group(nPc, "prodCompany", "Production Company", "numProdCos", "Number of Production Companies", 1, 1);
-    group(nSub, "subProdCo", "Subcontracted ProdCo", "numSubProdCos", "Number of Subcontracted ProdCos", 0, 0);
+    // Texas collects agencies and prodcos only — no subcontracted-prodco field
+    // on its Overview tab.
+    if (!this.isTx) group(nSub, "subProdCo", "Subcontracted ProdCo", "numSubProdCos", "Number of Subcontracted ProdCos", 0, 0);
     if (this.isGa) fields.push(
       { key: "prodCoOnApplication", label: "Prod Company on Application", type: "text" },
       { key: "crewPayroll", label: "Crew Payroll Company", type: "text" },
@@ -5205,6 +5275,7 @@ class Component extends DCLogic {
   // Row-layout options for the Payroll Report. Each needs a source to be
   // meaningful, so a choice whose source wasn't uploaded silently falls back
   // rather than erroring — the run is never blocked by the selector.
+  // Shown on Texas too (isGaLike), which mirrors Georgia's Crew uploads.
   GA_SORT_OPTIONS = [
     { id: "name_invoice", label: "Name, Invoice Number", needs: null },
     { id: "invoice_pdf_layout", label: "Invoice Number, Invoice Layout", needs: "pdf" },
@@ -5529,6 +5600,9 @@ class Component extends DCLogic {
     this._runFails = 0;
     this._runHalted = null;
     if (this.isGa) return await this.buildGeorgiaBlob();
+    // Texas is in development: the field list and document folders are live so
+    // they can be reviewed, but there is no Texas template to write into yet.
+    if (this.isTx) throw new Error("The Texas workbook is still in development — project info and document uploads are live for review, but there's no Texas template to write into yet.");
     const file = this.WORKBOOK_FILES[this.state.workbookType];
     if (!file) throw new Error("This workbook isn't available yet.");
     const sheetName = this.SHEET_BY_COMM[this.state.commSummary];
@@ -6436,6 +6510,7 @@ class Component extends DCLogic {
     });
     const isOos = st.workbookType === "il_oos";
     const isGa = st.workbookType === "ga";
+    const isGaLike = this.isGaLike;
     // GA Payroll Report row order. Options whose source isn't uploaded stay
     // pickable but read as unavailable — the run falls back silently rather
     // than blocking, so the selector never becomes a gate.
@@ -6461,13 +6536,13 @@ class Component extends DCLogic {
       title: sec.title,
       showPayrollSelector: sec.title === "Talent & Extras",
       payrollChoices: talentCoChoices,
-      showSortSelector: isGa && sec.title === "Crew",
+      showSortSelector: isGaLike && sec.title === "Crew",
       sortChoices: gaSortChoices,
       sortHelp: gaSortHelp,
       showHints: sec.title === "Crew",
       hintsValue: st.payrollHints || "",
       onHintsChange: (e) => this.setState({ payrollHints: e.target.value }),
-      zones: sec.zones.filter((u) => (!u.oosOnly || isOos) && (!u.gaOnly || isGa) && (!u.notGa || !isGa)).map((u) => makeZone(u)),
+      zones: sec.zones.filter((u) => (!u.oosOnly || isOos) && (!u.gaOnly || isGaLike) && (!u.notGa || !isGaLike)).map((u) => makeZone(u)),
     })).filter((sec) => sec.zones.length > 0);   // a section whose every zone is hidden drops out entirely
 
     // step 5
@@ -6742,6 +6817,9 @@ class Component extends DCLogic {
     const primaryDisabled = !canContinue || st.generating;
     let primaryStyle = "display:inline-flex;align-items:center;gap:9px;border:none;font-size:15px;font-weight:600;padding:13px 26px;border-radius:6px;transition:background 120ms;";
     primaryStyle += primaryDisabled ? "background:#DDE0E0;color:#8E8CA0;cursor:not-allowed;" : "background:#0A0422;color:#fff;cursor:pointer;";
+    // Same button, smaller, for the nav row under the progress bar.
+    let primaryStyleTop = "display:inline-flex;align-items:center;gap:8px;border:none;font-size:13.5px;font-weight:600;padding:9px 18px;border-radius:6px;transition:background 120ms;";
+    primaryStyleTop += primaryDisabled ? "background:#DDE0E0;color:#8E8CA0;cursor:not-allowed;" : "background:#0A0422;color:#fff;cursor:pointer;";
 
     return {
       step: st.step,
@@ -6906,6 +6984,7 @@ class Component extends DCLogic {
       primaryDisabled,
       primaryLabel: isReview ? (st.generating ? "Generating…" : "Generate Workbook") : "Continue",
       primaryStyle,
+      primaryStyleTop,
       primaryHover: primaryDisabled ? "" : "background:#221C39",
       primaryIconColor: primaryDisabled ? "#8E8CA0" : "#00CCB8",
       showGenError: !!st.genError,
