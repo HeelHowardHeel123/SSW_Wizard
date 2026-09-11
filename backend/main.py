@@ -2319,10 +2319,51 @@ _PRODUCTION_REPORT_TARGET_FIELDS = {
     "invoiceDate":    "invoice date",
 }
 
+# Texas' own aggregate report ("Production Tax Incentive Program Report" /
+# "Production Tax Credit Report") comes from whichever payroll company or
+# processor generated it, in at least 3 different real-world column layouts
+# seen so far -- no Georgia-specific fields (no state income tax in TX), but
+# it does itemize non-taxable reimbursements TX's own template tracks
+# separately (mileage / kit rental / other rental) where GA lumps them all
+# into one "reimbRent" column.
+_TX_PRODUCTION_REPORT_TARGET_FIELDS = {
+    k: v for k, v in _PRODUCTION_REPORT_TARGET_FIELDS.items()
+    if k not in ("withholdingsGA", "corpTaxGA", "withholdingsIL")
+}
+_TX_PRODUCTION_REPORT_TARGET_FIELDS.update({
+    "mileage":     "non-taxable mileage reimbursement amount",
+    "kitRental":   "non-taxable kit rental reimbursement amount",
+    "otherRental": "non-taxable equipment/other rental reimbursement amount, not mileage or kit rental",
+    "workDatesRange": "a SINGLE column that already contains a full work-date range as one string (e.g. \"03/05/2026 - 03/06/2026\") -- use this ONLY when the report has no separate start/end or week-ending pair of columns; if it has weStart/weEnd or startDate/endDate as two separate columns instead, map those and leave this null",
+})
 
-def _production_report_header_prompt(headers: list[str]) -> str:
-    fields_desc  = "\n".join(f'  "{k}" - {v}' for k, v in _PRODUCTION_REPORT_TARGET_FIELDS.items())
+# Fields whose value is always a dollar amount -- used to generate the
+# prompt's "never map a rate/count column here" guidance for whichever
+# subset of these actually appears in a given call's target_fields.
+_NUMERIC_REPORT_FIELDS = {
+    "wages", "reimbRent", "mileage", "kitRental", "otherRental", "corporate",
+    "socSec", "med", "futa", "sui", "wc", "phw", "vacHol", "adv", "other",
+    "hand", "platFee", "total", "withholdingsIL", "withholdingsGA",
+    "corpTaxGA", "loanOutIndicator",
+}
+# Fields where only one header should ever match (as opposed to wages-style
+# fields where multiple headers legitimately sum together).
+_IDENTITY_REPORT_FIELDS = [
+    "worker", "ssn", "jobTitle", "street", "city", "zip", "invoiceNo",
+    "invoiceDate", "weStart", "weEnd", "startDate", "endDate", "workDatesRange",
+    "workState", "resState", "union", "loanOutCompany",
+]
+
+
+def _production_report_header_prompt(headers: list[str], target_fields: dict = _PRODUCTION_REPORT_TARGET_FIELDS) -> str:
+    fields_desc  = "\n".join(f'  "{k}" - {v}' for k, v in target_fields.items())
     headers_list = "\n".join(f"  {i + 1}. {h!r}" for i, h in enumerate(headers))
+    numeric_fields  = ", ".join(f for f in _NUMERIC_REPORT_FIELDS if f in target_fields)
+    identity_fields = ", ".join(f for f in _IDENTITY_REPORT_FIELDS if f in target_fields)
+    ga_loanout_carveout = (
+        ' (except Georgia\'s, which goes to "corpTaxGA" instead)'
+        if "corpTaxGA" in target_fields else ""
+    )
     return f"""You are mapping column headers from a payroll company's Production Report spreadsheet onto a fixed set of target field names.
 
 Here are the ACTUAL column headers found in this file, in order:
@@ -2333,27 +2374,27 @@ Here are the TARGET field names and what each one means:
 
 For each actual header above, decide which target field name it corresponds to, if any. A header with no reasonable match (e.g. Ethnicity, Gender, a different state's regular EMPLOYEE income tax withholding, an internal ID column) should map to null -- do not force a match. The one exception: a different state's LOAN-OUT income tax column (e.g. "HI Loan-out Income Tax", "NC Loan-out Income Tax") is NOT a no-match -- it maps to "loanOutIndicator" (see below), even though we don't care about that state's regular employee tax column.
 
-A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent". Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: worker, ssn, jobTitle, street, city, zip, invoiceNo, invoiceDate, weStart, weEnd, startDate, endDate, workState, resState, union, loanOutCompany. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
+A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent" (unless "mileage"/"kitRental"/"otherRental" are themselves in the target list above, in which case map each to its own specific field instead of lumping into "reimbRent"). Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: {identity_fields}. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
 
 "weStart"/"weEnd" and "startDate"/"endDate" are two DIFFERENT date pairs that can both appear in the same report -- do not conflate them. A report may have both a pay-period week-ending pair (First W/E / Last W/E) AND an actual-work-date pair (Start Date / End Date) as separate columns; map each to its own correct field rather than picking just one pair to use.
 
-Every numeric target field above (wages, reimbRent, corporate, socSec, med, futa, sui, wc, phw, vacHol, adv, other, hand, platFee, total, withholdingsIL, withholdingsGA, corpTaxGA, loanOutIndicator) means an actual DOLLAR AMOUNT for this row. Never map a column that is a RATE (e.g. "BaseRate", "HourlyRate", "Rate") or a COUNT/QUANTITY (e.g. "TotalHoursWorked", "Hours", "Units", "Days") to any of these dollar fields, even though it was used to calculate the wage -- those columns must map to null. Only an already-computed dollar total (e.g. "10 - STRAIGHT-TIME", "915 - OVERTIME") belongs in "wages".
+Every numeric target field above ({numeric_fields}) means an actual DOLLAR AMOUNT for this row. Never map a column that is a RATE (e.g. "BaseRate", "HourlyRate", "Rate") or a COUNT/QUANTITY (e.g. "TotalHoursWorked", "Hours", "Units", "Days") to any of these dollar fields, even though it was used to calculate the wage -- those columns must map to null. Only an already-computed dollar total (e.g. "10 - STRAIGHT-TIME", "915 - OVERTIME") belongs in "wages".
 
-"loanOutIndicator" is a detection-only field, not a real dollar total anyone will see -- map EVERY state's Loan-out Income Tax column (except Georgia's, which goes to "corpTaxGA" instead) to it, summed together, purely so a nonzero sum can flag the row as a loan-out payment.
+"loanOutIndicator" is a detection-only field, not a real dollar total anyone will see -- map EVERY state's Loan-out Income Tax column{ga_loanout_carveout} to it, summed together, purely so a nonzero sum can flag the row as a loan-out payment.
 
 Return ONLY a JSON object with exactly one entry per ACTUAL header listed above, using the header text itself as the key (verbatim, exactly as printed above) and either one of the target field names or null as the value.
 No explanation. No markdown. No code fences. JSON object only."""
 
 
-def _map_production_report_headers(headers: list[str], client) -> dict:
-    prompt = _production_report_header_prompt(headers)
+def _map_production_report_headers(headers: list[str], client, target_fields: dict = _PRODUCTION_REPORT_TARGET_FIELDS) -> dict:
+    prompt = _production_report_header_prompt(headers, target_fields)
     try:
         mapping = _call_gpt_text_json(prompt, client, max_tokens=2048)
     except Exception:
         return {}
     if not isinstance(mapping, dict):
         return {}
-    return {h: f for h, f in mapping.items() if f in _PRODUCTION_REPORT_TARGET_FIELDS}
+    return {h: f for h, f in mapping.items() if f in target_fields}
 
 
 def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict]]:
@@ -2478,6 +2519,13 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             start_date = value
         elif field == "endDate":
             end_date = value
+        elif field == "workDatesRange":
+            # A single column already formatted as "MM/DD/YYYY - MM/DD/YYYY"
+            # -- some Production Reports give one combined range instead of
+            # separate start/end columns. Use it as-is; still overridable by
+            # weStart/weEnd below if a report somehow has both (weStart/weEnd
+            # is the more precise, pay-period-specific label).
+            row["workDates"] = value
         elif field == "worker":
             raw_name = str(value)
             # Only re-title-case genuinely ALL-CAPS names (e.g. CAPS's own
@@ -2632,6 +2680,55 @@ async def extract_ga_production_report(
     }
 
 
+@app.post("/extract-tx-production-report")
+async def extract_tx_production_report(
+    file: UploadFile = File(...),
+    x_app_secret: str = Header(default=""),
+):
+    """Texas' equivalent of /extract-ga-production-report -- same tabular
+    Production Tax Incentive/Credit Report shape, just mapped against
+    _TX_PRODUCTION_REPORT_TARGET_FIELDS (no GA state-income-tax fields, adds
+    mileage/kitRental/otherRental since TX's own template tracks those
+    non-taxable categories separately rather than lumping them into
+    reimbRent)."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    data = await file.read()
+    try:
+        headers, raw_rows = _read_tabular_file(file.filename, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read {file.filename}: {e}")
+
+    if not headers or not raw_rows:
+        return {
+            "rows": [], "issues": [f"{file.filename}: no data rows found"],
+            "columns": FRINGE_FIELDS, "files": [],
+        }
+
+    client = _client()
+    header_map = _map_production_report_headers(headers, client, target_fields=_TX_PRODUCTION_REPORT_TARGET_FIELDS)
+
+    issues = []
+    unmapped = [h for h in headers if h and h not in header_map]
+    if unmapped:
+        issues.append(f"{file.filename}: no matching field found for columns: {', '.join(unmapped)}")
+
+    rows = [normalize_production_report_row(r, header_map, file.filename) for r in raw_rows]
+    _fill_addresses_via_ai_regex(rows, client)
+
+    return {
+        "rows":    rows,
+        "issues":  issues,
+        "columns": FRINGE_FIELDS,
+        "files":   [{"filename": file.filename, "row_count": len(rows)}],
+        "loan_out_rows": _loan_out_rows_from_fringe(rows),
+        "payroll_roster_rows": _payroll_roster_rows_from_fringe(rows),
+    }
+
+
 @app.post("/extract-ga-timecards")
 async def extract_ga_timecards(
     files: list[UploadFile] = File(...),
@@ -2714,6 +2811,32 @@ async def reconcile_ga_payroll(
     # /extract-payroll's own loan_out_rows only ever sees the pre-merge PDF
     # rows, so this reconciled set is the real, complete source for Crew
     # Payroll loan-outs.
+    result["loan_out_rows"] = _loan_out_rows_from_fringe(result["rows"])
+    result["payroll_roster_rows"] = _payroll_roster_rows_from_fringe(result["rows"])
+    return result
+
+
+@app.post("/reconcile-tx-payroll")
+async def reconcile_tx_payroll(
+    body:         ReconcilePayrollRequest,
+    x_app_secret: str = Header(default=""),
+):
+    """Texas' equivalent of /reconcile-ga-payroll -- same matching/merge
+    logic (reconcile_payroll is state-agnostic), just with classify_aicp
+    disabled: AICP billing-category classification is a Georgia Crew
+    Payroll Report concept with no equivalent column on the TX template."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    result = reconcile_payroll(
+        body.pdf_rows,
+        body.production_report_rows,
+        body.sort_option,
+        OPENAI_API_KEY,
+        classify_aicp=False,
+    )
+    if body.timecard_rows:
+        result["rows"] = match_timecards(result["rows"], body.timecard_rows)
     result["loan_out_rows"] = _loan_out_rows_from_fringe(result["rows"])
     result["payroll_roster_rows"] = _payroll_roster_rows_from_fringe(result["rows"])
     return result

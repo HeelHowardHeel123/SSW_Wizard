@@ -415,6 +415,7 @@ def _reconcile_person_level(
     pdf_rows: list[dict],
     production_report_rows: list[dict],
     openai_key: str,
+    classify_aicp: bool = True,
 ) -> dict:
     issues: list[str] = []
 
@@ -515,7 +516,8 @@ def _reconcile_person_level(
     pdf_only_out.sort(key=lambda r: _normalize_name(r.get("worker")))
     final_rows = report_out + pdf_only_out
 
-    _classify_aicp_codes(final_rows, openai_key)
+    if classify_aicp:
+        _classify_aicp_codes(final_rows, openai_key)
 
     return {"rows": final_rows, "issues": issues}
 
@@ -527,10 +529,15 @@ def reconcile_payroll(
     production_report_rows: list[dict],
     sort_option: str = "invoice_pdf_layout",
     openai_key: str = "",
+    classify_aicp: bool = True,
 ) -> dict:
     """Match PDF-extracted and Production-Report rows against each other by
     invoice number, flag which source(s) each person came from, and return
     the combined row list in the requested order.
+
+    classify_aicp: AICP billing-category classification is a Georgia Crew
+    Payroll Report concept (no equivalent column exists on other states'
+    templates) -- pass False to skip that GPT call entirely for non-GA callers.
 
     Returns {"rows": [...], "issues": [...]}.
     """
@@ -541,7 +548,7 @@ def reconcile_payroll(
         # -- it's a "consolidated" one-row-per-person report, not one this
         # module can group by invoice. Dispatch to the person-level path
         # instead of silently bucketing every row under invoice "".
-        return _reconcile_person_level(pdf_rows, production_report_rows, openai_key)
+        return _reconcile_person_level(pdf_rows, production_report_rows, openai_key, classify_aicp=classify_aicp)
 
     issues: list[str] = []
 
@@ -647,6 +654,7 @@ def reconcile_payroll(
 
     final_rows = [e["row"] for e in final_entries]
 
-    _classify_aicp_codes(final_rows, openai_key)
+    if classify_aicp:
+        _classify_aicp_codes(final_rows, openai_key)
 
     return {"rows": final_rows, "issues": issues}

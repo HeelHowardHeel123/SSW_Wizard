@@ -24,7 +24,13 @@ FRINGE_FIELDS = [
     "resState",     # residence state abbrev
     # Wages
     "wages",        # taxable wages  → Excel col O
-    "reimbRent",    # non-taxable    → Excel col P (kit/mileage/rental — categorized later)
+    "reimbRent",    # non-taxable, combined -- the only shape a PDF invoice can ever
+                    # supply (CAPS/Wrapbook never itemize it); a Production Report
+                    # that itemizes non-taxable amounts populates mileage/kitRental/
+                    # otherRental below instead and leaves this blank
+    "mileage",      # non-taxable mileage reimbursement   (TX Production Report only)
+    "kitRental",    # non-taxable kit rental reimbursement (TX Production Report only)
+    "otherRental",  # non-taxable other/equipment rental   (TX Production Report only)
     "corporate",    # loan-out wages → Excel col T  (CAPS only; Wrapbook loan-outs use wages)
     # Fringes
     "socSec",       # FICA / Soc Sec
@@ -65,7 +71,7 @@ FRINGE_FIELDS = [
 ]
 
 _NUMERIC_FIELDS = {
-    "wages", "reimbRent", "corporate",
+    "wages", "reimbRent", "mileage", "kitRental", "otherRental", "corporate",
     "socSec", "med", "futa", "sui", "wc", "phw",
     "vacHol", "adv", "other", "benefits", "platFee", "effRate", "hand",
     "total",
