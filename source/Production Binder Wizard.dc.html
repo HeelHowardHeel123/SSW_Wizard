@@ -1407,7 +1407,51 @@ class Component extends DCLogic {
     il_local: "assets/workbooks/illinois-local.xlsx",
     il_oos: "assets/workbooks/illinois-oos.xlsx",
     ga: "assets/workbooks/georgia.xlsx",
+    tx: "assets/workbooks/texas.xlsx",
   };
+
+  // ══ Texas ════════════════════════════════════════════════════════════════
+  // Step-3 field -> cell on the Texas "Overview" tab. Read directly off
+  // assets/workbooks/texas.xlsx: labels sit in column B for the top block
+  // (Project Title 5, dates 7-11, Client…Celebrity Name(s) 13-25, Job
+  // Description/Agency Job Name/Number 27-29) with the value one cell right in
+  // C; the bid/document block (rows 31-40) puts its labels in column C instead,
+  // so those values land in D.
+  TX_ANCHOR_SHEET = "Overview";
+  TX_CELL_MAP = {
+    projectTitle: "C5",
+    awardDate: "C7",
+    prePro: "C8",
+    shoot: "C9",
+    wrap: "C10",
+    post: "C11",
+    client: "C13",
+    clientBrand: "C14",
+    product: "C15",
+    agency: "C16",
+    prodCompany: "C17",
+    crewPayroll: "C18",
+    celebPayroll: "C19",
+    talentPayroll: "C20",
+    prodInsurance: "C21",
+    otherPayor2: "C22",
+    otherPayor3: "C23",
+    celebNames: "C25",
+    agencyJobDesc: "C27",
+    agencyJobName: "C28",
+    agencyJobNumber: "C29",
+    aicpBid: "D31",
+    aicpBidTxOnly: "D32",
+    awardLetter: "D33",
+    grantAgreement: "D34",
+    callSheet: "D35",
+    productionContract: "D36",
+    txApplication: "D38",
+    agencyEstimate: "D39",
+    preProBook: "D40",
+  };
+  TX_AGENCY_ROW = 16;
+  TX_PRODCO_ROW = 17;
 
   // Georgia has no comm-summary variants (its front tab is "Overview"), so
   // step 2 is skipped and the build writes tabs directly instead of patching a
@@ -1741,6 +1785,77 @@ class Component extends DCLogic {
     // "Invoices: 330535 ($1,401.16), ..." in person-level reconciliation mode,
     // where a matched row has no invoice number of its own. Usually absent.
     ["notes", "AX", "text"],
+  ];
+
+  // ── Texas "Crew Payroll" tab ──────────────────────────────────────────────
+  // Column layout confirmed for the CURRENT published TX template, which
+  // inserted four columns into the shipped one: "Production Report" / "Invoice
+  // PDF" at C/D (pushing old-C onward right by two) and "Automation Total" /
+  // "Automation Check" at AD/AE (pushing old-AD onward by a further two).
+  // NOTE: the bundled assets/workbooks/texas.xlsx is still the PRE-insert
+  // layout, so a first-time user on the bundled default fails the structure
+  // check below and the tab is skipped with a visible issue — same deliberate
+  // arrangement as the GA Talent tab. Publish the current TX template in
+  // Wizard 04 (or Replace it locally) and the tab writes.
+  TX_PAYROLL_SHEET = "Crew Payroll";
+  TX_PAYROLL_FIRST_ROW = 9;
+  // 46 pre-built rows, 9-54. Every summary below the table — the SUBTOTAL band
+  // on 55, the SUM band on 58, and the per-invoice / eligible-total blocks at
+  // 59-69 — hardcodes the row-54 boundary, so the list is CAPPED and overflow
+  // is reported rather than grown (growing would mean shifting all of that).
+  TX_PAYROLL_LAST_ROW = 54;
+
+  // Never written. B is the sheet's own 1..46 item number. AA (Total), AB
+  // (Ineligible $), AC (Submitted Amount) and AE (Automation Check) are the
+  // template's own formulas — AE is =Total-AutomationTotal, the same convention
+  // as GA's "Automation Check" in GA_PAYROLL_SKIP.
+  TX_PAYROLL_SKIP = ["B", "AA", "AB", "AC", "AE"];
+
+  // Cleared on every row we touch. Stops at AN: AO onward (Notes, On Call
+  // Sheet, and the CPA / Ineligible formula band at AP-AV) is either manual or
+  // sheet-owned. H (Ref Number), K (Valid DTR Form) and AJ (Qualify?) are in
+  // the list but never written — Ref Number's derivation is undecided, and the
+  // other two depend on DTR/residency matching that isn't built yet, so they
+  // are blanked rather than guessed at.
+  TX_PAYROLL_BLANK = [
+    "C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T",
+    "U","V","W","X","Y","Z","AD","AF","AG","AH","AI","AJ","AK","AL","AM","AN",
+  ];
+
+  // Structural contract, checked against whatever template the run resolves
+  // (Replace → Published → bundled). C/D are the tell between the current
+  // layout and the shipped one.
+  TX_PAYROLL_EXPECT = {
+    headerRow: 8,
+    headerCells: {
+      B: "ITEM #", C: "Production Report", D: "Invoice PDF", E: "Inv #",
+      I: "Crew Name (Last, First)", AA: "Total", AD: "Automation Total",
+      AH: "Payment Entity", AI: "Loan Out",
+    },
+    firstRow: 9,
+    lastRow: 54,
+    footerRow: 55,
+  };
+
+  // Canonical fringe field -> TX Crew Payroll column + cell type. Unlike GA,
+  // Texas has a separate Corporate column, so wages and corporate do NOT share
+  // one cell. mileage / kitRental / otherRental are new on the shared row
+  // schema and only ever arrive on TX Production-Report-sourced rows.
+  TX_PAYROLL_MAP = [
+    ["invoiceNo", "E", "text"], ["invoiceDate", "F", "text"],
+    ["workDates", "G", "text"],
+    ["worker", "I", "text"], ["jobTitle", "J", "text"],
+    ["workState", "L", "text"], ["resState", "M", "text"],
+    ["wages", "N", "currency"], ["corporate", "O", "currency"],
+    ["socSec", "P", "currency"], ["med", "Q", "currency"],
+    ["futa", "R", "currency"], ["sui", "S", "currency"],
+    ["wc", "T", "currency"], ["phw", "U", "currency"],
+    ["vacHol", "V", "currency"],
+    ["hand", "W", "currency"], ["platFee", "W", "currency"],  // mutually exclusive, deduped by column
+    ["mileage", "X", "currency"], ["kitRental", "Y", "currency"],
+    ["otherRental", "Z", "currency"],
+    ["street", "AK", "text"], ["city", "AL", "text"],
+    ["resState", "AM", "text"], ["zip", "AN", "text"],
   ];
 
   // Crew Freelance invoice field -> Crew Payroll column + cell type. These are
@@ -2137,7 +2252,7 @@ class Component extends DCLogic {
   // with an empty comm label and a false "tabs were removed" claim.
   gaSuccessSubtitle(wb, cs, st) {
     const name = wb ? wb.label : "Workbook";
-    if (this.isGa) {
+    if (this.isGaLike) {
       const ap = st.genGaAp
         ? "AP tab populated — " + st.genGaAp + (st.genGaAp === 1 ? " row" : " rows") + " written."
         : "No AP invoices were uploaded.";
@@ -3293,6 +3408,152 @@ class Component extends DCLogic {
     // data cells, so it can't stand in for "project fields". `values` only ever
     // receives non-blank Overview fields, so `fieldCount` (captured before the
     // extra-company rows are appended) is the real count.
+    return { blob, written, fname, fields: fieldCount };
+  }
+
+  // ══ Texas build ══════════════════════════════════════════════════════════
+  // Mirrors buildGeorgiaBlob(): resolve the template bytes, assemble the
+  // Overview field writes plus any Crew Payroll rows, hand the whole set to the
+  // engine in one call. Texas has no comm-summary variants, so "Overview" is
+  // just the sheet the engine opens.
+  async buildTexasBlob() {
+    const file = this.WORKBOOK_FILES.tx;
+    await this.logStep("Loading workbook template");
+    const buf = await this.loadTemplateBytes("tx", file);
+    const eng = await this.loadEngine();
+    const inserts = [], cellPatches = [], rowWrites = [], preconditions = [];
+    const p = this.state.project;
+
+    // C9 is a real date cell on the template; H13 is in the budget block and
+    // carries the accounting format. Rows 31-40 hold no cells at all in the
+    // shipped file, so a value written there would otherwise land unformatted.
+    const STYLE_SRC = { date: "C9", currency: "H13" };
+
+    // Extra agencies / production companies open slots by pushing cols A-E down,
+    // leaving the budget block in G-M on its original rows (same device Georgia
+    // and the Illinois comm summaries use). Texas has no Subcontracted ProdCo.
+    const cnt = (v, d) => { const n = parseInt(v, 10); return isNaN(n) ? d : Math.max(0, Math.min(20, n)); };
+    const nAg = cnt(p.numAgencies, 1), nPc = cnt(p.numProdCos, 1);
+    const Ea = nAg - 1, Ep = nPc - 1;
+    const A_ROW = this.TX_AGENCY_ROW, P_ROW = this.TX_PRODCO_ROW;
+    const shiftRow = (R) => R <= A_ROW ? R : R === P_ROW ? R + Ea : R + Ea + Ep;
+    const shiftAddr = (addr) => addr.replace(/([A-Z]+)(\d+)/, (m, c, r) => c + shiftRow(+r));
+
+    const values = [], clears = [];
+    for (const [key, addr0] of Object.entries(this.TX_CELL_MAP)) {
+      const addr = shiftAddr(addr0);
+      const type = this.fieldType(key);
+      const raw = p[key];
+      if (type === "multidate") {
+        const arr = Array.isArray(raw) ? raw.filter(Boolean) : (raw ? [raw] : []);
+        if (!arr.length) { clears.push(addr); continue; }
+        if (arr.length === 1) values.push({ addr, value: arr[0], type: "date", styleFrom: STYLE_SRC.date });
+        else values.push({ addr, value: arr.map((iso) => this.fmtMDY(iso)).join(", "), type: "text" });
+        continue;
+      }
+      if (raw == null || String(raw).trim() === "") { clears.push(addr); continue; }
+      values.push({ addr, value: raw, type, styleFrom: STYLE_SRC[type] });
+    }
+    const fieldCount = values.length;
+
+    const pushCompany = (row, label, name, styleRow) => {
+      values.push({ addr: "B" + row, value: label, type: "text", styleFrom: "B" + styleRow });
+      if (name == null || String(name).trim() === "") cellPatches.push({ sheetName: this.TX_ANCHOR_SHEET, addr: "C" + row, clear: true });
+      else values.push({ addr: "C" + row, value: name, type: "text", styleFrom: "C" + styleRow });
+    };
+    for (let k = 2; k <= nAg; k++) pushCompany(A_ROW + (k - 1), "Agency:", p["agency" + k], A_ROW);
+    const prodco1Row = P_ROW + Ea;
+    for (let k = 2; k <= nPc; k++) pushCompany(prodco1Row + (k - 1), "Production Company:", p["prodCompany" + k], A_ROW);
+    const columnInserts = [];
+    if (Ea > 0) columnInserts.push({ at: P_ROW, count: Ea });
+    if (Ep > 0) columnInserts.push({ at: prodco1Row + 1, count: Ep });
+    for (const addr of clears) cellPatches.push({ sheetName: this.TX_ANCHOR_SHEET, addr, clear: true });
+
+    // Per-run counters live on the instance and survive "Start a new workbook",
+    // so reset every one an earlier Illinois or Georgia run could have set.
+    this._runData = {};
+    this._fringeIssues = [];
+    this._runFails = 0;
+    this._runHalted = null;
+    this._fringeFiles = [];
+    this._generatedParsers = [];
+    this._talentIssues = [];
+    this._talentSummary = null;
+    this._ptipB64 = null;
+    this._gaApCount = 0;
+    this._gaPettyCount = 0;
+    this._gaProdCCCount = 0;
+    this._gaHotelCount = 0;
+    this._gaLoanOutCount = 0;
+    this._gaRosterCount = 0;
+    this._gaPayrollCount = 0;
+    this._hotelBlocks = [];
+    this._loanOutRows = [];
+    this._rosterRows = [];
+    this._glBillingRows = [];
+    this._glProdcoRows = [];
+    for (const k of ["_fringeCount", "_payrollCount", "_billingCount", "_subVendorCount",
+                     "_agencyHoursCount", "_retainerCount", "_residencyCount",
+                     "_talentCount", "_talentFreelanceCount"]) this[k] = 0;
+
+    // ── Crew Payroll. Same three sources Georgia uses (payroll PDFs,
+    //    Production Report, timecards) through the TX endpoints.
+    const nPay = (this.files.payroll || []).length + (this.files.prodReport || []).length +
+      (this.files.timecards || []).length;
+    if (nPay) await this.logStep("Extracting payroll — " + nPay + (nPay === 1 ? " file" : " files"),
+      false, this.beginProgress("payroll", "prodReport", "timecards"));
+    const txPay = nPay
+      ? await this.parseTxPayrollRows()
+      : { rows: [], issues: [], files: [], count: 0, overflow: 0, generatedParsers: [] };
+
+    // Checked SOFTLY first: the bundled texas.xlsx predates the four inserted
+    // columns, so a hard precondition would abort the whole workbook for a
+    // first-time user who never published a template. A mismatch skips this one
+    // tab with a visible issue; the Overview fields still write.
+    let paySkip = null;
+    if (txPay.count) {
+      const found = await eng.inspectStructure(buf, [{ sheetName: this.TX_PAYROLL_SHEET, expect: this.TX_PAYROLL_EXPECT }]);
+      const problems = found[this.TX_PAYROLL_SHEET];
+      if (problems && problems.length) paySkip = problems.join("; ");
+    }
+    if (paySkip) {
+      const msg = "Crew Payroll tab was SKIPPED — the template in use does not match the expected Texas " +
+        "layout (" + paySkip + "). Publish the current TX template in Wizard 04, or upload it as a " +
+        "Replace, and re-run. The Overview fields in this workbook were written normally.";
+      txPay.issues = [...(txPay.issues || []), msg];
+      this.runLog("warn", msg);
+    }
+    if (txPay.count && !paySkip) {
+      rowWrites.push({
+        sheetName: this.TX_PAYROLL_SHEET,
+        startRow: this.TX_PAYROLL_FIRST_ROW,
+        rows: txPay.rows,
+        blankCols: this.TX_PAYROLL_BLANK,
+        skipCols: this.TX_PAYROLL_SKIP,
+      });
+      // Also asserted hard, so geometry can't shift between check and write.
+      preconditions.push({ sheetName: this.TX_PAYROLL_SHEET, expect: this.TX_PAYROLL_EXPECT });
+      this._gaPayrollCount = txPay.count;
+      this.runLog("res", "Crew Payroll · " + txPay.count + " row" + (txPay.count === 1 ? "" : "s") +
+        " written to rows " + this.TX_PAYROLL_FIRST_ROW + "-" + (this.TX_PAYROLL_FIRST_ROW + txPay.count - 1));
+    }
+    if (nPay) {
+      this._runData.ga_payroll_report = { files: txPay.files || [], issues: txPay.issues || [] };
+      this._fringeIssues = [...(this._fringeIssues || []), ...(txPay.issues || [])];
+      this._generatedParsers = [...(this._generatedParsers || []), ...(txPay.generatedParsers || [])];
+      if (txPay.overflow) this.runLog("warn", "  " + txPay.overflow + " row(s) did NOT fit and were dropped");
+      for (const iss of txPay.issues) this.runLog("warn", "  " + iss);
+      await this.logStep("Crew Payroll — " + (paySkip ? 0 : txPay.count) +
+        ((!paySkip && txPay.count === 1) ? " row" : " rows") + " written", true);
+    }
+
+    await this.logStep("Populating fields, formulas & rows into the workbook");
+    const { blob, written, deleted } = await eng.generateWorkbook(
+      buf, this.TX_ANCHOR_SHEET, values, [], { inserts, cellPatches, columnInserts, rowWrites, preconditions });
+    this._deleted = deleted;
+    const title = (this.state.project.projectTitle || "Production Binder").trim();
+    const fname = title.replace(/[^\w \-]+/g, "").replace(/\s+/g, " ").trim() +
+      " - Texas - State Submission Workbook.xlsx";
     return { blob, written, fname, fields: fieldCount };
   }
 
@@ -5446,6 +5707,133 @@ class Component extends DCLogic {
     return { rows, issues, files: fileSummary, count: rows.length, overflow, generatedParsers };
   }
 
+  // ── Texas crew payroll ─────────────────────────────────────────────────────
+  // Both endpoints are state-agnostic reuses of Georgia's own reconciliation
+  // engine, with identical request/response shapes; the only behavioural
+  // difference is that /reconcile-tx-payroll never returns aicpCode (Texas has
+  // no AICP column), so nothing here looks for one. Loan-out and roster side
+  // tables are NOT harvested: Texas has no tab to write them to yet.
+
+  async extractTxProdReport(fileList) {
+    const files = Array.from(fileList || []);
+    const merged = { rows: [], issues: [], files: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    for (const f of sorted) {
+      if (/\.xls$/i.test(f.name)) {
+        merged.issues.push(f.name + ": legacy .xls isn't supported — re-save as .xlsx or .csv");
+        await this.progressFile(f.name, 1);
+        continue;
+      }
+      await this.progressFile(f.name, 1);
+      const fd = new FormData();
+      fd.append("file", f);
+      const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-production-report", fd);
+      merged.rows.push(...(j.rows || []));
+      merged.issues.push(...(j.issues || []));
+      merged.files.push(...(j.files || []));
+    }
+    return merged;
+  }
+
+  async reconcileTxPayroll(pdfRows, reportRows, timecardRows) {
+    if (!pdfRows.length && !reportRows.length) return null;
+    try {
+      const res = await fetch(this.BACKEND_URL + "/reconcile-tx-payroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Secret": this.BACKEND_SECRET },
+        body: JSON.stringify({
+          pdf_rows: pdfRows, production_report_rows: reportRows,
+          timecard_rows: timecardRows || [], sort_option: this.resolveGaSort(),
+        }),
+      });
+      if (!res.ok) return null;
+      const j = await res.json();
+      return Array.isArray(j && j.rows) ? { rows: j.rows, issues: j.issues || [] } : null;
+    } catch (e) { return null; }
+  }
+
+  // Map one canonical fringe row -> cells for the TX Crew Payroll tab.
+  txPayrollToCells(r) {
+    const byCol = {};
+    const put = (col, type, val) => { if (val != null && String(val) !== "") byCol[col] = { col, type, value: val }; };
+    for (const [field, col, type] of this.TX_PAYROLL_MAP) put(col, type, r[field]);
+    // C/D source flags, same convention as GA's B/C. The reconciler sets them
+    // per person; without it we fall back to `_src`, stamped at extraction.
+    const onPR = r.onProductionReport ?? r.on_production_report ?? (r._src === "report");
+    const onPdf = r.onInvoicePdf ?? r.on_invoice_pdf ?? (r._src === "pdf");
+    put("C", "text", onPR ? "YES" : "NO");
+    put("D", "text", onPdf ? "YES" : "NO");
+    // AD Automation Total — the PDF-parsed person's own stated total, a
+    // cross-check only. AE (=Total-AutomationTotal) is the sheet's formula.
+    put("AD", "currency", r.automationTotal ?? r.automation_total ?? r.pdfTotal ?? r.pdf_total);
+    put("AH", "text", r.payrollCompany === "caps" ? "CAPS"
+      : r.payrollCompany === "wrapbook" ? "Wrapbook"
+      : (r.payrollCompany || ""));
+    put("AI", "text", (r.loanOut === true || /loan/i.test(r.type || "")) ? "YES" : "NO");
+    return Object.values(byCol);
+  }
+
+  // Mirrors parseGaPayrollRows(), minus the GL (PRODCO) ledger side effect —
+  // that tab is Georgia-only.
+  async parseTxPayrollRows() {
+    const pdfs = this.files.payroll || [];
+    const reports = this.files.prodReport || [];
+    const timecards = this.files.timecards || [];
+    if (!pdfs.length && !reports.length && !timecards.length)
+      return { rows: [], issues: [], files: [], count: 0, overflow: 0, generatedParsers: [] };
+    const issues = [], fileSummary = [], generatedParsers = [];
+    let reportRows = [], pdfRows = [], timecardRows = [];
+    if (reports.length) {
+      const rep = await this.extractTxProdReport(reports);
+      reportRows = (rep.rows || []).map((r) => ({ ...r, _src: "report" }));
+      issues.push(...(rep.issues || []));
+      fileSummary.push(...(rep.files || []));
+    }
+    if (pdfs.length) {
+      const fr = await this.extractFringe(pdfs, this.state.payrollHints);
+      pdfRows = (fr.rows || []).map((r) => ({ ...r, _src: "pdf" }));
+      issues.push(...(fr.issues || []));
+      fileSummary.push(...(fr.files || []));
+      generatedParsers.push(...(fr.generatedParsers || []));
+    }
+    if (timecards.length) {
+      const tc = await this.extractGaTimecards(timecards);
+      timecardRows = tc.rows || [];
+      issues.push(...(tc.issues || []));
+      fileSummary.push(...(tc.files || []));
+    }
+    if (!pdfRows.length && !reportRows.length) {
+      issues.push(
+        "Timecards were uploaded, but no Crew Payroll PDFs or Production Report — timecards only add " +
+        "to crew rows those sources produce, so there was nothing to attach them to and the Crew " +
+        "Payroll tab was left empty.");
+      return { rows: [], issues, files: fileSummary, count: 0, overflow: 0, generatedParsers };
+    }
+    let raw = null;
+    const rec = await this.reconcileTxPayroll(pdfRows, reportRows, timecardRows);
+    if (rec) { raw = rec.rows || []; issues.push(...(rec.issues || [])); }
+    if (!raw) {
+      raw = reportRows.concat(pdfRows);
+      issues.push(
+        "Could not reach the payroll reconciler, so the Production Report and payroll PDFs were not " +
+        "matched against each other — the Production Report / Invoice PDF flags come from which " +
+        "source each row arrived on, nothing more.");
+      if (reportRows.length && pdfRows.length) issues.push(
+        "Both sources were written as-is, so anyone appearing in both now has two rows — check for " +
+        "duplicates before filing.");
+    }
+    const CAP = this.TX_PAYROLL_LAST_ROW - this.TX_PAYROLL_FIRST_ROW + 1;
+    let overflow = 0;
+    if (raw.length > CAP) {
+      overflow = raw.length - CAP;
+      issues.push("Crew Payroll holds " + CAP + " rows; " + raw.length +
+        " people were extracted. The last " + overflow + " were not written — split this into two runs.");
+      raw = raw.slice(0, CAP);
+    }
+    const rows = raw.map((r) => this.txPayrollToCells(r));
+    return { rows, issues, files: fileSummary, count: rows.length, overflow, generatedParsers };
+  }
+
   // ══ Talent & Extras pipeline (mirrors the crew payroll pipeline) ══════════
   // Backend endpoints are being built; each talent extractor degrades gracefully
   // to the issues list (surfaced on the success screen) rather than aborting the
@@ -5600,9 +5988,7 @@ class Component extends DCLogic {
     this._runFails = 0;
     this._runHalted = null;
     if (this.isGa) return await this.buildGeorgiaBlob();
-    // Texas is in development: the field list and document folders are live so
-    // they can be reviewed, but there is no Texas template to write into yet.
-    if (this.isTx) throw new Error("The Texas workbook is still in development — project info and document uploads are live for review, but there's no Texas template to write into yet.");
+    if (this.isTx) return await this.buildTexasBlob();
     const file = this.WORKBOOK_FILES[this.state.workbookType];
     if (!file) throw new Error("This workbook isn't available yet.");
     const sheetName = this.SHEET_BY_COMM[this.state.commSummary];
