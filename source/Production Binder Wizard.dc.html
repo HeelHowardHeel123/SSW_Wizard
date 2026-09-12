@@ -1801,8 +1801,10 @@ class Component extends DCLogic {
   TX_PAYROLL_FIRST_ROW = 9;
   // 46 pre-built rows, 9-54. Every summary below the table — the SUBTOTAL band
   // on 55, the SUM band on 58, and the per-invoice / eligible-total blocks at
-  // 59-69 — hardcodes the row-54 boundary, so the list is CAPPED and overflow
-  // is reported rather than grown (growing would mean shifting all of that).
+  // 59-69 — ends its ranges at row 54, so the tab GROWS by insertion at
+  // FIRST + 1 (like GA Talent): insertRowsIntoSheet's bumpFormulaRefs shifts
+  // every row ref >= the insert point, which stretches all of those bands with
+  // us. No cap — a run bigger than 46 people inserts what it needs.
   TX_PAYROLL_LAST_ROW = 54;
 
   // Never written. B is the sheet's own 1..46 item number. AA (Total), AB
@@ -1822,9 +1824,30 @@ class Component extends DCLogic {
     "U","V","W","X","Y","Z","AD","AF","AG","AH","AI","AJ","AK","AL","AM","AN",
   ];
 
+  // Archetype row for INSERTED TX "Crew Payroll" rows, matching the formula
+  // scaffolding every pre-built data row 9-54 already carries. "{R}" -> row #.
+  // Data columns are patched in afterward by the rowWrite. AD (Automation
+  // Total) is a plain number we write, so AE's =AA-AD is included here; B
+  // (ITEM #) stays blank on grown rows, consistent with it being a skip column.
+  txPayrollFormulaRow() {
+    return [
+      { col: "AA", type: "formula", value: "SUM(N{R}:Z{R})" },
+      { col: "AB", type: "formula", value: "T{R}+W{R}+Z{R}" },
+      { col: "AC", type: "formula", value: "AA{R}-AB{R}" },
+      { col: "AE", type: "formula", value: "AA{R}-AD{R}" },
+      { col: "AT", type: "formula", value: "N{R}+O{R}+P{R}+Q{R}+R{R}" },
+      { col: "AU", type: "formula", value: "S{R}+T{R}+U{R}+V{R}+X{R}+Y{R}" },
+      { col: "AV", type: "formula", value: "SUM(AT{R}:AU{R})" },
+      { col: "AW", type: "formula", value: "AV{R}-AA{R}+W{R}+Z{R}" },
+      { col: "AY", type: "formula", value: "AA{R}-AV{R}" },
+      { col: "AZ", type: "formula", value: "AY{R}-AB{R}" },
+    ];
+  }
+
   // Structural contract, checked against whatever template the run resolves
   // (Replace → Published → bundled). C/D are the tell between the current
-  // layout and the shipped one.
+  // layout and the shipped one. Asserted BEFORE any mutation, so it always sees
+  // the un-grown 46-row table regardless of how many rows the run inserts.
   TX_PAYROLL_EXPECT = {
     headerRow: 8,
     headerCells: {
@@ -3504,7 +3527,7 @@ class Component extends DCLogic {
       false, this.beginProgress("payroll", "prodReport", "timecards"));
     const txPay = nPay
       ? await this.parseTxPayrollRows()
-      : { rows: [], issues: [], files: [], count: 0, overflow: 0, generatedParsers: [] };
+      : { rows: [], issues: [], files: [], count: 0, overflow: 0, grow: 0, generatedParsers: [] };
 
     // Checked SOFTLY first: the bundled texas.xlsx predates the four inserted
     // columns, so a hard precondition would abort the whole workbook for a
@@ -3524,6 +3547,12 @@ class Component extends DCLogic {
       this.runLog("warn", msg);
     }
     if (txPay.count && !paySkip) {
+      // Insert BEFORE the rowWrite so the write lands on the grown table.
+      if (txPay.grow) inserts.push({
+        sheetName: this.TX_PAYROLL_SHEET,
+        at: this.TX_PAYROLL_FIRST_ROW + 1,
+        rows: Array.from({ length: txPay.grow }, () => this.txPayrollFormulaRow()),
+      });
       rowWrites.push({
         sheetName: this.TX_PAYROLL_SHEET,
         startRow: this.TX_PAYROLL_FIRST_ROW,
@@ -3541,7 +3570,7 @@ class Component extends DCLogic {
       this._runData.ga_payroll_report = { files: txPay.files || [], issues: txPay.issues || [] };
       this._fringeIssues = [...(this._fringeIssues || []), ...(txPay.issues || [])];
       this._generatedParsers = [...(this._generatedParsers || []), ...(txPay.generatedParsers || [])];
-      if (txPay.overflow) this.runLog("warn", "  " + txPay.overflow + " row(s) did NOT fit and were dropped");
+      if (txPay.grow) this.runLog("res", "  Crew Payroll grew by " + txPay.grow + " row(s) to fit everyone");
       for (const iss of txPay.issues) this.runLog("warn", "  " + iss);
       await this.logStep("Crew Payroll — " + (paySkip ? 0 : txPay.count) +
         ((!paySkip && txPay.count === 1) ? " row" : " rows") + " written", true);
@@ -5822,16 +5851,14 @@ class Component extends DCLogic {
         "Both sources were written as-is, so anyone appearing in both now has two rows — check for " +
         "duplicates before filing.");
     }
+    // Nothing is dropped: the tab grows by insertion instead (see
+    // TX_PAYROLL_LAST_ROW and buildTexasBlob).
     const CAP = this.TX_PAYROLL_LAST_ROW - this.TX_PAYROLL_FIRST_ROW + 1;
-    let overflow = 0;
-    if (raw.length > CAP) {
-      overflow = raw.length - CAP;
-      issues.push("Crew Payroll holds " + CAP + " rows; " + raw.length +
-        " people were extracted. The last " + overflow + " were not written — split this into two runs.");
-      raw = raw.slice(0, CAP);
-    }
+    const grow = Math.max(0, raw.length - CAP);
+    if (grow) issues.push("Crew Payroll grew by " + grow + " row" + (grow === 1 ? "" : "s") +
+      " (" + CAP + " → " + (CAP + grow) + ") to fit everyone.");
     const rows = raw.map((r) => this.txPayrollToCells(r));
-    return { rows, issues, files: fileSummary, count: rows.length, overflow, generatedParsers };
+    return { rows, issues, files: fileSummary, count: rows.length, overflow: 0, grow, generatedParsers };
   }
 
   // ══ Talent & Extras pipeline (mirrors the crew payroll pipeline) ══════════
