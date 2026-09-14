@@ -416,6 +416,7 @@ def _reconcile_person_level(
     production_report_rows: list[dict],
     openai_key: str,
     classify_aicp: bool = True,
+    sort_option: str = "production_report_layout",
 ) -> dict:
     issues: list[str] = []
 
@@ -428,7 +429,7 @@ def _reconcile_person_level(
     consumed: set[str] = set()
     report_out: list[dict] = []
 
-    for r_row in production_report_rows:
+    for report_idx, r_row in enumerate(production_report_rows):
         r_ssn  = _ssn_last4(r_row.get("ssn"))
         r_name = _normalize_name(r_row.get("worker"))
         group_key = None
@@ -438,6 +439,7 @@ def _reconcile_person_level(
             group_key = r_name
 
         row = dict(r_row)
+        row["_report_idx"] = report_idx
         if group_key:
             consumed.add(group_key)
             group = pdf_groups[group_key]
@@ -509,11 +511,22 @@ def _reconcile_person_level(
             "on the Production Report."
         )
 
-    # No invoice number exists anywhere in this mode, so none of the three
-    # invoice-based sort options apply -- everything just sorts by name, with
-    # the (hopefully rare) PDF-only stragglers grouped at the end.
-    report_out.sort(key=lambda r: _normalize_name(r.get("worker")))
-    pdf_only_out.sort(key=lambda r: _normalize_name(r.get("worker")))
+    # No invoice number exists anywhere in this mode, so the two invoice-based
+    # sort options don't apply. "name_invoice" explicitly asks for
+    # alphabetical order -- honor that. Anything else (including
+    # "invoice_pdf_layout", which has nothing to key off here) preserves the
+    # Production Report's own row order, which is both the most useful
+    # fallback and what a generated workbook naturally gets eyeballed
+    # against. Sorting by _normalize_name here was a real bug, not just a
+    # style choice: it alphabetizes a name's own WORDS against each other
+    # (built for word-order-insensitive matching, not for ordering), so the
+    # effective sort flipped between by-first-name and by-last-name row to
+    # row -- _sort_name_key is the one that actually preserves surname order.
+    if sort_option == "name_invoice":
+        report_out.sort(key=lambda r: _sort_name_key(r.get("worker")))
+    else:
+        report_out.sort(key=lambda r: r.get("_report_idx", _UNPLACED))
+    pdf_only_out.sort(key=lambda r: _sort_name_key(r.get("worker")))
     final_rows = report_out + pdf_only_out
 
     if classify_aicp:
@@ -548,7 +561,10 @@ def reconcile_payroll(
         # -- it's a "consolidated" one-row-per-person report, not one this
         # module can group by invoice. Dispatch to the person-level path
         # instead of silently bucketing every row under invoice "".
-        return _reconcile_person_level(pdf_rows, production_report_rows, openai_key, classify_aicp=classify_aicp)
+        return _reconcile_person_level(
+            pdf_rows, production_report_rows, openai_key,
+            classify_aicp=classify_aicp, sort_option=sort_option,
+        )
 
     issues: list[str] = []
 
