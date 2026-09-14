@@ -9,6 +9,21 @@ and page 3 onward is a per-person wage/fringe breakdown table -- sometimes
 one person (a single off-cycle payment), sometimes dozens (a full weekly
 batch run), with no page break between people.
 
+Some invoices (confirmed real, e.g. ABBVIE 022) tack on further pages after
+the breakdown table ends -- an "Invoice Fee Summary" page seen so far, which
+lists FEE CATEGORIES (Employer FICA, Federal Unemployment, Workers'
+Compensation, ...) in the same "short text, then a dollar amount" shape a
+person row has. Naively reading every page from 3 onward produced fake
+"employees" named after fee categories. Fixed by stopping the page loop
+entirely the moment a page's own heading matches a known trailing-section
+title (_TRAILING_SECTION_TITLES below) -- not a per-page allowlist the way
+caps/fringe_001.py's "Fringe Recap Report" marker works, because a
+continuation page of the real breakdown table carries NO marker of its own
+(confirmed real, a 56-person invoice: page 4 continues straight into more
+names with no repeated column header) -- only the boundary INTO a trailing
+section is reliably self-labeled, so that's the only thing checked for.
+Extend the title list as new trailing sections turn up on real invoices.
+
 Deliberately thin: the per-person table only carries a LUMP fringe total,
 not a FICA/Medicare/FUTA/SUI/W-C breakdown per person, and there's no
 loan-out indicator anywhere in this layout (no company sub-line, no explicit
@@ -53,6 +68,17 @@ _PAY_DATE_RE   = re.compile(r"Pay Date:\s*(\d{1,2}/\d{1,2}/\d{4})")
 _DOLLAR_RE     = re.compile(r"^\$[\d,]+\.\d{2}$")
 
 _NAME_MAX_X = 83
+
+# Pages seen after the real per-person breakdown table ends -- once one of
+# these titles appears, every page from there on is some other report
+# section, never more people. See the module docstring for why this is a
+# stop condition rather than a per-page allowlist check.
+_TRAILING_SECTION_TITLES = ("invoice fee summary",)
+
+
+def _is_trailing_section(text: str) -> bool:
+    norm = " ".join(text.lower().split())
+    return any(title in norm for title in _TRAILING_SECTION_TITLES)
 
 
 def _parse_amount(word: str):
@@ -127,6 +153,15 @@ def extract(pdf_bytes: bytes, **kwargs) -> tuple[list[dict], list[str]]:
 
             rows: list[dict] = []
             for pg in pdf.pages[2:]:
+                # Stop entirely once a page turns out to be a trailing report
+                # section (e.g. "Invoice Fee Summary") rather than more of the
+                # breakdown table -- see _TRAILING_SECTION_TITLES and the
+                # module docstring. A continuation page of the real table has
+                # no marker of its own, so this can only ever fire on a page
+                # that's genuinely something else; it never cuts the real
+                # table short.
+                if _is_trailing_section(pg.extract_text() or ""):
+                    break
                 # A tight x_tolerance matters here -- the default merges the
                 # end of a short Name (e.g. "Aaron") straight into the next
                 # column's Job Title ("Production...") whenever the gap
