@@ -2335,6 +2335,14 @@ _TX_PRODUCTION_REPORT_TARGET_FIELDS.update({
     "kitRental":   "non-taxable kit rental reimbursement amount",
     "otherRental": "non-taxable equipment/other rental reimbursement amount, not mileage or kit rental",
     "workDatesRange": "a SINGLE column that already contains a full work-date range as one string (e.g. \"03/05/2026 - 03/06/2026\") -- use this ONLY when the report has no separate start/end or week-ending pair of columns; if it has weStart/weEnd or startDate/endDate as two separate columns instead, map those and leave this null",
+    # Overrides of the GA-inherited descriptions below -- confirmed by real
+    # examples that some payroll-platform exports (e.g. Wrapbook's raw
+    # per-worker ledger export) carry several REDUNDANT rollup/total columns
+    # alongside the granular component columns that already sum to them.
+    # Mapping both double-counts. GA's own descriptions are untouched.
+    "wages": "taxable wages / gross wage payment for this row -- prefer the most granular ALREADY-COMPUTED wage column (e.g. one literally called something like \"Wage Payments\", \"Base Wages\", or itemized pay-type columns like straight-time/overtime/double-time that get summed together). Do NOT ALSO map a broader rollup/summary column whose value already includes what you're mapping here (e.g. a \"Gross Pay\", \"Total Earnings\", or \"Total Taxable/Non-taxable Payments\" column that equals wages plus fringes/benefits combined) -- that double-counts. If a report has both a granular wage column and a rollup total that includes it, map ONLY the granular one and leave the rollup null.",
+    "corporate": "loan-out corporation wages -- ONLY when the report has a wage column that is GENUINELY SEPARATE from regular wages for loan-out payees (its value would be null/zero for a regular W-2 employee, and a DIFFERENT number than \"wages\" for a loan-out payee on the same row). A column merely LABELED with \"loan-out\" in its name (e.g. \"Total Loan-out / W-2 Earnings\") that actually reports the SAME combined-earnings figure for every payee regardless of employment type is NOT this field -- map it to null, not \"corporate\". When in doubt, only populate \"corporate\" if you can also point to a genuinely different \"wages\" value on that same row.",
+    "phw": "Pension, Health & Welfare fringe -- in entertainment-industry union payroll this is very often labeled as a union contribution paid BY THE EMPLOYER/COMPANY (e.g. \"Company Union Contributions\", \"Union Fringe\", \"Union Fringes\"), not literally \"PH&W\". Map the company/employer-side union contribution column here. Do NOT confuse it with an EMPLOYEE-side union deduction (e.g. \"Worker Union Contributions\", \"EE Union Dues\") -- that's withheld FROM the worker's pay, not paid additionally by the employer, and doesn't belong in any fringe field.",
 })
 
 # Fields whose value is always a dollar amount -- used to generate the
