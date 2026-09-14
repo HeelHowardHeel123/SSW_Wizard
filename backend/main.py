@@ -2496,8 +2496,15 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
     the single "wages" total, and reimbursements similarly (kit rental,
     mileage, per diem, ... -> "reimbRent")."""
     row = empty_row()
-    row["payrollCompany"] = "production_report"
-    row["sourceFile"]     = filename
+    # Deliberately NOT tagged with a placeholder payrollCompany here (it used
+    # to be hardcoded to the literal "production_report", which isn't a real
+    # payroll company and leaked straight into the Payment Entity / Payroll
+    # Roster columns whenever this row won the merge against a PDF match).
+    # Left blank, a real PDF match's genuine payrollCompany ("wrapbook",
+    # "caps", ...) now fills it in via the reconciler's normal
+    # blank-field-fallback merge; a report-only row with no PDF match simply
+    # has no known payroll company, which is the honest answer.
+    row["sourceFile"] = filename
 
     we_start = we_end = start_date = end_date = ""
     loan_out_indicator_sum = 0.0
