@@ -1877,7 +1877,13 @@ class Component extends DCLogic {
     ["vacHol", "V", "currency"],
     ["hand", "W", "currency"], ["platFee", "W", "currency"],  // mutually exclusive, deduped by column
     ["mileage", "X", "currency"], ["kitRental", "Y", "currency"],
-    ["otherRental", "Z", "currency"],
+    // reimbRent before otherRental: PDF invoices only ever report one combined
+    // reimbursement figure (reimbRent), never the mileage/kit/other split a
+    // Production Report can give -- so it's the fallback for a PDF-only person,
+    // landing in Other Rental same as the LLM's own catch-all on the report
+    // side. If a report match later fills otherRental too, that wins (Report
+    // wins on values), since it comes later in this list and put() overwrites.
+    ["reimbRent", "Z", "currency"], ["otherRental", "Z", "currency"],
     ["street", "AK", "text"], ["city", "AL", "text"],
     ["resState", "AM", "text"], ["zip", "AN", "text"],
     // Notes — TX's equivalent of GA's notes -> AX. Written verbatim.
