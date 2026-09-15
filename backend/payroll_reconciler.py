@@ -396,19 +396,25 @@ def _classify_aicp_codes(rows: list[dict], openai_key: str) -> None:
 # group's totals into one Automation Total to compare against the
 # Production Report's single already-aggregated figure.
 
-def _format_invoice_breakdown(group: list[dict]) -> str:
-    """"Invoices: 330535 ($1,401.16), 332355 ($1,985.12)" -- a person-level
-    matched row has no invoice-number field of its own (that's the whole
-    point of this mode), so this is the only place the underlying per-invoice
-    breakdown that fed its Automation Total is still visible. Sums by
-    invoice in case a person has more than one PDF line item within the
-    same invoice."""
+def _invoice_breakdown_parts(group: list[dict]) -> list[tuple[str, float]]:
+    """Sum a person's PDF rows by invoice number, sorted for stable display.
+    Shared source of truth for both the Notes text and the Automation Total
+    formula below -- both need to agree on exactly the same per-invoice
+    figures. Sums by invoice in case a person has more than one PDF line
+    item within the same invoice."""
     totals: dict[str, float] = defaultdict(float)
     for p_row in group:
         inv = _norm_invoice(p_row.get("invoiceNo")) or "?"
         totals[inv] += p_row.get("total") or 0
-    parts = [f"{inv} (${amt:,.2f})" for inv, amt in sorted(totals.items(), key=lambda kv: kv[0].zfill(20))]
-    return "Invoices: " + ", ".join(parts)
+    return [(inv, round(amt, 2)) for inv, amt in sorted(totals.items(), key=lambda kv: kv[0].zfill(20))]
+
+
+def _format_invoice_breakdown(parts: list[tuple[str, float]]) -> str:
+    """"Invoices: 330535 ($1,401.16), 332355 ($1,985.12)" -- a person-level
+    matched row has no invoice-number field of its own (that's the whole
+    point of this mode), so this is the only place the underlying per-invoice
+    breakdown that fed its Automation Total is still visible."""
+    return "Invoices: " + ", ".join(f"{inv} (${amt:,.2f})" for inv, amt in parts)
 
 
 def _reconcile_person_level(
@@ -428,6 +434,14 @@ def _reconcile_person_level(
 
     consumed: set[str] = set()
     report_out: list[dict] = []
+    # Every PDF group folded into a given report row, across both the
+    # exact-match pass and the fuzzy pass below -- a real person can have
+    # more than one invoice, and one of them extracting under a different
+    # (e.g. text-extraction-garbled) name shouldn't orphan it from the rest.
+    # Automation Total, the Notes breakdown, and the Automation Total formula
+    # are all derived from this in one place afterward, so a person matched
+    # across multiple passes still reports correctly for all three.
+    row_groups: dict[int, list[dict]] = defaultdict(list)
 
     for report_idx, r_row in enumerate(production_report_rows):
         r_ssn  = _ssn_last4(r_row.get("ssn"))
@@ -443,6 +457,7 @@ def _reconcile_person_level(
         if group_key:
             consumed.add(group_key)
             group = pdf_groups[group_key]
+            row_groups[report_idx].extend(group)
             for p_row in group:
                 for field, value in p_row.items():
                     if field in ("worker", "invoiceNo"):
@@ -451,12 +466,9 @@ def _reconcile_person_level(
                         row[field] = value
             row["onProductionReport"] = True
             row["onInvoicePdf"]       = True
-            row["automationTotal"]    = round(sum((p.get("total") or 0) for p in group), 2)
-            row["notes"]              = _format_invoice_breakdown(group)
         else:
             row["onProductionReport"] = True
             row["onInvoicePdf"]       = False
-            row["automationTotal"]    = None
             issues.append(
                 f"{r_row.get('worker', '(unnamed)')} is on the Production Report "
                 "but no matching PDF invoice(s) were found across the whole batch."
@@ -467,17 +479,23 @@ def _reconcile_person_level(
     # here (unlike the per-invoice matcher, which only fires once an invoice
     # already has a confirmed pairing) since there's only one scope, the
     # whole project, so there's no wrong-invoice cross-matching risk.
+    #
+    # Every report row is a candidate here, not just the ones still fully
+    # unmatched: a real person can have several invoices, and one of them
+    # extracting under a garbled name shouldn't leave it stranded as a
+    # PDF-only orphan just because that SAME person already matched cleanly
+    # on a different invoice. (Confirmed real on ABBVIE 022: pdfplumber's own
+    # word extraction merged "Jonathan" into the next column, producing
+    # "JonathanArt" -- an exact-name match on that invoice was never going
+    # to happen no matter how good the extraction elsewhere is.)
     if openai_key:
-        remaining_report_idx = [
-            i for i, r in enumerate(report_out) if not r["onInvoicePdf"]
-        ]
         remaining_pdf_keys = [k for k in pdf_groups if k not in consumed]
-        if remaining_report_idx and remaining_pdf_keys:
-            report_names = [report_out[i].get("worker", "") for i in remaining_report_idx]
+        if remaining_pdf_keys and report_out:
+            report_names = [r.get("worker", "") for r in report_out]
             pdf_names    = [pdf_groups[k][0].get("worker", "") for k in remaining_pdf_keys]
             matches, _ = _llm_fuzzy_match_payroll(pdf_names, report_names, openai_key)
-            name_to_key   = {pdf_groups[k][0].get("worker", ""): k for k in remaining_pdf_keys}
-            name_to_ridx  = {report_out[i].get("worker", ""): i for i in remaining_report_idx}
+            name_to_key  = {pdf_groups[k][0].get("worker", ""): k for k in remaining_pdf_keys}
+            name_to_ridx = {r.get("worker", ""): i for i, r in enumerate(report_out)}
             for pdf_name, report_name in matches.items():
                 key  = name_to_key.get(pdf_name)
                 ridx = name_to_ridx.get(report_name)
@@ -486,15 +504,35 @@ def _reconcile_person_level(
                 consumed.add(key)
                 group = pdf_groups[key]
                 row = report_out[ridx]
+                row_groups[ridx].extend(group)
                 for p_row in group:
                     for field, value in p_row.items():
                         if field in ("worker", "invoiceNo"):
                             continue
                         if row.get(field) in (None, "") and value not in (None, ""):
                             row[field] = value
-                row["onInvoicePdf"]    = True
-                row["automationTotal"] = round(sum((p.get("total") or 0) for p in group), 2)
-                row["notes"]           = _format_invoice_breakdown(group)
+                row["onInvoicePdf"] = True
+
+    # Automation Total / Notes / the per-invoice breakdown the Automation
+    # Total formula uses -- computed once here from everything that ended up
+    # matched to each row, whether that came from the exact pass, the fuzzy
+    # pass, or (a person with several invoices, some clean and some garbled)
+    # both.
+    for idx, row in enumerate(report_out):
+        group = row_groups.get(idx)
+        if not group:
+            row["automationTotal"] = None
+            continue
+        parts = _invoice_breakdown_parts(group)
+        row["automationTotal"] = round(sum(amt for _, amt in parts), 2)
+        row["notes"] = _format_invoice_breakdown(parts)
+        # Only set when there's genuinely more than one invoice -- the
+        # frontend uses this to decide whether Automation Total should be
+        # written as a live formula (so a reviewer can see at a glance that
+        # it's several invoices, not one large one) instead of a plain
+        # number.
+        if len(parts) > 1:
+            row["automationTotalParts"] = [amt for _, amt in parts]
 
     pdf_only_out: list[dict] = []
     for key, group in pdf_groups.items():
