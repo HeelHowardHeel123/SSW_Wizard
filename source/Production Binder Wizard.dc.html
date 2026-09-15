@@ -1822,6 +1822,7 @@ class Component extends DCLogic {
   TX_PAYROLL_BLANK = [
     "C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T",
     "U","V","W","X","Y","Z","AD","AF","AG","AH","AI","AJ","AK","AL","AM","AN",
+    "AO",
   ];
 
   // Archetype row for INSERTED TX "Crew Payroll" rows, matching the formula
@@ -1879,6 +1880,7 @@ class Component extends DCLogic {
     ["otherRental", "Z", "currency"],
     ["street", "AK", "text"], ["city", "AL", "text"],
     ["resState", "AM", "text"], ["zip", "AN", "text"],
+    // Notes — TX's equivalent of GA's notes -> AX. Written verbatim.
     ["notes", "AO", "text"],
   ];
 
