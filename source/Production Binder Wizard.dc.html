@@ -5794,7 +5794,19 @@ class Component extends DCLogic {
     put("D", "text", onPdf ? "YES" : "NO");
     // AD Automation Total — the PDF-parsed person's own stated total, a
     // cross-check only. AE (=Total-AutomationTotal) is the sheet's formula.
-    put("AD", "currency", r.automationTotal ?? r.automation_total ?? r.pdfTotal ?? r.pdf_total);
+    // When the reconciler says the total came from MORE than one invoice it
+    // sends the per-invoice amounts in automationTotalParts; we write them as a
+    // live sum so a reviewer clicking AD sees several invoices rather than one
+    // suspiciously large number. Parts are pre-rounded to 2dp server-side.
+    // Note: the engine emits <f> verbatim, and XLSX formula bodies carry NO
+    // leading "=" (see the archetype rows: "SUM(N{R}:Z{R})"). Excel would flag
+    // the file as needing repair if one were included.
+    const adParts = r.automationTotalParts ?? r.automation_total_parts;
+    if (Array.isArray(adParts) && adParts.filter((n) => Number.isFinite(Number(n))).length > 1) {
+      put("AD", "formula", adParts.filter((n) => Number.isFinite(Number(n))).map((n) => Number(n)).join("+"));
+    } else {
+      put("AD", "currency", r.automationTotal ?? r.automation_total ?? r.pdfTotal ?? r.pdf_total);
+    }
     put("AH", "text", r.payrollCompany === "caps" ? "CAPS"
       : r.payrollCompany === "wrapbook" ? "Wrapbook"
       : (r.payrollCompany || ""));
