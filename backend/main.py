@@ -2325,15 +2325,21 @@ _PRODUCTION_REPORT_TARGET_FIELDS = {
 # seen so far -- no Georgia-specific fields (no state income tax in TX), but
 # it does itemize non-taxable reimbursements TX's own template tracks
 # separately (mileage / kit rental / other rental) where GA lumps them all
-# into one "reimbRent" column.
+# into one "reimbRent" column. "reimbRent" is deliberately EXCLUDED below
+# (not just left undescribed) -- TX's tab has no column for it at all, so a
+# header mapped there would silently vanish off the Production Report side.
+# Removing it forces every non-taxable-reimbursement-shaped header to
+# resolve to one of the three real TX fields instead, with "otherRental" as
+# the deliberate catch-all for anything ambiguous -- see its description
+# below.
 _TX_PRODUCTION_REPORT_TARGET_FIELDS = {
     k: v for k, v in _PRODUCTION_REPORT_TARGET_FIELDS.items()
-    if k not in ("withholdingsGA", "corpTaxGA", "withholdingsIL")
+    if k not in ("withholdingsGA", "corpTaxGA", "withholdingsIL", "reimbRent")
 }
 _TX_PRODUCTION_REPORT_TARGET_FIELDS.update({
     "mileage":     "non-taxable mileage reimbursement amount",
     "kitRental":   "non-taxable kit rental reimbursement amount",
-    "otherRental": "non-taxable equipment/other rental reimbursement amount, not mileage or kit rental",
+    "otherRental": "non-taxable equipment/other rental reimbursement amount, not mileage or kit rental -- also the DEFAULT for any non-taxable reimbursement column that is generic or COMBINES multiple categories without saying which (e.g. a plain \"Reimb/Rent\" column that isn't specifically labeled mileage or kit rental). When a report doesn't itemize its non-taxable reimbursements, map that one combined column here rather than leaving it unmapped -- an unmapped reimbursement column silently drops that money from the workbook.",
     "workDatesRange": "a SINGLE column that already contains a full work-date range as one string (e.g. \"03/05/2026 - 03/06/2026\") -- use this ONLY when the report has no separate start/end or week-ending pair of columns; if it has weStart/weEnd or startDate/endDate as two separate columns instead, map those and leave this null",
     # Overrides of the GA-inherited descriptions below -- confirmed by real
     # examples that some payroll-platform exports (e.g. Wrapbook's raw
