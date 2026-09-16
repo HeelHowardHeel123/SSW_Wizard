@@ -4488,21 +4488,32 @@ class Component extends DCLogic {
       { id: "residency", label: "Residency PDFs", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "One document per file · up to 200", max: 200, notGa: true },
       { id: "diversityForms", label: "Diversity Forms", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "Multiple files · up to 200", max: 200, notGa: true },
       { id: "callSheets", label: "Call Sheets", accept: [".pdf"], hint: "One multi-day PDF or several · up to 200", max: 200, notGa: true },
+      // txOnly: the five vendor-packet zones below feed Texas-only tabs. Each
+      // takes whole vendor packets (PO + invoice + W9 + proof of payment +
+      // unrelated backup, any order) exactly like GA's AP zone. Upload only —
+      // no extraction wired yet.
+      { id: "txCrewIc", label: "Crew - Independent Contractors", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
     ]},
     { title: "Talent & Extras", zones: [
       { id: "talentPdfs", label: "Talent Invoice PDFs", accept: [".pdf"], hint: "Multiple files · .pdf · payroll & agent invoices" },
       { id: "talentFreelance", label: "Talent Freelance Invoices", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200, notGa: true },
       { id: "talentPtip", label: "PTIP Report (Excel)", accept: [".xlsx"], hint: "Multiple files · .xlsx · one per invoice/commercial" },
+      { id: "txTalentIc", label: "Talent - Independent Contractors", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
     ]},
     { title: "Production Company", zones: [
       { id: "prodBillings", label: "Production Company Billings", accept: [".pdf"], hint: "Multiple files · .pdf" },
       { id: "subProdBillings", label: "SubProdCo Billings", accept: [".pdf"], hint: "Multiple files · .pdf" },
       { id: "prodcoSubVendors", label: "ProdCo Sub-Vendors", accept: [".pdf"], hint: "Multiple files · .pdf", oosOnly: true },
       { id: "prodPettyCash", label: "Prod - Petty Cash", accept: [".pdf"], hint: "Multiple files · .pdf", oosOnly: true },
-      { id: "gaAp", label: "AP", accept: [".pdf"], hint: "Vendor & crew invoices · .pdf · up to 200", max: 200, gaOnly: true },
-      { id: "gaCallSheet", label: "Call Sheet", accept: [".pdf"], hint: "Crew positions for AP descriptions · .pdf · up to 200", max: 200, gaOnly: true },
-      { id: "gaPettyCash", label: "Petty Cash", accept: [".pdf"], hint: "Custodian envelope packets · .pdf · up to 200", max: 200, gaOnly: true },
-      { id: "gaProdCC", label: "ProdCC", accept: [".pdf"], hint: "Crew card / cash reimbursements · .pdf · up to 200", max: 200, gaOnly: true },
+      // notTx: these four have Georgia destinations only — buildTexasBlob never
+      // reads them. Hidden on TX so a Texas user can't drop AP packets into a
+      // dead zone (the live one there is txAp).
+      { id: "gaAp", label: "AP", accept: [".pdf"], hint: "Vendor & crew invoices · .pdf · up to 200", max: 200, gaOnly: true, notTx: true },
+      { id: "gaCallSheet", label: "Call Sheet", accept: [".pdf"], hint: "Crew positions for AP descriptions · .pdf · up to 200", max: 200, gaOnly: true, notTx: true },
+      { id: "gaPettyCash", label: "Petty Cash", accept: [".pdf"], hint: "Custodian envelope packets · .pdf · up to 200", max: 200, gaOnly: true, notTx: true },
+      { id: "gaProdCC", label: "ProdCC", accept: [".pdf"], hint: "Crew card / cash reimbursements · .pdf · up to 200", max: 200, gaOnly: true, notTx: true },
+      { id: "txAp", label: "AP (POs + Reimbursement)", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
+      { id: "txPostProduction", label: "Post Production", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
     ]},
     { title: "Agency", zones: [
       { id: "agencyBillings", label: "Agency Billings", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
@@ -4511,6 +4522,7 @@ class Component extends DCLogic {
       { id: "agencyHours", label: "Agency Hours Letter", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
       { id: "agencySubVendors", label: "Agency Sub Vendors", accept: [".pdf"], hint: "Multiple files · .pdf · up to 200", max: 200, notGa: true },
       { id: "retainerBillings", label: "Retainer Billings", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
+      { id: "txAgencyVendorExps", label: "Agency Vendor Expenses", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
     ]},
     { title: "Reports", zones: [
       { id: "taxIncentiveSummary", label: "Tax Incentive Summary Report", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },
@@ -6945,6 +6957,7 @@ class Component extends DCLogic {
     const isOos = st.workbookType === "il_oos";
     const isGa = st.workbookType === "ga";
     const isGaLike = this.isGaLike;
+    const isTx = this.isTx;
     // GA Payroll Report row order. Options whose source isn't uploaded stay
     // pickable but read as unavailable — the run falls back silently rather
     // than blocking, so the selector never becomes a gate.
@@ -6976,7 +6989,8 @@ class Component extends DCLogic {
       showHints: sec.title === "Crew",
       hintsValue: st.payrollHints || "",
       onHintsChange: (e) => this.setState({ payrollHints: e.target.value }),
-      zones: sec.zones.filter((u) => (!u.oosOnly || isOos) && (!u.gaOnly || isGaLike) && (!u.notGa || !isGaLike)).map((u) => makeZone(u)),
+      zones: sec.zones.filter((u) => (!u.oosOnly || isOos) && (!u.gaOnly || isGaLike) &&
+        (!u.notGa || !isGaLike) && (!u.txOnly || isTx) && (!u.notTx || !isTx)).map((u) => makeZone(u)),
     })).filter((sec) => sec.zones.length > 0);   // a section whose every zone is hidden drops out entirely
 
     // step 5
