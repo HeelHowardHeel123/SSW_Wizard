@@ -125,6 +125,20 @@ Endpoints
                                      /extract-tx-agency-vendor-exps (same fields including
                                      job_number).
                                      returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-tx-crew-ic         → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "Crew - Indep. Contractors" tab -- 1099 crew
+                                     invoices, the "labor" prompt family (vs. AP/Agency/
+                                     Post Production's "non-labor" vendor family). Splits
+                                     wages into gross_wages/mileage/kit_rental/other only
+                                     when the invoice itemizes them; includes check_number
+                                     (LLM-extracted, per user decision) alongside the usual
+                                     payment_number.
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-tx-talent-ic       → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "Talent - Indep. Contract" tab -- same labor-
+                                     invoice shape as /extract-tx-crew-ic, minus
+                                     check_number (that tab has no such column).
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
   POST /build-ga-workbook          → multipart: files[]=<pdf>, template=<xlsx>, prodco_name,
                                      prodco_address, agency_name, work_state, payer_entities,
                                      project_title
@@ -246,6 +260,8 @@ _GA_HOTEL_PROMPT_PATH           = os.path.join(os.path.dirname(os.path.abspath(_
 _TX_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_ap_extraction_prompt.txt")
 _TX_AGENCY_VENDOR_EXPS_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_agency_vendor_exps_extraction_prompt.txt")
 _TX_POST_PRODUCTION_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_post_production_extraction_prompt.txt")
+_TX_CREW_IC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_crew_indep_contractors_extraction_prompt.txt")
+_TX_TALENT_IC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_talent_indep_contract_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -469,6 +485,30 @@ def _load_tx_agency_vendor_exps_prompt(prodco_name: str, work_state: str = "TX")
 
 def _load_tx_post_production_prompt(prodco_name: str, work_state: str = "TX") -> str:
     with open(_TX_POST_PRODUCTION_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_tx_crew_ic_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_CREW_IC_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_tx_talent_ic_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_TALENT_IC_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
     name_label  = prodco_name.strip() or "the production company"
     state_label = work_state.strip().upper() or "TX"
@@ -4979,6 +5019,65 @@ def normalize_tx_post_production_row(raw: dict) -> dict:
     }
 
 
+def normalize_tx_crew_ic_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "worker_name":    clean_name(raw.get("worker_name", "")),
+        "worker_position": str(raw.get("worker_position", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "pay_period":     str(raw.get("pay_period", "")).strip(),
+        "gross_wages":    normalize_amount(raw.get("gross_wages", 0)),
+        "mileage":        normalize_amount(raw.get("mileage", 0)),
+        "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
+        "other":          normalize_amount(raw.get("other", 0)),
+        "check_number":   str(raw.get("check_number", "")).strip(),
+        "payment_number": str(raw.get("payment_number", "")).strip(),
+        "payment_method": str(raw.get("payment_method", "")).strip(),
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
+    }
+
+
+def normalize_tx_talent_ic_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "worker_name":    clean_name(raw.get("worker_name", "")),
+        "worker_position": str(raw.get("worker_position", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "pay_period":     str(raw.get("pay_period", "")).strip(),
+        "gross_wages":    normalize_amount(raw.get("gross_wages", 0)),
+        "mileage":        normalize_amount(raw.get("mileage", 0)),
+        "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
+        "other":          normalize_amount(raw.get("other", 0)),
+        "payment_number": str(raw.get("payment_number", "")).strip(),
+        "payment_method": str(raw.get("payment_method", "")).strip(),
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
+    }
+
+
 def normalize_ga_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
     def yn(val):
         s = str(val or "").strip().lower()
@@ -5610,6 +5709,150 @@ async def extract_tx_post_production(
             for raw in raw_list:
                 try:
                     file_rows.append(normalize_tx_post_production_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── TX Crew - Independent Contractors ──────────────────────────────────────
+# 1099 crew invoices -- the "labor" prompt family, as distinct from AP/Agency
+# Vendor Exps/Post Production's vendor-invoice ("non-labor") family. Splits
+# wages into gross_wages/mileage/kit_rental/other only when the invoice
+# itself itemizes them; check_number is extracted here (unlike the Talent
+# tab, which has no such column) since the user confirmed it should be, same
+# treatment as payment_number.
+@app.post("/extract-tx-crew-ic")
+async def extract_tx_crew_ic(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_crew_ic_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no crew invoice data extracted — review manually")
+            issues.append(f"{filename}: no crew invoice data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_crew_ic_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── TX Talent - Independent Contract ───────────────────────────────────────
+# Same "labor" prompt family as Crew - Independent Contractors, minus
+# check_number (the Talent tab has no such column, only Pymt #).
+@app.post("/extract-tx-talent-ic")
+async def extract_tx_talent_ic(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_talent_ic_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no talent invoice data extracted — review manually")
+            issues.append(f"{filename}: no talent invoice data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_talent_ic_row(raw))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
