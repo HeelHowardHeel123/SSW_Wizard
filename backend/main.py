@@ -120,6 +120,11 @@ Endpoints
                                      internal production job/project code, when printed on
                                      the invoice or PO).
                                      returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-tx-post-production → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "Post Production" tab -- identical shape to
+                                     /extract-tx-agency-vendor-exps (same fields including
+                                     job_number).
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
   POST /build-ga-workbook          → multipart: files[]=<pdf>, template=<xlsx>, prodco_name,
                                      prodco_address, agency_name, work_state, payer_entities,
                                      project_title
@@ -240,6 +245,7 @@ _GA_PRODCC_PROMPT_PATH          = os.path.join(os.path.dirname(os.path.abspath(_
 _GA_HOTEL_PROMPT_PATH           = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_hotel_extraction_prompt.txt")
 _TX_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_ap_extraction_prompt.txt")
 _TX_AGENCY_VENDOR_EXPS_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_agency_vendor_exps_extraction_prompt.txt")
+_TX_POST_PRODUCTION_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_post_production_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -451,6 +457,18 @@ def _load_tx_ap_prompt(prodco_name: str, work_state: str = "TX") -> str:
 
 def _load_tx_agency_vendor_exps_prompt(prodco_name: str, work_state: str = "TX") -> str:
     with open(_TX_AGENCY_VENDOR_EXPS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_tx_post_production_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_POST_PRODUCTION_PROMPT_PATH, "r", encoding="utf-8") as f:
         template = f.read()
     name_label  = prodco_name.strip() or "the production company"
     state_label = work_state.strip().upper() or "TX"
@@ -4936,6 +4954,31 @@ def normalize_tx_agency_vendor_exps_row(raw: dict) -> dict:
     }
 
 
+def normalize_tx_post_production_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "vendor_name":    clean_name(raw.get("vendor_name", "")),
+        "amount":         normalize_amount(raw.get("amount", 0)),
+        "payment_method": str(raw.get("payment_method", "")).strip(),
+        "payment_number": str(raw.get("payment_number", "")).strip(),
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "job_number":     str(raw.get("job_number", "")).strip(),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
+    }
+
+
 def normalize_ga_petty_cash_row(raw: dict, work_state: str, filename: str) -> dict:
     def yn(val):
         s = str(val or "").strip().lower()
@@ -5495,6 +5538,78 @@ async def extract_tx_agency_vendor_exps(
             for raw in raw_list:
                 try:
                     file_rows.append(normalize_tx_agency_vendor_exps_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── TX Post Production ─────────────────────────────────────────────────────
+# Identical shape to /extract-tx-agency-vendor-exps (same fields, same
+# invoice-first/PO-fallback rules, same job_number field) -- a separate
+# endpoint/prompt file per the established one-file-per-tab convention, even
+# though the two prompts are near-duplicates today.
+@app.post("/extract-tx-post-production")
+async def extract_tx_post_production(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_post_production_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no post production expense data extracted — review manually")
+            issues.append(f"{filename}: no post production expense data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_post_production_row(raw))
                 except Exception as e:
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
