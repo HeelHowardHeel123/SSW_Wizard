@@ -1021,7 +1021,12 @@ def _extract_from_file_claude(filename, data, system_prompt, client, user_text="
     MAX_BYTES = 40 * 1024 * 1024
     batches, cur, cur_size = [], [], 0
     for img in images:
-        approx = len(img) * 3 // 4
+        # img is the base64 STRING actually embedded in the request body (see
+        # _call_claude's "data": img below) -- that string's length IS the
+        # transmitted/limit-relevant size. Do not shrink it toward the decoded
+        # byte count; a batch this undercounts can still blow the provider's
+        # real payload cap even though our own running total looked fine.
+        approx = len(img)
         if cur and cur_size + approx > MAX_BYTES:
             batches.append(cur); cur, cur_size = [img], approx
         else:
@@ -1063,7 +1068,14 @@ def _extract_from_file(filename, data, system_prompt, client, user_text="Extract
     MAX_BYTES = 45 * 1024 * 1024
     batches, cur, cur_size = [], [], 0
     for img in images:
-        approx = len(img) * 3 // 4
+        # img is the base64 STRING embedded verbatim in the data: URI _call_gpt
+        # sends -- that string's length IS what OpenAI evaluates against its
+        # request-size limit. Confirmed real: ABBVIE 022's Mattison Becker.pdf
+        # hit "Total image size is 66.76MB, which exceeds the allowed limit of
+        # 50MB" from a single batch this code had scored as safely under 45MB,
+        # because *3//4 was shrinking the estimate toward the DECODED byte
+        # count instead of the transmitted base64 length.
+        approx = len(img)
         if cur and cur_size + approx > MAX_BYTES:
             batches.append(cur); cur, cur_size = [img], approx
         else:
@@ -4624,11 +4636,15 @@ async def extract_call_sheet(
             except Exception as e:
                 return filename, [], [f"{filename}: {e}"]
 
-            # Batch pages to stay under Claude's 40 MB image limit per call
+            # Batch pages to stay under Claude's 40 MB image limit per call.
+            # img is the base64 STRING sent verbatim in the request body, so
+            # its length IS the transmitted size -- do not shrink it toward
+            # the decoded byte count (see _extract_from_file for the real
+            # failure this caused elsewhere).
             MAX_BYTES = 40 * 1024 * 1024
             batches, cur, cur_size = [], [], 0
             for img in images:
-                approx = len(img) * 3 // 4
+                approx = len(img)
                 if cur and cur_size + approx > MAX_BYTES:
                     batches.append(cur)
                     cur, cur_size = [img], approx

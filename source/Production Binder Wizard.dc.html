@@ -7444,7 +7444,18 @@ class Component extends DCLogic {
       lines.push(heading);
       lines.push("Generated " + stamp);
       lines.push("");
-      (issues || []).forEach((msg, i) => lines.push((i + 1) + ". " + msg));
+      // Some extractors' catch blocks push {file, reason} objects (see
+      // extractTxAp/extractTxAgencyVendorExps/extractTxPostProduction/
+      // extractTxIc) rather than plain strings -- runLog already unwraps that
+      // shape (iss.reason || iss) when logging these to the run log; this was
+      // the one consumer of the same array that hadn't been, so a client-side
+      // "Failed to fetch" entry rendered as a bare "[object Object]" here.
+      (issues || []).forEach((msg, i) => {
+        const text = typeof msg === "string" ? msg
+          : (msg && msg.reason) ? (msg.file ? msg.file + ": " + msg.reason : msg.reason)
+          : JSON.stringify(msg);
+        lines.push((i + 1) + ". " + text);
+      });
       lines.push("");
       const blob = new Blob([lines.join("\r\n")], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
