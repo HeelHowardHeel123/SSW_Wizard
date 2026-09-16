@@ -3585,6 +3585,81 @@ class Component extends DCLogic {
         ((!paySkip && txPay.count === 1) ? " row" : " rows") + " written", true);
     }
 
+    // ── AP (POs + Reimbursement). Straight PDF-to-rows — no reconciliation,
+    //    no call-sheet or payer-entity matching in this pass.
+    const nAp = (this.files.txAp || []).length;
+    let apRowsWritten = 0;
+    if (nAp) {
+      // Checked BEFORE extracting, not after: on a mismatch every cell patch
+      // would be silently discarded by the engine (an unresolvable sheet is a
+      // no-op, not an error), so there is no point spending a 200-packet
+      // extraction run to write nothing. Soft, like TX Crew Payroll — the
+      // bundled texas.xlsx may predate this tab and one missing tab must not
+      // abort the whole workbook.
+      const apFound = await eng.inspectStructure(buf, [{ sheetName: this.TX_AP_SHEET, expect: this.TX_AP_EXPECT }]);
+      const apProblems = apFound[this.TX_AP_SHEET];
+      const apSkip = (apProblems && apProblems.length) ? apProblems.join("; ") : null;
+      if (apSkip) {
+        const msg = "AP (POs + Reimbursement) tab was SKIPPED — the template in use does not match the " +
+          "expected layout (" + apSkip + "). Publish the current TX template in Wizard 04, or upload it " +
+          "as a Replace, and re-run. Nothing was extracted from the " + nAp +
+          (nAp === 1 ? " AP packet" : " AP packets") + " you uploaded.";
+        this._runData.tx_ap = { files: [], issues: [msg], rows: 0, skipped: apSkip };
+        this._fringeIssues = [...(this._fringeIssues || []), msg];
+        this.runLog("warn", msg);
+        await this.logStep("AP — skipped, template layout mismatch", true);
+      } else {
+      await this.logStep("Extracting AP — " + nAp + (nAp === 1 ? " packet" : " packets"),
+        false, this.beginProgress("txAp"));
+      const ap = await this.parseTxAp();
+      const apRows = ap.rows || [];
+      apRowsWritten = apRows.length;
+      this._runData.tx_ap = { files: ap.files || [], issues: ap.issues || [], rows: apRowsWritten };
+      this._fringeIssues = [...(this._fringeIssues || []), ...(ap.issues || [])];
+      for (const iss of ap.issues || []) this.runLog("warn", "  " + (iss.reason || iss));
+
+      // Insert at TX_AP_FIRST + 1: row 9 is the SUBTOTAL band's start reference
+      // and must stay put, row 88 is its end reference and must be bumped. Only
+      // row 10 satisfies both. Empty archetype — this tab has no per-row formula.
+      const insert = Math.max(0, apRowsWritten - this.TX_AP_PREBUILT);
+      if (insert) inserts.push({
+        sheetName: this.TX_AP_SHEET,
+        at: this.TX_AP_FIRST + 1,
+        rows: Array.from({ length: insert }, () => []),
+      });
+      apRows.forEach((r, idx) => {
+        const R = this.TX_AP_FIRST + idx;
+        const put = (col, type, val) => {
+          if (val != null && String(val).trim() !== "")
+            cellPatches.push({ sheetName: this.TX_AP_SHEET, addr: col + R, value: val, type });
+          else
+            cellPatches.push({ sheetName: this.TX_AP_SHEET, addr: col + R, clear: true });
+        };
+        put("B", "number", idx + 1);       // Item # — ours, 1-based
+        const amt = r.amount;
+        put("G", "currency", 0);           // Total Ineligible — always 0, set manually
+        put("H", "currency", amt);         // Submitted Amount$ — plain value, no formula on this tab
+        for (const [f, col, type] of this.TX_AP_MAP) put(col, type, r[f]);
+        for (const col of ["N", "O", "V"]) put(col, "text", null);   // manual columns, cleared not written
+      });
+      // Column B carries pre-printed sequence numbers all the way to row 88, so
+      // an unwritten row would show a stray Item # beside empty cells. Only
+      // needed when the table did NOT grow — if it did, every pre-built row got
+      // real data by definition.
+      if (!insert) {
+        for (let R = this.TX_AP_FIRST + apRowsWritten; R <= this.TX_AP_LAST_PREBUILT; R++)
+          cellPatches.push({ sheetName: this.TX_AP_SHEET, addr: "B" + R, clear: true });
+      }
+      this._gaApCount = apRowsWritten;
+      // Asserted hard as well, so geometry can't shift between check and write.
+      if (apRowsWritten) preconditions.push({ sheetName: this.TX_AP_SHEET, expect: this.TX_AP_EXPECT });
+      if (apRowsWritten) this.runLog("res", "AP · " + apRowsWritten + " row" +
+        (apRowsWritten === 1 ? "" : "s") + " written to rows " + this.TX_AP_FIRST + "-" +
+        (this.TX_AP_FIRST + apRowsWritten - 1) + (insert ? " (grew by " + insert + ")" : ""));
+      await this.logStep("AP — " + apRowsWritten + (apRowsWritten === 1 ? " row" : " rows") + " written", true);
+      }
+    }
+
     await this.logStep("Populating fields, formulas & rows into the workbook");
     const { blob, written, deleted } = await eng.generateWorkbook(
       buf, this.TX_ANCHOR_SHEET, values, [], { inserts, cellPatches, columnInserts, rowWrites, preconditions });
@@ -5892,6 +5967,91 @@ class Component extends DCLogic {
       " (" + CAP + " → " + (CAP + grow) + ") to fit everyone.");
     const rows = raw.map((r) => this.txPayrollToCells(r));
     return { rows, issues, files: fileSummary, count: rows.length, overflow: 0, grow, generatedParsers };
+  }
+
+  // ══ AP (POs + Reimbursement) tab (Texas) ════════════════════════════════
+  // One vendor packet per file: PO (if any) + invoice + W9 (if any) + proof of
+  // payment (if any) + whatever unrelated backup the vendor stapled on. Same
+  // real-world shape as GA's AP zone, so this posts ONE FILE PER REQUEST like
+  // extractGaAp — large scans time out when batched and one bad packet must not
+  // take the run down.
+  //
+  // Geometry: header row 8, 80 pre-built data rows 9-88, Subtotal row 89
+  // (F/G/H = SUBTOTAL, K = SUBTOTAL(2,…)), and H92 = SUM(H9:H88).
+  TX_AP_SHEET = "AP (POs + Reimbursement)";
+  TX_AP_FIRST = 9;
+  TX_AP_PREBUILT = 80;          // rows 9-88
+  TX_AP_LAST_PREBUILT = 88;
+
+  // N (Payment Entity) and O (Type) are manual entry, V (Qualify?) awaits the
+  // payer-entity/call-sheet work. Never written — but they ARE cleared per row
+  // like every other column, since this pass writes with clear:true semantics.
+  TX_AP_MAP = [
+    ["po_number", "C", "text"], ["invoice_number", "D", "text"],
+    ["invoice_date", "E", "date"], ["amount", "F", "currency"],
+    ["vendor_name", "I", "text"], ["payment_method", "J", "text"],
+    ["payment_number", "K", "text"], ["pay_date", "L", "date"],
+    ["proof_of_payment", "M", "text"], ["description", "P", "text"],
+    ["address", "Q", "text"], ["city", "R", "text"], ["state", "S", "text"],
+    ["zip", "T", "text"], ["contact_number", "U", "text"],
+    ["notes", "W", "text"],
+  ];
+
+  // Structural contract for the AP tab: the data band 9-88, the row-89 SUBTOTAL
+  // band whose start/end refs the insert-at-10 trick relies on, and seven
+  // spread-out row-8 labels so a mid-row COLUMN insert fails the check instead
+  // of writing every field one column off.
+  //
+  // Verbatim from the real template. Two cells carry baked-in whitespace
+  // quirks — E8 " Invoice Date" (leading) and R8 "City " (trailing) — and are
+  // deliberately NOT asserted: someone tidying those strings would false-fail
+  // an otherwise perfect template, and B/C/F/H/I/M/W already pin the layout.
+  TX_AP_EXPECT = {
+    headerRow: 8,
+    headerCells: {
+      B: "ITEM #", C: "PO #", F: "Invoice $", H: "Submitted Amount$",
+      I: "Vendor Name", M: "Proof of Payment?", W: "Notes:",
+    },
+    firstRow: 9,
+    lastRow: 88,
+    footerRow: 89,
+    footerFormulaCols: ["F", "G", "H", "K"],
+  };
+
+  async extractTxAp(fileList) {
+    const files = Array.from(fileList || []);
+    const p = this.state.project;
+    const merged = { rows: [], issues: [], files: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    for (const f of sorted) {
+      await this.progressFile(f.name, 1);
+      try {
+        const fd = new FormData();
+        fd.append("files", f);
+        fd.append("prodco_name", p.prodCompany || "");
+        fd.append("work_state", "TX");
+        const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-ap", fd);
+        merged.rows.push(...(j.rows || []));
+        merged.issues.push(...(j.issues || []));
+        merged.files.push(...(j.files || []));
+      } catch (e) {
+        const reason = "TX AP extraction failed — " + (e.message || e);
+        merged.issues.push({ file: f.name, reason });
+        merged.files.push({ file: f.name, rows: 0, error: reason });
+      }
+    }
+    return merged;
+  }
+
+  async parseTxAp() {
+    const files = this.files.txAp || [];
+    if (!files.length) return { rows: [], issues: [], files: [], count: 0 };
+    try {
+      const r = await this.extractTxAp(files);
+      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], count: (r.rows || []).length };
+    } catch (e) {
+      return { rows: [], issues: ["TX AP extraction unavailable — " + (e.message || e)], files: [], count: 0 };
+    }
   }
 
   // ══ Talent & Extras pipeline (mirrors the crew payroll pipeline) ══════════
