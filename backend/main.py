@@ -1192,6 +1192,46 @@ def normalize_pymt_number(method, val):
     return s
 
 
+# Network/short-code aliases beyond _CARD_ABBR's full names -- "AX" is what
+# actually prints on an Amex statement line ("Org FOP AX***********8008"),
+# and DC/DISC are accepted as already-normalized or old-convention input so
+# re-running this on an already-formatted value is a no-op either way.
+_CARD_ALIASES = dict(_CARD_ABBR, ax="AMEX", disc="DC", dc="DC")
+
+
+def tx_normalize_pymt_number(method: str, val) -> str:
+    """TX's own Pymt # formatter -- deliberately NOT normalize_pymt_number,
+    whose EFT/WIRE branch prepends "On " (confirmed live on TMS 032: "On
+    ACH00568" instead of "ACH00568"). That prefix serves some GA/IL need
+    this function doesn't share, so TX gets its own copy rather than risk
+    changing shared behavior. Only Credit Card/P-Card values get reshaped;
+    every other method (Check, EFT/WIRE, ...) passes through untouched.
+
+    Unlike normalize_pymt_number, this does NOT bail out early just because
+    a "*" is already present -- "AX*8008" needs to become "AMEX*8008", not
+    stay as "AX*8008" uppercased, so the brand lookup always runs first."""
+    if not val:
+        return ""
+    s = str(val).strip()
+    if method not in ("Credit Card", "P-Card"):
+        return s
+    digits = re.search(r"\d{4}", s)
+    last4 = digits.group() if digits else ""
+    lower = s.lower()
+    brand = ""
+    for name, abbr in sorted(_CARD_ALIASES.items(), key=lambda kv: -len(kv[0])):
+        if re.search(rf"(?<![a-z]){re.escape(name)}(?![a-z])", lower):
+            brand = abbr
+            break
+    if brand and last4:
+        return f"{brand}*{last4}"
+    if brand:
+        return f"{brand}*"
+    if last4:
+        return f"*{last4}"
+    return s
+
+
 def clean_name(val):
     if not val:
         return ""
@@ -5024,7 +5064,7 @@ def normalize_tx_ap_row(raw: dict) -> dict:
         "vendor_name":    clean_name(raw.get("vendor_name", "")),
         "amount":         normalize_amount(raw.get("amount", 0)),
         "payment_method": method,
-        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "address":        clean_address(raw.get("address", "")),
@@ -5049,7 +5089,7 @@ def normalize_tx_agency_vendor_exps_row(raw: dict) -> dict:
         "vendor_name":    clean_name(raw.get("vendor_name", "")),
         "amount":         normalize_amount(raw.get("amount", 0)),
         "payment_method": method,
-        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "job_number":     str(raw.get("job_number", "")).strip(),
@@ -5075,7 +5115,7 @@ def normalize_tx_post_production_row(raw: dict) -> dict:
         "vendor_name":    clean_name(raw.get("vendor_name", "")),
         "amount":         normalize_amount(raw.get("amount", 0)),
         "payment_method": method,
-        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "job_number":     str(raw.get("job_number", "")).strip(),
@@ -5106,7 +5146,7 @@ def normalize_tx_crew_ic_row(raw: dict) -> dict:
         "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
         "other":          normalize_amount(raw.get("other", 0)),
         "check_number":   str(raw.get("check_number", "")).strip(),
-        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
         "payment_method": method,
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
@@ -5136,7 +5176,7 @@ def normalize_tx_talent_ic_row(raw: dict) -> dict:
         "mileage":        normalize_amount(raw.get("mileage", 0)),
         "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
         "other":          normalize_amount(raw.get("other", 0)),
-        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
         "payment_method": method,
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
