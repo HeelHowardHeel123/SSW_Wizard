@@ -4961,6 +4961,27 @@ def normalize_ga_ap_row(raw: dict) -> dict:
     }
 
 
+def _backfill_po_number(file_rows: list[dict]) -> None:
+    """One uploaded PDF is one vendor's whole packet (PO + invoice + backup
+    receipts) -- when the PO document itself only appears once but the LLM
+    split the packet into several rows (e.g. a formal invoice plus its own
+    backup receipts, itemized per the "treat each bundled receipt as its own
+    item" rule), the backup rows can come back with po_number blank even
+    though every row in this file is clearly the same PO. Backfill blanks
+    from whichever single PO number the file's OTHER rows already agree on --
+    never guess when a file's rows disagree on the PO (multiple real POs in
+    one packet), and never invent a PO from the filename.
+    Confirmed real via MCD 062: PO 26003-03 - Hello Artists.pdf split into
+    2 invoice rows (both correctly showing "26003-03") plus 27 backup-receipt
+    rows that came back with po_number blank."""
+    pos = {r.get("po_number") for r in file_rows if r.get("po_number")}
+    if len(pos) == 1:
+        po = next(iter(pos))
+        for r in file_rows:
+            if not r.get("po_number"):
+                r["po_number"] = po
+
+
 def normalize_tx_ap_row(raw: dict) -> dict:
     def yn(val):
         return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
@@ -5586,6 +5607,7 @@ async def extract_tx_ap(
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
 
+        _backfill_po_number(file_rows)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5657,6 +5679,7 @@ async def extract_tx_agency_vendor_exps(
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
 
+        _backfill_po_number(file_rows)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5729,6 +5752,7 @@ async def extract_tx_post_production(
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
 
+        _backfill_po_number(file_rows)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5803,6 +5827,7 @@ async def extract_tx_crew_ic(
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
 
+        _backfill_po_number(file_rows)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5873,6 +5898,7 @@ async def extract_tx_talent_ic(
                     errs.append(f"row normalization error: {e}")
                     issues.append(f"{filename}: row normalization error: {e}")
 
+        _backfill_po_number(file_rows)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
