@@ -2563,9 +2563,37 @@ def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict
     )
 
     headers = [str(h).strip() if h not in (None, "") else "" for h in all_rows[header_row_idx]]
+    header_row_raw = all_rows[header_row_idx]
+
+    # Some paginated exports reprint the ENTIRE title/metadata/header block at
+    # every page break, not just once at the top -- confirmed real on TMS 032's
+    # report: the same "Client:"/"PROJECT TITLE:"/"NUMBER OF EMPLOYEES:" rows
+    # and the column-header row itself reappeared verbatim between two real
+    # employee rows mid-file, producing 4 phantom "employee" rows (plus a
+    # stray row where the report's own title text landed alone in the SSN
+    # column after the name column emptied out). A trailing "Totals:" summary
+    # footer row has the same shape problem. All of these share one trait a
+    # genuine data row never has: either almost every cell is empty (a title
+    # fragment on its own), or the row's very first populated cell is a
+    # "Label:"-style string. A real, if unusually sparse, entry (e.g. a
+    # loan-out with just a name and a tax ID, no wage breakdown) still has
+    # ordinary values in that first cell, never a string ending in ":".
+    def _is_junk_row(r) -> bool:
+        non_empty = [v for v in r if v not in (None, "")]
+        if len(non_empty) <= 1:
+            return True
+        first_str = next((v for v in r if isinstance(v, str) and v.strip()), None)
+        if first_str and first_str.strip().endswith(":"):
+            return True
+        if tuple(r[:len(header_row_raw)]) == tuple(header_row_raw):
+            return True
+        return False
+
     rows = []
     for r in all_rows[header_row_idx + 1:]:
         if all(v in (None, "") for v in r):
+            continue
+        if _is_junk_row(r):
             continue
         row = {headers[i]: r[i] for i in range(min(len(headers), len(r))) if headers[i]}
         rows.append(row)
