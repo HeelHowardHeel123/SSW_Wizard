@@ -1118,7 +1118,7 @@ _PYMT_MAP = {
 
 _CARD_ABBR = {
     "american express":"AMEX","amex":"AMEX","visa":"VISA",
-    "mastercard":"MC","master card":"MC","mc":"MC","discover":"DISC",
+    "mastercard":"MC","master card":"MC","mc":"MC","discover":"DC",
 }
 
 
@@ -1179,13 +1179,15 @@ def normalize_pymt_number(method, val):
     if method in ("Credit Card", "P-Card"):
         if "*" in s:
             return s.upper()
+        # No card company visible, just a masked last-4 -- "*8008", not bare "8008".
         if s.isdigit() and len(s) == 4:
-            return s
+            return "*" + s
         lower = s.lower()
         for name, abbr in _CARD_ABBR.items():
             if name in lower:
                 digits = re.search(r"\d{4}", s)
-                return f"{abbr}*{digits.group()}" if digits else abbr
+                # Company visible but no digits -- "AMEX*", not just "AMEX".
+                return f"{abbr}*{digits.group()}" if digits else f"{abbr}*"
         return s
     return s
 
