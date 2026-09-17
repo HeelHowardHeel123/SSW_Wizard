@@ -5014,14 +5014,15 @@ def normalize_tx_ap_row(raw: dict) -> dict:
     def yn(val):
         return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
 
+    method = str(raw.get("payment_method", "")).strip()
     return {
         "po_number":      str(raw.get("po_number", "")).strip(),
         "invoice_number": str(raw.get("invoice_number", "")).strip(),
         "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
         "vendor_name":    clean_name(raw.get("vendor_name", "")),
         "amount":         normalize_amount(raw.get("amount", 0)),
-        "payment_method": str(raw.get("payment_method", "")).strip(),
-        "payment_number": str(raw.get("payment_number", "")).strip(),
+        "payment_method": method,
+        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "address":        clean_address(raw.get("address", "")),
@@ -5038,14 +5039,15 @@ def normalize_tx_agency_vendor_exps_row(raw: dict) -> dict:
     def yn(val):
         return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
 
+    method = str(raw.get("payment_method", "")).strip()
     return {
         "po_number":      str(raw.get("po_number", "")).strip(),
         "invoice_number": str(raw.get("invoice_number", "")).strip(),
         "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
         "vendor_name":    clean_name(raw.get("vendor_name", "")),
         "amount":         normalize_amount(raw.get("amount", 0)),
-        "payment_method": str(raw.get("payment_method", "")).strip(),
-        "payment_number": str(raw.get("payment_number", "")).strip(),
+        "payment_method": method,
+        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "job_number":     str(raw.get("job_number", "")).strip(),
@@ -5063,14 +5065,15 @@ def normalize_tx_post_production_row(raw: dict) -> dict:
     def yn(val):
         return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
 
+    method = str(raw.get("payment_method", "")).strip()
     return {
         "po_number":      str(raw.get("po_number", "")).strip(),
         "invoice_number": str(raw.get("invoice_number", "")).strip(),
         "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
         "vendor_name":    clean_name(raw.get("vendor_name", "")),
         "amount":         normalize_amount(raw.get("amount", 0)),
-        "payment_method": str(raw.get("payment_method", "")).strip(),
-        "payment_number": str(raw.get("payment_number", "")).strip(),
+        "payment_method": method,
+        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "job_number":     str(raw.get("job_number", "")).strip(),
@@ -5088,6 +5091,7 @@ def normalize_tx_crew_ic_row(raw: dict) -> dict:
     def yn(val):
         return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
 
+    method = str(raw.get("payment_method", "")).strip()
     return {
         "po_number":      str(raw.get("po_number", "")).strip(),
         "invoice_number": str(raw.get("invoice_number", "")).strip(),
@@ -5100,8 +5104,8 @@ def normalize_tx_crew_ic_row(raw: dict) -> dict:
         "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
         "other":          normalize_amount(raw.get("other", 0)),
         "check_number":   str(raw.get("check_number", "")).strip(),
-        "payment_number": str(raw.get("payment_number", "")).strip(),
-        "payment_method": str(raw.get("payment_method", "")).strip(),
+        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_method": method,
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "address":        clean_address(raw.get("address", "")),
@@ -5118,6 +5122,7 @@ def normalize_tx_talent_ic_row(raw: dict) -> dict:
     def yn(val):
         return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
 
+    method = str(raw.get("payment_method", "")).strip()
     return {
         "po_number":      str(raw.get("po_number", "")).strip(),
         "invoice_number": str(raw.get("invoice_number", "")).strip(),
@@ -5129,8 +5134,8 @@ def normalize_tx_talent_ic_row(raw: dict) -> dict:
         "mileage":        normalize_amount(raw.get("mileage", 0)),
         "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
         "other":          normalize_amount(raw.get("other", 0)),
-        "payment_number": str(raw.get("payment_number", "")).strip(),
-        "payment_method": str(raw.get("payment_method", "")).strip(),
+        "payment_number": normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_method": method,
         "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
         "proof_of_payment": yn(raw.get("proof_of_payment")),
         "address":        clean_address(raw.get("address", "")),
