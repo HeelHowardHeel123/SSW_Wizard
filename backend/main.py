@@ -5052,6 +5052,45 @@ def _backfill_po_number(file_rows: list[dict]) -> None:
                 r["po_number"] = po
 
 
+def _check_packet_total(filename: str, raw_list: list[dict], file_rows: list[dict],
+                          row_total, errs: list[str], issues: list[str]) -> None:
+    """Catches a dropped row on a long, repetitive multi-item packet (e.g. one
+    PO covering 7 nearly-identical hotel folios) -- a raw model recall miss,
+    not a prompt-wording problem, so it can't be prevented by rewording a
+    rule. Instead of trying to stop the miss, surface it: the prompt asks the
+    LLM to repeat the shared cover total (packet_total) on every row of a
+    bundled packet, and if every row agrees on one such total, we sum what
+    we actually extracted and flag a mismatch for manual review rather than
+    letting a missing row pass silently. Confirmed real via TMS 033: K2615-037
+    Origin Hotel bundled 7 traveler folios (summing to the PO's $4,336.62)
+    under one PO, and the last folio (Feiner, $709.24) was dropped.
+    Only fires when every row agrees on a single non-empty packet_total --
+    disagreement (multiple real POs/totals in one packet) or an all-blank
+    packet_total (a normal, non-bundled single-invoice packet) both skip the
+    check rather than risk a false positive."""
+    totals = set()
+    for raw in raw_list:
+        pt = raw.get("packet_total")
+        if pt in (None, ""):
+            continue
+        try:
+            totals.add(round(float(str(pt).replace(",", "").replace("$", "").strip()), 2))
+        except (TypeError, ValueError):
+            continue
+
+    if len(totals) != 1:
+        return
+
+    expected = next(iter(totals))
+    actual = round(sum(row_total(r) for r in file_rows), 2)
+    if abs(actual - expected) > 0.01:
+        msg = (f"extracted rows total ${actual:,.2f} but the packet's own cover "
+               f"total is ${expected:,.2f} -- possible missing or misread item, "
+               f"please verify against the source PDF")
+        errs.append(msg)
+        issues.append(f"{filename}: {msg}")
+
+
 def normalize_tx_ap_row(raw: dict) -> dict:
     def yn(val):
         return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
@@ -5683,6 +5722,7 @@ async def extract_tx_ap(
                     issues.append(f"{filename}: row normalization error: {e}")
 
         _backfill_po_number(file_rows)
+        _check_packet_total(filename, raw_list, file_rows, lambda r: r["amount"], errs, issues)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5755,6 +5795,7 @@ async def extract_tx_agency_vendor_exps(
                     issues.append(f"{filename}: row normalization error: {e}")
 
         _backfill_po_number(file_rows)
+        _check_packet_total(filename, raw_list, file_rows, lambda r: r["amount"], errs, issues)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5828,6 +5869,7 @@ async def extract_tx_post_production(
                     issues.append(f"{filename}: row normalization error: {e}")
 
         _backfill_po_number(file_rows)
+        _check_packet_total(filename, raw_list, file_rows, lambda r: r["amount"], errs, issues)
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5903,6 +5945,11 @@ async def extract_tx_crew_ic(
                     issues.append(f"{filename}: row normalization error: {e}")
 
         _backfill_po_number(file_rows)
+        _check_packet_total(
+            filename, raw_list, file_rows,
+            lambda r: r["gross_wages"] + r["mileage"] + r["kit_rental"] + r["other"],
+            errs, issues,
+        )
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,
@@ -5974,6 +6021,11 @@ async def extract_tx_talent_ic(
                     issues.append(f"{filename}: row normalization error: {e}")
 
         _backfill_po_number(file_rows)
+        _check_packet_total(
+            filename, raw_list, file_rows,
+            lambda r: r["gross_wages"] + r["mileage"] + r["kit_rental"] + r["other"],
+            errs, issues,
+        )
         rows.extend(file_rows)
         file_summaries.append({
             "file":   filename,

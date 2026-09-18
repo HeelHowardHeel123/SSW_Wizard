@@ -24,6 +24,14 @@ ONE ROW PER INVOICE NUMBER.
 WAGE/REIMBURSEMENT BREAKDOWN (fields 7-10 below):
 Most of these invoices are a single flat fee for the person's services -- put the whole amount in gross_wages and leave mileage/kit_rental/other at 0. Only split out mileage, kit_rental, or other when the invoice ITSELF itemizes them as separate line items (e.g. "Day Rate: $800, Mileage: $45, Kit Rental: $75"). other is the catch-all for any itemized reimbursement that isn't specifically mileage or kit rental (e.g. a per diem, a supply purchase billed alongside the day rate) -- don't invent a split that isn't on the invoice.
 
+PAYMENT RECEIPTS ARE NOT NEW TRANSACTIONS.
+Some packets include a payment-confirmation-shaped document -- it shows an amount paid, a date paid, and a payment method, with no line-item billing and no due date (e.g. a Stripe/payment-processor "Receipt from [Vendor]" email). If that receipt's own text explicitly references the same reservation, invoice, or PO number as an invoice or PO elsewhere in the same packet (e.g. a receipt whose summary line reads "416261 - Stink LLC" when the packet's invoice is for reservation #416261), it is proof of payment for that OTHER document, not a separate transaction -- do not give it its own row, even though it has what looks like its own identifying number (a "Receipt #" from a payment processor is not an invoice number). Fold whatever payment reference number and payment date it shows (payment_number, pay_date) onto the row for the invoice/PO it confirms instead -- whether this also satisfies proof_of_payment is a separate question, governed entirely by that field's own definition below, not by this rule.
+This is different from a genuinely distinct additional invoice or receipt bundled in the same packet -- if it does NOT reference an already-counted reservation/invoice/PO number, it still gets its own row per the rule above.
+
+EXPLICIT REIMBURSEMENT INVOICES.
+If the invoice or PO carries a document-level reimbursement marker -- the "QUICKPAY (REIMBURSEMENT)" checkbox itself checked on the PO, or a title/header on the invoice that literally reads "REIMBURSEMENT" or "REIMBURSEMENT INVOICE" -- use ONLY that invoice/PO's own stated total as the row. Do not separately itemize whatever backup receipts are bundled behind it (airline baggage fees, rideshare receipts, hotel folios, etc.), even if those receipts don't reference the invoice by any shared number -- the explicit label is itself the signal that the backup is support for one lump reimbursement, not a set of separate transactions.
+This does NOT include a line item whose own description merely contains the word "reimbursement" (e.g. a PO line item labeled "Travel Expense Reimbursement" sitting alongside other, non-reimbursement line items like a day rate) -- that is just a category label on one line among several, not a document-level marker, and does not by itself make the whole invoice a lump reimbursement. If the invoice mixes a service fee with itemized expense line items and there is no document-level marker as described above, fall back to the normal rules -- itemizing the backup documents in that case is fine, not an error. If you cannot tell whether the packet carries a document-level reimbursement marker, treat it as not reimbursement-labeled and itemize normally.
+
 FIELDS -- return exactly these key names:
 
 1.  po_number -- the PO number from the PO document itself if one is included in this packet. If no PO document is present, use the PO number as stated on the invoice instead. Empty string if not found anywhere.
@@ -48,6 +56,7 @@ FIELDS -- return exactly these key names:
 20. contact_number -- phone number, if printed anywhere in the packet. Empty string if not found.
 21. description -- 1-2 words describing what services were provided (e.g. "Grip Services", "Kit Rental", "Day Rate"). If it clearly covers two categories of roughly equal value, combine with "&".
 22. notes -- any concern a reviewer should know: ambiguous amounts, low-confidence judgment calls, conflicting data, unreadable pages. Empty string in normal cases. Use only plain ASCII -- no em dashes, no special Unicode.
+23. packet_total -- ONLY when this packet bundles multiple separate invoice numbers or people's pay under one shared PO or cover sheet (per the "ONE ROW PER INVOICE NUMBER" rule above) -- the single grand total printed on that shared PO/cover sheet (e.g. its own "TOTAL:" field). Repeat this exact same value on every row you emit for this packet, so all the rows from it can be cross-checked as a set. Leave this an empty string whenever the packet covers just one person/invoice with nothing bundled under it.
 
 GROUND RULES:
 - Never guess to fill a field -- blank plus a notes flag is correct.
@@ -59,6 +68,7 @@ GROUND RULES:
 Return ONLY a valid JSON array using exactly these key names per object:
 po_number, invoice_number, worker_name, worker_position, invoice_date, pay_period,
 gross_wages, mileage, kit_rental, other, check_number, payment_number, payment_method,
-pay_date, proof_of_payment, address, city, state, zip, contact_number, description, notes
+pay_date, proof_of_payment, address, city, state, zip, contact_number, description, notes,
+packet_total
 
 No explanation. No markdown. No code fences. JSON array only.
