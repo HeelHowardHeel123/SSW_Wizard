@@ -1086,21 +1086,46 @@ class Component extends DCLogic {
   REQ_TIMEOUT_MS = 360000;
   RUN_FAIL_LIMIT = 8;
 
+  // Raw network failures (fetch() itself throwing — dropped connection, reset,
+  // DNS blip) are retried; anything that produced an HTTP RESPONSE is not. A
+  // 401/404/429/5xx already tells us why it failed, and hammering it would burn
+  // minutes of a 30-minute run to arrive at the same answer. Our own timeout
+  // (AbortError) is likewise not retried — a request that already ran for
+  // REQ_TIMEOUT_MS is not going to finish faster on a second try.
+  NET_RETRY_ATTEMPTS = 3;
+  NET_RETRY_BACKOFF_MS = [1000, 2000];
+
   async postExtract(url, fd) {
     if (this._runHalted) throw new Error(this._runHalted);
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.REQ_TIMEOUT_MS);
     const t0 = Date.now();
     let names = [];
     try { names = (fd.getAll ? fd.getAll("files") : []).map((f) => (f && f.name) || "").filter(Boolean); } catch (e) {}
     this.runLog("req", "POST " + url + (names.length ? " · " + names.length + " file(s): " + names.join(", ") : ""));
+    let timer = null;
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "X-App-Secret": this.BACKEND_SECRET },
-        body: fd,
-        signal: ctrl.signal,
-      });
+      let res = null;
+      for (let attempt = 1; ; attempt++) {
+        const ctrl = new AbortController();
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => ctrl.abort(), this.REQ_TIMEOUT_MS);
+        try {
+          res = await fetch(url, {
+            method: "POST",
+            headers: { "X-App-Secret": this.BACKEND_SECRET },
+            body: fd,
+            signal: ctrl.signal,
+          });
+          break;
+        } catch (e) {
+          // AbortError is our own timeout, not a network blip — never retried.
+          const abort = e && e.name === "AbortError";
+          if (abort || attempt >= this.NET_RETRY_ATTEMPTS) throw e;
+          const wait = this.NET_RETRY_BACKOFF_MS[attempt - 1] || 2000;
+          this.runLog("warn", "  network failure on attempt " + attempt + "/" + this.NET_RETRY_ATTEMPTS +
+            " (" + ((e && e.message) || e) + ") — retrying in " + Math.round(wait / 1000) + "s · " + url);
+          await new Promise((r) => setTimeout(r, wait));
+        }
+      }
       if (res.status === 401) throw new Error("backend rejected the request (bad app secret)");
       if (res.status === 404) throw new Error("endpoint not deployed yet (404)");
       if (res.status === 429) throw new Error("backend is rate-limiting this run (429) — too many requests too quickly");
@@ -1144,7 +1169,7 @@ class Component extends DCLogic {
       }
       throw new Error(msg);
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -1877,13 +1902,7 @@ class Component extends DCLogic {
     ["vacHol", "V", "currency"],
     ["hand", "W", "currency"], ["platFee", "W", "currency"],  // mutually exclusive, deduped by column
     ["mileage", "X", "currency"], ["kitRental", "Y", "currency"],
-    // reimbRent before otherRental: PDF invoices only ever report one combined
-    // reimbursement figure (reimbRent), never the mileage/kit/other split a
-    // Production Report can give -- so it's the fallback for a PDF-only person,
-    // landing in Other Rental same as the LLM's own catch-all on the report
-    // side. If a report match later fills otherRental too, that wins (Report
-    // wins on values), since it comes later in this list and put() overwrites.
-    ["reimbRent", "Z", "currency"], ["otherRental", "Z", "currency"],
+    ["otherRental", "Z", "currency"],
     ["street", "AK", "text"], ["city", "AL", "text"],
     ["resState", "AM", "text"], ["zip", "AN", "text"],
     // Notes — TX's equivalent of GA's notes -> AX. Written verbatim.
@@ -1923,23 +1942,38 @@ class Component extends DCLogic {
   // PDFs + N reconciliation files). Highland calls their file a Payroll Report,
   // but the zone copy stays "PTIP Report (Excel)" for all three companies — one
   // consistent label is less confusing than three names for the same slot.
+  // `on` is the list of workbook families the company is wired for. Texas is the
+  // only one with all four today: Highland exists on GA but has no IL mapping,
+  // and CMS is TX-only for now (its IL/GA mappings come later). A company that
+  // isn't available for the current family is hidden from the selector, and
+  // effectiveTalentCo() falls back to Extreme Reach if the workbook type changes
+  // after it was picked.
   TALENT_COMPANIES = [
     { id: "er", label: "Extreme Reach", perFile: "one file per invoice",
-      sends: "Extreme Reach sends one file per invoice.", download: "Organized PTIP" },
+      sends: "Extreme Reach sends one file per invoice.", download: "Organized PTIP",
+      on: ["il", "ga", "tx"] },
     { id: "teams", label: "The Team Companies", perFile: "one file per commercial",
-      sends: "Teams sends one file per commercial.", download: "Sorted PTIP" },
+      sends: "Teams sends one file per commercial.", download: "Sorted PTIP",
+      on: ["il", "ga", "tx"] },
     { id: "highland", label: "Highland Talent", perFile: "one or more files",
       sends: "Highland calls this file a Payroll Report.",
-      download: "Organized PTIP", gaOnly: true },
+      download: "Organized PTIP", on: ["ga", "tx"] },
+    { id: "cms", label: "CMS Productions", perFile: "one or more files",
+      sends: "CMS invoices carry no title/role field, so the Title column stays blank.",
+      download: "Organized PTIP", on: ["tx"] },
   ];
   talentCo(id) {
     return this.TALENT_COMPANIES.find((c) => c.id === id) || this.TALENT_COMPANIES[0];
   }
-  // The company a run actually uses: the picked one, unless it's GA-only and this
-  // isn't a GA workbook.
+  // Which family's mappings a run uses. TX is checked first: isGaLike is true for
+  // Texas too (it mirrors GA's Documents step), but Texas has its own tab.
+  talentCoFamily() { return this.isTx ? "tx" : (this.isGaLike ? "ga" : "il"); }
+  talentCoAvailable(c) { return !c.on || c.on.includes(this.talentCoFamily()); }
+  // The company a run actually uses: the picked one, unless it isn't wired for
+  // this workbook family.
   effectiveTalentCo() {
     const c = this.talentCo(this.state.talentPayrollCo || "er");
-    return (c.gaOnly && this.state.workbookType !== "ga") ? "er" : c.id;
+    return this.talentCoAvailable(c) ? c.id : "er";
   }
 
   // ── Talent & Extras row model -> tab columns ─────────────────────────────
@@ -2297,8 +2331,11 @@ class Component extends DCLogic {
       const ht = st.genGaHotel
         ? " Hotel Charges Summary — " + st.genGaHotel + (st.genGaHotel === 1 ? " block" : " blocks") + " written."
         : "";
-      const tl = st.genTalent
-        ? " Talent — " + st.genTalent + (st.genTalent === 1 ? " row" : " rows") + " written."
+      // On Texas the talent rows land on the Talent Payroll tab, so it gets its
+      // own name here rather than GA's "Talent".
+      const tlN = this.isTx ? st.genTxTalentPayroll : st.genTalent;
+      const tl = tlN
+        ? " " + (this.isTx ? "Talent Payroll" : "Talent") + " — " + tlN + (tlN === 1 ? " row" : " rows") + " written."
         : "";
       const av = st.genTxAgency
         ? " Agency Vendor Exps — " + st.genTxAgency + (st.genTxAgency === 1 ? " row" : " rows") + " written."
@@ -2948,13 +2985,14 @@ class Component extends DCLogic {
     this._talentSummary = null;
     this._ptipB64 = null;
     this._gaApCount = 0;
-    this._gaPettyCount = 0;
-    this._gaProdCCCount = 0;
-    this._gaHotelCount = 0;
     this._txAgencyCount = 0;
     this._txPostCount = 0;
     this._txCrewIcCount = 0;
     this._txTalentIcCount = 0;
+    this._txTalentPayrollCount = 0;
+    this._gaPettyCount = 0;
+    this._gaProdCCCount = 0;
+    this._gaHotelCount = 0;
     this._gaLoanOutCount = 0;
     this._gaRosterCount = 0;
     this._gaPayrollCount = 0;
@@ -3528,13 +3566,14 @@ class Component extends DCLogic {
     this._talentSummary = null;
     this._ptipB64 = null;
     this._gaApCount = 0;
-    this._gaPettyCount = 0;
-    this._gaProdCCCount = 0;
-    this._gaHotelCount = 0;
     this._txAgencyCount = 0;
     this._txPostCount = 0;
     this._txCrewIcCount = 0;
     this._txTalentIcCount = 0;
+    this._txTalentPayrollCount = 0;
+    this._gaPettyCount = 0;
+    this._gaProdCCCount = 0;
+    this._gaHotelCount = 0;
     this._gaLoanOutCount = 0;
     this._gaRosterCount = 0;
     this._gaPayrollCount = 0;
@@ -3602,6 +3641,74 @@ class Component extends DCLogic {
       for (const iss of txPay.issues) this.runLog("warn", "  " + iss);
       await this.logStep("Crew Payroll — " + (paySkip ? 0 : txPay.count) +
         ((!paySkip && txPay.count === 1) ? " row" : " rows") + " written", true);
+    }
+
+    // ── Talent Payroll. The Talent Invoice PDFs + PTIP/payroll report zones,
+    //    routed to the TX endpoint. One call, all files together.
+    const nTxTal = (this.files.talentPdfs || []).length + (this.files.talentPtip || []).length;
+    if (nTxTal) {
+      const tpFound = await eng.inspectStructure(buf, [{ sheetName: this.TX_TALENT_PAYROLL_SHEET, expect: this.TX_TALENT_PAYROLL_EXPECT }]);
+      const tpProblems = tpFound[this.TX_TALENT_PAYROLL_SHEET];
+      const tpSkip = (tpProblems && tpProblems.length) ? tpProblems.join("; ") : null;
+      if (tpSkip) {
+        const msg = "Talent Payroll tab was SKIPPED — the template in use does not match the expected " +
+          "layout (" + tpSkip + "). Publish the current TX template in Wizard 04, or upload it as a " +
+          "Replace, and re-run. Nothing was extracted from the " + nTxTal +
+          (nTxTal === 1 ? " file" : " files") + " you uploaded.";
+        this._runData.tx_talent_payroll = { files: [], issues: [msg], rows: 0, skipped: tpSkip };
+        this._fringeIssues = [...(this._fringeIssues || []), msg];
+        this.runLog("warn", msg);
+        await this.logStep("Talent Payroll — skipped, template layout mismatch", true);
+      } else {
+        await this.logStep("Extracting Talent Payroll — " + nTxTal + (nTxTal === 1 ? " file" : " files"),
+          false, this.beginProgress("talentPdfs", "talentPtip"));
+        const tp = await this.parseTxTalentPayroll();
+        const tpRows = tp.rows || [];
+        const tpWritten = tpRows.length;
+        this._runData.tx_talent_payroll = { files: tp.files || [], issues: tp.issues || [], rows: tpWritten };
+        this._fringeIssues = [...(this._fringeIssues || []), ...(tp.issues || [])];
+        this._talentIssues = [...(this._talentIssues || []), ...(tp.issues || [])];
+        this._talentSummary = tp.summary || null;
+        for (const iss of tp.issues || []) this.runLog("warn", "  " + (iss.reason || iss));
+
+        const insert = Math.max(0, tpWritten - this.TX_TALENT_PAYROLL_PREBUILT);
+        if (insert) inserts.push({
+          sheetName: this.TX_TALENT_PAYROLL_SHEET,
+          at: this.TX_TALENT_PAYROLL_FIRST + 1,
+          rows: Array.from({ length: insert }, () => this.txTalentPayrollFormulaRow()),
+        });
+        tpRows.forEach((r, idx) => {
+          const R = this.TX_TALENT_PAYROLL_FIRST + idx;
+          const put = (col, type, val) => {
+            if (val != null && String(val).trim() !== "")
+              cellPatches.push({ sheetName: this.TX_TALENT_PAYROLL_SHEET, addr: col + R, value: val, type });
+            else
+              cellPatches.push({ sheetName: this.TX_TALENT_PAYROLL_SHEET, addr: col + R, clear: true });
+          };
+          put("B", "number", idx + 1);                            // Item # — ours, 1-based
+          put("C", "text", r.on_ptip ? "YES" : "NO");
+          put("D", "text", r.on_pdf ? "YES" : "NO");
+          put("O", "currency", 0);                                // Mileage — never itemized by any of the four
+          put("P", "currency", 0);                                // Kit Rental — same
+          for (const c of this.txTalentPayrollFormulaRow())
+            cellPatches.push({ sheetName: this.TX_TALENT_PAYROLL_SHEET, addr: c.col + R, value: c.value.replace(/\{R\}/g, R), type: c.type });
+          for (const [f, col, type] of this.TX_TALENT_PAYROLL_MAP) put(col, type, r[f]);
+          for (const col of this.TX_TALENT_PAYROLL_MANUAL) put(col, "text", null);
+        });
+        if (!insert) {
+          for (let R = this.TX_TALENT_PAYROLL_FIRST + tpWritten; R <= this.TX_TALENT_PAYROLL_LAST_PREBUILT; R++)
+            for (const col of this.TX_TALENT_PAYROLL_LEFTOVER_COLS)
+              cellPatches.push({ sheetName: this.TX_TALENT_PAYROLL_SHEET, addr: col + R, clear: true });
+        }
+        this._txTalentPayrollCount = tpWritten;
+        this._talentCount = tpWritten;
+        this._ptipCompany = this.effectiveTalentCo();   // labels the files on the success screen
+        if (tpWritten) preconditions.push({ sheetName: this.TX_TALENT_PAYROLL_SHEET, expect: this.TX_TALENT_PAYROLL_EXPECT });
+        if (tpWritten) this.runLog("res", "Talent Payroll · " + tpWritten + " row" +
+          (tpWritten === 1 ? "" : "s") + " written to rows " + this.TX_TALENT_PAYROLL_FIRST + "-" +
+          (this.TX_TALENT_PAYROLL_FIRST + tpWritten - 1) + (insert ? " (grew by " + insert + ")" : ""));
+        await this.logStep("Talent Payroll — " + tpWritten + (tpWritten === 1 ? " row" : " rows") + " written", true);
+      }
     }
 
     // ── AP (POs + Reimbursement). Straight PDF-to-rows — no reconciliation,
@@ -3884,7 +3991,7 @@ class Component extends DCLogic {
         for (const col of this.TX_IC_MANUAL) put(col, "text", null);
       });
       // Every one of these 7 columns carries a literal 0 or a formula on all 31
-      // pre-built rows, so an unwritten row would read as a real $0.00 line item.
+      // pre-built rows, so an unwritten row would read as a real $0.00 line.
       if (!insert) {
         for (let R = ic.first + icWritten; R <= ic.lastPrebuilt; R++)
           for (const col of this.TX_IC_LEFTOVER_COLS)
@@ -4912,6 +5019,7 @@ class Component extends DCLogic {
     genTxPost: 0,
     genTxCrewIc: 0,
     genTxTalentIc: 0,
+    genTxTalentPayroll: 0,
     genFringe: 0,
     genPayroll: 0,
     genFiles: [],
@@ -5340,10 +5448,11 @@ class Component extends DCLogic {
       genGaPetty: 0,
       genGaProdCC: 0,
       genGaHotel: 0,
-      genTxAgency: 0,
-      genTxPost: 0,
-      genTxCrewIc: 0,
-      genTxTalentIc: 0,
+    genTxAgency: 0,
+    genTxPost: 0,
+    genTxCrewIc: 0,
+    genTxTalentIc: 0,
+    genTxTalentPayroll: 0,
       genFringe: 0,
       genPayroll: 0,
       genFiles: [],
@@ -6215,91 +6324,6 @@ class Component extends DCLogic {
     return { rows, issues, files: fileSummary, count: rows.length, overflow: 0, grow, generatedParsers };
   }
 
-  // ══ AP (POs + Reimbursement) tab (Texas) ════════════════════════════════
-  // One vendor packet per file: PO (if any) + invoice + W9 (if any) + proof of
-  // payment (if any) + whatever unrelated backup the vendor stapled on. Same
-  // real-world shape as GA's AP zone, so this posts ONE FILE PER REQUEST like
-  // extractGaAp — large scans time out when batched and one bad packet must not
-  // take the run down.
-  //
-  // Geometry: header row 8, 80 pre-built data rows 9-88, Subtotal row 89
-  // (F/G/H = SUBTOTAL, K = SUBTOTAL(2,…)), and H92 = SUM(H9:H88).
-  TX_AP_SHEET = "AP (POs + Reimbursement)";
-  TX_AP_FIRST = 9;
-  TX_AP_PREBUILT = 80;          // rows 9-88
-  TX_AP_LAST_PREBUILT = 88;
-
-  // N (Payment Entity) and O (Type) are manual entry, V (Qualify?) awaits the
-  // payer-entity/call-sheet work. Never written — but they ARE cleared per row
-  // like every other column, since this pass writes with clear:true semantics.
-  TX_AP_MAP = [
-    ["po_number", "C", "text"], ["invoice_number", "D", "text"],
-    ["invoice_date", "E", "date"], ["amount", "F", "currency"],
-    ["vendor_name", "I", "text"], ["payment_method", "J", "text"],
-    ["payment_number", "K", "text"], ["pay_date", "L", "date"],
-    ["proof_of_payment", "M", "text"], ["description", "P", "text"],
-    ["address", "Q", "text"], ["city", "R", "text"], ["state", "S", "text"],
-    ["zip", "T", "text"], ["contact_number", "U", "text"],
-    ["notes", "W", "text"],
-  ];
-
-  // Structural contract for the AP tab: the data band 9-88, the row-89 SUBTOTAL
-  // band whose start/end refs the insert-at-10 trick relies on, and seven
-  // spread-out row-8 labels so a mid-row COLUMN insert fails the check instead
-  // of writing every field one column off.
-  //
-  // Verbatim from the real template. Two cells carry baked-in whitespace
-  // quirks — E8 " Invoice Date" (leading) and R8 "City " (trailing) — and are
-  // deliberately NOT asserted: someone tidying those strings would false-fail
-  // an otherwise perfect template, and B/C/F/H/I/M/W already pin the layout.
-  TX_AP_EXPECT = {
-    headerRow: 8,
-    headerCells: {
-      B: "ITEM #", C: "PO #", F: "Invoice $", H: "Submitted Amount$",
-      I: "Vendor Name", M: "Proof of Payment?", W: "Notes:",
-    },
-    firstRow: 9,
-    lastRow: 88,
-    footerRow: 89,
-    footerFormulaCols: ["F", "G", "H", "K"],
-  };
-
-  async extractTxAp(fileList) {
-    const files = Array.from(fileList || []);
-    const p = this.state.project;
-    const merged = { rows: [], issues: [], files: [] };
-    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-    for (const f of sorted) {
-      await this.progressFile(f.name, 1);
-      try {
-        const fd = new FormData();
-        fd.append("files", f);
-        fd.append("prodco_name", p.prodCompany || "");
-        fd.append("work_state", "TX");
-        const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-ap", fd);
-        merged.rows.push(...(j.rows || []));
-        merged.issues.push(...(j.issues || []));
-        merged.files.push(...(j.files || []));
-      } catch (e) {
-        const reason = "TX AP extraction failed — " + (e.message || e);
-        merged.issues.push({ file: f.name, reason });
-        merged.files.push({ file: f.name, rows: 0, error: reason });
-      }
-    }
-    return merged;
-  }
-
-  async parseTxAp() {
-    const files = this.files.txAp || [];
-    if (!files.length) return { rows: [], issues: [], files: [], count: 0 };
-    try {
-      const r = await this.extractTxAp(files);
-      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], count: (r.rows || []).length };
-    } catch (e) {
-      return { rows: [], issues: ["TX AP extraction unavailable — " + (e.message || e)], files: [], count: 0 };
-    }
-  }
-
   // ══ Agency Vendor Exps tab (Texas) ═══════════════════════════════════════
   // Same vendor-packet upload shape as AP, three differences: 21 pre-built rows
   // instead of 80, a live per-row H = F-G formula, and an extra job_number
@@ -6354,6 +6378,8 @@ class Component extends DCLogic {
     const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     for (const f of sorted) {
       await this.progressFile(f.name, 1);
+      const before = merged.rows.length;
+      let caught = null, jIssues = [];
       try {
         const fd = new FormData();
         fd.append("files", f);
@@ -6363,10 +6389,20 @@ class Component extends DCLogic {
         merged.rows.push(...(j.rows || []));
         merged.issues.push(...(j.issues || []));
         merged.files.push(...(j.files || []));
+        jIssues = j.issues || [];
       } catch (e) {
-        const reason = "TX Agency Vendor Exps extraction failed — " + (e.message || e);
-        merged.issues.push({ file: f.name, reason });
-        merged.files.push({ file: f.name, rows: 0, error: reason });
+        caught = "TX Agency Vendor Exps extraction failed — " + (e.message || e);
+        merged.issues.push({ file: f.name, reason: caught });
+        merged.files.push({ file: f.name, rows: 0, error: caught });
+      }
+      // Zero rows from this file for ANY reason — retries exhausted, a backend
+      // error response, or an honest 200 with nothing in it: write a visible
+      // placeholder row rather than letting the invoice vanish.
+      if (merged.rows.length === before) {
+        const why = this.txFallbackReason(caught, jIssues);
+        merged.rows.push(this.txFallbackRow("vendor_name", "amount", f.name, why));
+        this.runLog("warn", "  " + f.name + " produced no rows — placeholder row written (" +
+          (why || "no reason given") + ")");
       }
     }
     return merged;
@@ -6419,6 +6455,8 @@ class Component extends DCLogic {
     const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     for (const f of sorted) {
       await this.progressFile(f.name, 1);
+      const before = merged.rows.length;
+      let caught = null, jIssues = [];
       try {
         const fd = new FormData();
         fd.append("files", f);
@@ -6428,10 +6466,20 @@ class Component extends DCLogic {
         merged.rows.push(...(j.rows || []));
         merged.issues.push(...(j.issues || []));
         merged.files.push(...(j.files || []));
+        jIssues = j.issues || [];
       } catch (e) {
-        const reason = "TX Post Production extraction failed — " + (e.message || e);
-        merged.issues.push({ file: f.name, reason });
-        merged.files.push({ file: f.name, rows: 0, error: reason });
+        caught = "TX Post Production extraction failed — " + (e.message || e);
+        merged.issues.push({ file: f.name, reason: caught });
+        merged.files.push({ file: f.name, rows: 0, error: caught });
+      }
+      // Zero rows from this file for ANY reason — retries exhausted, a backend
+      // error response, or an honest 200 with nothing in it: write a visible
+      // placeholder row rather than letting the invoice vanish.
+      if (merged.rows.length === before) {
+        const why = this.txFallbackReason(caught, jIssues);
+        merged.rows.push(this.txFallbackRow("vendor_name", "amount", f.name, why));
+        this.runLog("warn", "  " + f.name + " produced no rows — placeholder row written (" +
+          (why || "no reason given") + ")");
       }
     }
     return merged;
@@ -6445,6 +6493,174 @@ class Component extends DCLogic {
       return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], count: (r.rows || []).length };
     } catch (e) {
       return { rows: [], issues: ["TX Post Production extraction unavailable — " + (e.message || e)], files: [], count: 0 };
+    }
+  }
+
+  // A PDF that contributed NO rows — exhausted network retries, a backend error
+  // response, or an honest 200 that extracted nothing — gets one synthetic row
+  // so it is impossible to miss in the workbook itself, not just in a run log
+  // nobody opens. It flows through the same TX_*_MAP write loop as a real row,
+  // so every unset field just gets clear:true'd, and it counts toward the tab's
+  // row-growth math, which is correct: it needs a real row.
+  txFallbackRow(nameField, amountField, filename, reason) {
+    const row = {
+      notes: "PDF failed to read — " + (reason || "review manually"),
+    };
+    row[nameField] = filename;
+    row[amountField] = 0;
+    return row;
+  }
+
+  // The reason string for one of those rows: the caught error, else whatever the
+  // backend said about this file, else null (caller falls back to generic text).
+  txFallbackReason(caught, issues) {
+    if (caught) return caught;
+    for (const iss of issues || []) {
+      const t = typeof iss === "string" ? iss : (iss && (iss.reason || iss.error || iss.message));
+      if (t) return String(t);
+    }
+    return null;
+  }
+
+  // ══ Talent Payroll tab (Texas) ═══════════════════════════════════════════
+  // The Crew Payroll tab's counterpart for on-camera talent. One /extract-tx-
+  // talent-payroll call takes ALL the invoice PDFs and ALL the PTIP/payroll
+  // report files together — the backend cross-references them, so they can't be
+  // batched — and returns one already-reconciled row per person/invoice,
+  // identical in shape for all four payroll companies (Highland, Extreme Reach,
+  // Teams, CMS). PDFs-only, report-only and both are all valid intakes.
+  //
+  // The zones are the EXISTING "Talent Invoice PDFs" + "PTIP Report (Excel)"
+  // ones — on a TX run they just route to this endpoint instead of
+  // /extract-talent, same as ProdCo billings reuse their zone on GA.
+  //
+  // Geometry (2026 TX template): header row 8, 31 pre-built data rows 9-39,
+  // Subtotal row 40 (SUBTOTAL over M/O/Q), SUM band row 43, per-invoice roll-up
+  // 45-68 keyed on SUMIFs over $C$10:$C$39 / $AB$9:$AB$38. Growth is an insert at
+  // row 10 (FIRST + 1) so every one of those ranges extends with us.
+  //
+  // NOTE: the bundled assets/workbooks/texas.xlsx still carries the OLDER layout
+  // (no On PTIP / On PDF columns, everything from old-C onward two columns left),
+  // so the soft structure check below will skip this tab until the current TX
+  // template is published in Wizard 04. Same situation as GA Talent.
+  TX_TALENT_PAYROLL_SHEET = "Talent Payroll";
+  TX_TALENT_PAYROLL_FIRST = 9;
+  TX_TALENT_PAYROLL_PREBUILT = 31;        // rows 9-39
+  TX_TALENT_PAYROLL_LAST_PREBUILT = 39;
+
+  // check_number lands in BOTH G (Ref Number) and Y (Pymt #) by design — the
+  // template carries the same value in two places. Every company leaves it blank
+  // today, so both read empty until one starts supplying it.
+  TX_TALENT_PAYROLL_MAP = [
+    ["invoice_no", "E", "text"], ["invoice_date", "F", "date"],
+    ["check_number", "G", "text"], ["talent_name", "H", "text"],
+    ["title", "I", "text"],
+    ["wages", "M", "currency"], ["misc_pymt", "N", "currency"],
+    ["er_tax", "Q", "currency"], ["wc", "R", "currency"],
+    ["handling", "S", "currency"], ["sag", "T", "currency"],
+    ["check_number", "Y", "text"], ["payment_entity", "AA", "text"],
+    ["type", "AB", "text"], ["loan_out", "AC", "text"],
+    ["home_address", "AE", "text"], ["city", "AF", "text"],
+    ["state", "AG", "text"], ["zip", "AH", "text"], ["notes", "AI", "text"],
+  ];
+
+  // Reviewer-judgment columns, never derived: J Valid DTR Form (no DTR matching
+  // on this tab), K Location and L TX Resident (confirmed manual even when the
+  // row's State is known), X Pymt Method, Z Proof of Payment, AD Qualify?.
+  TX_TALENT_PAYROLL_MANUAL = ["J", "K", "L", "X", "Z", "AD"];
+
+  // Every formula the template carries on a data row, read off row 9 and shifted
+  // to this layout. Seeded on inserted rows and re-written on every row we touch,
+  // because the pre-built rows past 10 hold literal 0s rather than the formula.
+  txTalentPayrollFormulaRow() {
+    return [
+      { col: "U", type: "formula", value: "SUM(M{R}:T{R})" },      // Total
+      { col: "V", type: "formula", value: "R{R}" },                // Ineligible $ = Workers Comp
+      { col: "W", type: "formula", value: "U{R}-V{R}" },           // Submitted Amount
+      { col: "AK", type: "formula", value: "M{R}+N{R}+O{R}" },     // GROSS
+      { col: "AL", type: "formula", value: "Q{R}+S{R}+T{R}" },     // FRINGES
+      { col: "AM", type: "formula", value: "SUM(AK{R}:AL{R})" },   // TOTAL
+      { col: "AN", type: "formula", value: "AM{R}-W{R}" },
+      { col: "AP", type: "formula", value: "U{R}-AM{R}" },
+      { col: "AQ", type: "formula", value: "AP{R}-V{R}" },
+    ];
+  }
+
+  // Anchors chosen to catch the two-column shift between the old bundled layout
+  // and the current one: in the old template E is "Ref Number (Check #)" and H is
+  // "Valid DTR Form", so those two alone fail a stale file. On PTIP / On PDF are
+  // deliberately NOT asserted — a template author writing "On PTIP?" would
+  // false-fail an otherwise perfect tab.
+  TX_TALENT_PAYROLL_EXPECT = {
+    headerRow: 8,
+    headerCells: {
+      B: "ITEM #", E: "Invoice #", H: "Talent Name", M: "Gross Wages $",
+      U: "Total", W: "Submitted Amount", AI: "Notes:",
+    },
+    firstRow: 9,
+    lastRow: 39,
+    footerRow: 40,
+    footerFormulaCols: ["M", "O", "Q"],
+  };
+
+  // Columns carrying a formula or a literal 0 on every pre-built row — an
+  // untouched leftover row would otherwise read as a real $0.00 line item.
+  TX_TALENT_PAYROLL_LEFTOVER_COLS = ["B", "U", "V", "W", "AK", "AL", "AM", "AN", "AP", "AQ"];
+
+  async extractTxTalentPayroll(pdfFiles, ptipFiles) {
+    const pdfs = Array.from(pdfFiles || []);
+    const ptips = Array.from(ptipFiles || []).filter(Boolean);
+    const company = this.effectiveTalentCo();
+    const merged = { rows: [], issues: [], files: [], summary: null, company };
+    if (!pdfs.length && !ptips.length) return merged;
+    const p = this.state.project;
+    let caught = null, jIssues = [];
+    try {
+      const fd = new FormData();
+      pdfs.forEach((f) => fd.append("pdf_files", f));
+      ptips.forEach((f) => fd.append("ptip_files", f));
+      fd.append("prodco_name", p.prodCompany || "");
+      fd.append("work_state", "TX");
+      fd.append("payroll_company", company);
+      const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-talent-payroll", fd);
+      merged.rows.push(...(j.rows || []));
+      merged.summary = j.summary || null;
+      // Issues live on summary.issues for this endpoint; tolerate a top-level
+      // issues array too rather than silently dropping it.
+      jIssues = [...((j.summary && j.summary.issues) || []), ...(j.issues || [])];
+      merged.issues.push(...jIssues);
+      // ptip_excel_b64 is always null on TX — no Sorted PTIP deliverable here.
+    } catch (e) {
+      caught = "TX Talent Payroll extraction failed — " + (e.message || e);
+      merged.issues.push(caught);
+    }
+    merged.files = [...pdfs, ...ptips].map((f) => ({
+      filename: f.name, company: this.talentCo(company).label, rows: null, issues: [],
+    }));
+    // Nothing came back, for any reason: one visible placeholder row rather than
+    // a silently empty tab.
+    if (!merged.rows.length) {
+      const why = this.txFallbackReason(caught, jIssues);
+      const label = (pdfs.length === 1 && !ptips.length) ? pdfs[0].name
+        : (pdfs.length + ptips.length) + " talent payroll file" + ((pdfs.length + ptips.length) === 1 ? "" : "s");
+      merged.rows.push(this.txFallbackRow("talent_name", "wages", label, why));
+      this.runLog("warn", "  Talent Payroll produced no rows — placeholder row written (" +
+        (why || "no reason given") + ")");
+    }
+    return merged;
+  }
+
+  async parseTxTalentPayroll() {
+    const pdfs = this.files.talentPdfs || [], ptips = this.files.talentPtip || [];
+    if (!pdfs.length && !ptips.length)
+      return { rows: [], issues: [], files: [], summary: null, count: 0 };
+    try {
+      const r = await this.extractTxTalentPayroll(pdfs, ptips);
+      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [],
+               summary: r.summary || null, count: (r.rows || []).length };
+    } catch (e) {
+      return { rows: [], issues: ["TX Talent Payroll extraction unavailable — " + (e.message || e)],
+               files: [], summary: null, count: 0 };
     }
   }
 
@@ -6538,6 +6754,8 @@ class Component extends DCLogic {
     const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     for (const f of sorted) {
       await this.progressFile(f.name, 1);
+      const before = merged.rows.length;
+      let caught = null, jIssues = [];
       try {
         const fd = new FormData();
         fd.append("files", f);
@@ -6547,10 +6765,20 @@ class Component extends DCLogic {
         merged.rows.push(...(j.rows || []));
         merged.issues.push(...(j.issues || []));
         merged.files.push(...(j.files || []));
+        jIssues = j.issues || [];
       } catch (e) {
-        const reason = label + " extraction failed — " + (e.message || e);
-        merged.issues.push({ file: f.name, reason });
-        merged.files.push({ file: f.name, rows: 0, error: reason });
+        caught = label + " extraction failed — " + (e.message || e);
+        merged.issues.push({ file: f.name, reason: caught });
+        merged.files.push({ file: f.name, rows: 0, error: caught });
+      }
+      // Zero rows from this file for ANY reason — retries exhausted, a backend
+      // error response, or an honest 200 with nothing in it: write a visible
+      // placeholder row rather than letting the invoice vanish.
+      if (merged.rows.length === before) {
+        const why = this.txFallbackReason(caught, jIssues);
+        merged.rows.push(this.txFallbackRow("worker_name", "gross_wages", f.name, why));
+        this.runLog("warn", "  " + f.name + " produced no rows — placeholder row written (" +
+          (why || "no reason given") + ")");
       }
     }
     return merged;
@@ -6565,6 +6793,103 @@ class Component extends DCLogic {
       return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], count: (r.rows || []).length };
     } catch (e) {
       return { rows: [], issues: [label + " extraction unavailable — " + (e.message || e)], files: [], count: 0 };
+    }
+  }
+
+  // ══ AP (POs + Reimbursement) tab (Texas) ════════════════════════════════
+  // One vendor packet per file: PO (if any) + invoice + W9 (if any) + proof of
+  // payment (if any) + whatever unrelated backup the vendor stapled on. Same
+  // real-world shape as GA's AP zone, so this posts ONE FILE PER REQUEST like
+  // extractGaAp — large scans time out when batched and one bad packet must not
+  // take the run down.
+  //
+  // Geometry: header row 8, 80 pre-built data rows 9-88, Subtotal row 89
+  // (F/G/H = SUBTOTAL, K = SUBTOTAL(2,…)), and H92 = SUM(H9:H88).
+  TX_AP_SHEET = "AP (POs + Reimbursement)";
+  TX_AP_FIRST = 9;
+  TX_AP_PREBUILT = 80;          // rows 9-88
+  TX_AP_LAST_PREBUILT = 88;
+
+  // N (Payment Entity) and O (Type) are manual entry, V (Qualify?) awaits the
+  // payer-entity/call-sheet work. Never written — but they ARE cleared per row
+  // like every other column, since this pass writes with clear:true semantics.
+  TX_AP_MAP = [
+    ["po_number", "C", "text"], ["invoice_number", "D", "text"],
+    ["invoice_date", "E", "date"], ["amount", "F", "currency"],
+    ["vendor_name", "I", "text"], ["payment_method", "J", "text"],
+    ["payment_number", "K", "text"], ["pay_date", "L", "date"],
+    ["proof_of_payment", "M", "text"], ["description", "P", "text"],
+    ["address", "Q", "text"], ["city", "R", "text"], ["state", "S", "text"],
+    ["zip", "T", "text"], ["contact_number", "U", "text"],
+    ["notes", "W", "text"],
+  ];
+
+  // Structural contract for the AP tab: the data band 9-88, the row-89 SUBTOTAL
+  // band whose start/end refs the insert-at-10 trick relies on, and seven
+  // spread-out row-8 labels so a mid-row COLUMN insert fails the check instead
+  // of writing every field one column off.
+  //
+  // Verbatim from the real template. Two cells carry baked-in whitespace
+  // quirks — E8 " Invoice Date" (leading) and R8 "City " (trailing) — and are
+  // deliberately NOT asserted: someone tidying those strings would false-fail
+  // an otherwise perfect template, and B/C/F/H/I/M/W already pin the layout.
+  TX_AP_EXPECT = {
+    headerRow: 8,
+    headerCells: {
+      B: "ITEM #", C: "PO #", F: "Invoice $", H: "Submitted Amount$",
+      I: "Vendor Name", M: "Proof of Payment?", W: "Notes:",
+    },
+    firstRow: 9,
+    lastRow: 88,
+    footerRow: 89,
+    footerFormulaCols: ["F", "G", "H", "K"],
+  };
+
+  async extractTxAp(fileList) {
+    const files = Array.from(fileList || []);
+    const p = this.state.project;
+    const merged = { rows: [], issues: [], files: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    for (const f of sorted) {
+      await this.progressFile(f.name, 1);
+      const before = merged.rows.length;
+      let caught = null, jIssues = [];
+      try {
+        const fd = new FormData();
+        fd.append("files", f);
+        fd.append("prodco_name", p.prodCompany || "");
+        fd.append("work_state", "TX");
+        const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-ap", fd);
+        merged.rows.push(...(j.rows || []));
+        merged.issues.push(...(j.issues || []));
+        merged.files.push(...(j.files || []));
+        jIssues = j.issues || [];
+      } catch (e) {
+        caught = "TX AP extraction failed — " + (e.message || e);
+        merged.issues.push({ file: f.name, reason: caught });
+        merged.files.push({ file: f.name, rows: 0, error: caught });
+      }
+      // Zero rows from this file for ANY reason — retries exhausted, a backend
+      // error response, or an honest 200 with nothing in it: write a visible
+      // placeholder row rather than letting the invoice vanish.
+      if (merged.rows.length === before) {
+        const why = this.txFallbackReason(caught, jIssues);
+        merged.rows.push(this.txFallbackRow("vendor_name", "amount", f.name, why));
+        this.runLog("warn", "  " + f.name + " produced no rows — placeholder row written (" +
+          (why || "no reason given") + ")");
+      }
+    }
+    return merged;
+  }
+
+  async parseTxAp() {
+    const files = this.files.txAp || [];
+    if (!files.length) return { rows: [], issues: [], files: [], count: 0 };
+    try {
+      const r = await this.extractTxAp(files);
+      return { rows: r.rows || [], issues: r.issues || [], files: r.files || [], count: (r.rows || []).length };
+    } catch (e) {
+      return { rows: [], issues: ["TX AP extraction unavailable — " + (e.message || e)], files: [], count: 0 };
     }
   }
 
@@ -7283,7 +7608,7 @@ class Component extends DCLogic {
       this.unhookConsole();
       this.sendRunSummary();   // fire-and-forget summary email — never blocks the download
       await new Promise((res) => setTimeout(res, 450));
-      this.setState({ generating: false, generated: true, genBilling: this._billingCount || 0, genSubVendor: this._subVendorCount || 0, genAgencyHours: this._agencyHoursCount || 0, genRetainer: this._retainerCount || 0, genResidency: this._residencyCount || 0, genGaAp: this._gaApCount || 0, genGaPetty: this._gaPettyCount || 0, genGaProdCC: this._gaProdCCCount || 0, genGaHotel: this._gaHotelCount || 0, genTxAgency: this._txAgencyCount || 0, genTxPost: this._txPostCount || 0, genTxCrewIc: this._txCrewIcCount || 0, genTxTalentIc: this._txTalentIcCount || 0, genWritten: r.fields != null ? r.fields : r.written, genFringe: this._fringeCount || 0, genPayroll: this._payrollCount || 0, genFiles: this._fringeFiles || [], genIssues: this._fringeIssues || [], genGeneratedParsers: this._generatedParsers || [], genTalent: this._talentCount || 0, genTalentFreelance: this._talentFreelanceCount || 0, genTalentIssues: this._talentIssues || [], genTalentSummary: this._talentSummary || null, genTalentPtip: !!this._ptipB64 });
+      this.setState({ generating: false, generated: true, genBilling: this._billingCount || 0, genSubVendor: this._subVendorCount || 0, genAgencyHours: this._agencyHoursCount || 0, genRetainer: this._retainerCount || 0, genResidency: this._residencyCount || 0, genGaAp: this._gaApCount || 0, genGaPetty: this._gaPettyCount || 0, genGaProdCC: this._gaProdCCCount || 0, genGaHotel: this._gaHotelCount || 0, genTxAgency: this._txAgencyCount || 0, genTxPost: this._txPostCount || 0, genTxCrewIc: this._txCrewIcCount || 0, genTxTalentIc: this._txTalentIcCount || 0, genTxTalentPayroll: this._txTalentPayrollCount || 0, genWritten: r.fields != null ? r.fields : r.written, genFringe: this._fringeCount || 0, genPayroll: this._payrollCount || 0, genFiles: this._fringeFiles || [], genIssues: this._fringeIssues || [], genGeneratedParsers: this._generatedParsers || [], genTalent: this._talentCount || 0, genTalentFreelance: this._talentFreelanceCount || 0, genTalentIssues: this._talentIssues || [], genTalentSummary: this._talentSummary || null, genTalentPtip: !!this._ptipB64 });
     } catch (e) {
       this.logRunDataDump();
       this.runLog("error", "── Run FAILED — " + (e && e.message ? e.message : String(e)) + " ──");
@@ -7444,18 +7769,7 @@ class Component extends DCLogic {
       lines.push(heading);
       lines.push("Generated " + stamp);
       lines.push("");
-      // Some extractors' catch blocks push {file, reason} objects (see
-      // extractTxAp/extractTxAgencyVendorExps/extractTxPostProduction/
-      // extractTxIc) rather than plain strings -- runLog already unwraps that
-      // shape (iss.reason || iss) when logging these to the run log; this was
-      // the one consumer of the same array that hadn't been, so a client-side
-      // "Failed to fetch" entry rendered as a bare "[object Object]" here.
-      (issues || []).forEach((msg, i) => {
-        const text = typeof msg === "string" ? msg
-          : (msg && msg.reason) ? (msg.file ? msg.file + ": " + msg.reason : msg.reason)
-          : JSON.stringify(msg);
-        lines.push((i + 1) + ". " + text);
-      });
+      (issues || []).forEach((msg, i) => lines.push((i + 1) + ". " + msg));
       lines.push("");
       const blob = new Blob([lines.join("\r\n")], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -7625,10 +7939,11 @@ class Component extends DCLogic {
         onDrop: (e) => { e.preventDefault(); this.setState({ dragZone: null }); this.addFiles(which, filterAccepted(e.dataTransfer.files)); },
       };
     };
-    // Highland is GA-only until its IL mapping exists.
+    // Only the companies wired for this workbook family (Highland: GA + TX,
+    // CMS: TX only).
     const effCo = this.effectiveTalentCo();
     const talentCoChoices = this.TALENT_COMPANIES
-      .filter((c) => !c.gaOnly || st.workbookType === "ga")
+      .filter((c) => this.talentCoAvailable(c))
       .map((c) => {
       const active = effCo === c.id;
       return {

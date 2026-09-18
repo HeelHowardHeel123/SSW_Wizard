@@ -227,7 +227,7 @@ from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
 from notify import send_run_summary
-from talent_extractor import extract_talent, extract_teams_talent, extract_highland_talent
+from talent_extractor import extract_talent, extract_teams_talent, extract_highland_talent, extract_cms_talent
 import shutil
 import uuid as _uuid
 import pdf_namer
@@ -4887,6 +4887,95 @@ async def extract_talent_endpoint(
     result["loan_out_rows"] = _loan_out_rows_from_talent(result["rows"])
     result["payroll_roster_rows"] = _payroll_roster_rows_from_talent(result["rows"])
     result["gl_billing_rows"] = _gl_billing_rows_from_talent(result["rows"])
+    return result
+
+
+# ── TX Talent Payroll ────────────────────────────────────────────────────────
+# Same payroll-company-specific parsers as GA/IL's /extract-talent, reused as-
+# is via the same talent_extractor.py functions. TX has no Loan Out/Payroll
+# Roster/GL Billing tabs (unlike GA), so those extra derived row sets are
+# intentionally not attached here. Highland, Extreme Reach, and Teams are
+# built so far; cms will be added as its own branch the same way GA's
+# endpoint dispatches on payroll_company.
+@app.post("/extract-tx-talent-payroll")
+async def extract_tx_talent_payroll(
+    pdf_files:        list[UploadFile] = File(default=[]),
+    ptip_file:         UploadFile       = File(default=None),
+    ptip_files:        list[UploadFile] = File(default=[]),
+    prodco_name:       str              = Form(default=""),
+    work_state:        str              = Form(default="TX"),
+    payroll_company:   str              = Form(default="highland"),
+    x_app_secret:      str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    pdf_bytes_list: list[tuple[str, bytes]] = []
+    for uf in sorted(pdf_files or [], key=lambda f: (f.filename or "").lower()):
+        data = await uf.read()
+        if data:
+            pdf_bytes_list.append((uf.filename, data))
+
+    ptip_bytes_list: list[bytes] = []
+    for uf in (ptip_files or []):
+        data = await uf.read()
+        if data:
+            ptip_bytes_list.append(data)
+    if not ptip_bytes_list and ptip_file:
+        data = await ptip_file.read()
+        if data:
+            ptip_bytes_list.append(data)
+
+    if not pdf_bytes_list and not ptip_bytes_list:
+        raise HTTPException(400, "Provide at least one PDF or a PTIP/Payroll Report file.")
+
+    company = payroll_company.lower()
+    if company == 'highland':
+        result = extract_highland_talent(
+            pdf_files=pdf_bytes_list,
+            report_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    elif company == 'er':
+        result = extract_talent(
+            pdf_files=pdf_bytes_list,
+            ptip_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    elif company == 'teams':
+        result = extract_teams_talent(
+            pdf_files=pdf_bytes_list,
+            ptip_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    elif company == 'cms':
+        result = extract_cms_talent(
+            pdf_files=pdf_bytes_list,
+            report_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    else:
+        raise HTTPException(400, f"Unsupported payroll_company for TX Talent Payroll: {payroll_company!r}")
+
+    # TX-only: Title Case the talent name, matching every other TX tab's
+    # convention (clean_name()) -- GA/IL's own /extract-talent endpoint is
+    # untouched and keeps passing each source document's raw name text
+    # through unchanged.
+    for row in result.get("rows", []):
+        row["talent_name"] = clean_name(row.get("talent_name", ""))
+
     return result
 
 

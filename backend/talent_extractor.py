@@ -16,6 +16,7 @@ import io
 import re
 import json
 import base64
+import difflib
 from collections import defaultdict
 from datetime import datetime
 
@@ -514,6 +515,7 @@ def _build_row(
     loan_out_company: str = '',
     talent_name_override: str = '',  # use the real performer's name instead of a matched
                                       # loan-out corp's PTIP name (caller-determined)
+    default_work_state: str = 'IL',
 ) -> dict:
     """Assemble one workbook row from PTIP and/or PDF data."""
 
@@ -573,7 +575,7 @@ def _build_row(
     if ptip:
         work_state = str(ptip.get('Work State', '') or '').strip().upper()
     elif pdf_invoice:
-        work_state = 'IL'  # default; frontend overrides from project
+        work_state = default_work_state
     else:
         work_state = ''
 
@@ -1165,6 +1167,7 @@ def extract_talent(
     project_title: str,
     workbook_type: str,
     openai_key: str = "",
+    default_work_state: str = 'IL',
 ) -> dict:
     """
     Run the full talent extraction.
@@ -1382,6 +1385,7 @@ def extract_talent(
                     workbook_type=workbook_type,
                     loan_out=bool(pdf_loan_out_company),
                     loan_out_company=pdf_loan_out_company,
+                    default_work_state=default_work_state,
                 )
                 if ptip_match is None:
                     reason = llm_reasons.get(tr['name'], '')
@@ -1407,6 +1411,7 @@ def extract_talent(
                     scenario=scenario,
                     ptip_row_no=orig_idx + 1,
                     workbook_type=workbook_type,
+                    default_work_state=default_work_state,
                 )
                 workbook_rows.append(row)
                 if not is_dup:
@@ -1427,6 +1432,7 @@ def extract_talent(
                     scenario=scenario,
                     ptip_row_no=orig_idx + 1,
                     workbook_type=workbook_type,
+                    default_work_state=default_work_state,
                 )
                 workbook_rows.append(row)
                 if not is_dup:
@@ -2220,6 +2226,7 @@ def extract_teams_talent(
     project_title:   str,
     workbook_type:   str,
     openai_key:      str = '',
+    default_work_state: str = 'IL',
 ) -> dict:
     """
     Run the full Teams talent extraction.
@@ -2418,6 +2425,7 @@ def extract_teams_talent(
                     loan_out=bool(loan_out_company),
                     loan_out_company=loan_out_company,
                     talent_name_override=tr['name'] if loan_out_company else '',
+                    default_work_state=default_work_state,
                 )
                 if ptip_match is None:
                     reason = llm_reasons.get(tr['name'], '')
@@ -2444,6 +2452,7 @@ def extract_teams_talent(
                     payment_entity='The Team Companies',
                     pah_from_pdf=True,
                     workbook_type=workbook_type,
+                    default_work_state=default_work_state,
                 )
                 workbook_rows.append(row)
                 item_no += 1
@@ -2464,6 +2473,7 @@ def extract_teams_talent(
                     payment_entity='The Team Companies',
                     pah_from_pdf=True,
                     workbook_type=workbook_type,
+                    default_work_state=default_work_state,
                 )
                 workbook_rows.append(row)
                 item_no += 1
@@ -2576,7 +2586,7 @@ def _parse_highland_amount_run(rest: str) -> tuple[list[tuple[str | None, float]
     return components, last_amt
 
 
-def parse_highland_invoice_pdf(pdf_bytes: bytes) -> dict | None:
+def parse_highland_invoice_pdf(pdf_bytes: bytes, default_work_state: str = 'GA') -> dict | None:
     """Parse a Highland Talent invoice PDF. Returns None if not recognized."""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -2597,7 +2607,7 @@ def parse_highland_invoice_pdf(pdf_bytes: bytes) -> dict | None:
         if len(invoice_date.split('/')[-1]) == 2:
             invoice_date = _expand_date_yy(invoice_date)
 
-    work_state = 'GA'
+    work_state = default_work_state
     m = re.search(r'\b([A-Z][A-Za-z]+),\s+([A-Z]{2})\b', text)
     if m:
         work_state = m.group(2)
@@ -2671,27 +2681,48 @@ def parse_highland_invoice_pdf(pdf_bytes: bytes) -> dict | None:
 
 
 # ── Highland Payroll Report parsing ─────────────────────────────────────────
+# GA's report always carries a 'PID' join key. A real TX example (NIS 006)
+# confirmed a second, genuinely different Highland report layout with no PID
+# column at all -- 'Talent Name' is the only identifying field, some field
+# names differ (e.g. 'Taxable   Gross' instead of 'Taxable Wages', 'Gross
+# Payments' instead of 'Gross Payment'), and payroll taxes are split into
+# separate FICA/MEDI/FUTA/SUTA columns rather than one combined "Employer's
+# Payroll Taxes" column. Both formats are handled here; which one a given
+# file uses is decided once per file (by whether a PID column exists), never
+# per row, since a report is either fully PID-keyed or fully name-keyed.
 
 def _normalize_highland_col(v) -> str:
     if v is None:
         return ''
-    return re.sub(r'\s*\n\s*', ' ', str(v)).strip()
+    return re.sub(r'\s+', ' ', str(v)).strip()
 
 
-_HIGHLAND_REPORT_REQUIRED_COLS = ('PID', 'Taxable Wages', 'Invoice Total')
+# At least one identifying column, plus at least one recognized name for the
+# wages and invoice-total columns, must be present for a sheet to qualify.
+_HIGHLAND_REPORT_ID_COLS   = ('PID', 'Talent Name')
+_HIGHLAND_REPORT_WAGE_COLS = ('Taxable Wages', 'Taxable Gross')
+
+
+def _highland_report_cols_present(norms: list[str]) -> bool:
+    return (
+        any(col in norms for col in _HIGHLAND_REPORT_ID_COLS)
+        and any(col in norms for col in _HIGHLAND_REPORT_WAGE_COLS)
+        and 'Invoice Total' in norms
+    )
 
 
 def _find_highland_report_sheet(wb):
     """Highland's report workbook is inconsistent -- sometimes one sheet,
     sometimes several (a GA-tax-only view, an audit/QA copy, a sheet named
-    after a date). Find whichever sheet actually has the full financial
-    columns, preferring a name that doesn't look like a QA/audit copy."""
+    after a date, a work-state-filtered slice like NIS 006's "(TX)" tab).
+    Find whichever sheet actually has the full financial columns, preferring
+    a name that doesn't look like a QA/audit copy."""
     candidates = []
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         for row_vals in ws.iter_rows(max_row=10, values_only=True):
             norms = [_normalize_highland_col(v) for v in row_vals]
-            if all(col in norms for col in _HIGHLAND_REPORT_REQUIRED_COLS):
+            if _highland_report_cols_present(norms):
                 candidates.append((sheet_name, ws, norms))
                 break
     if not candidates:
@@ -2702,10 +2733,15 @@ def _find_highland_report_sheet(wb):
     return candidates[0][1], candidates[0][2]
 
 
-def parse_highland_report_xlsx(xlsx_bytes_list: list[bytes]) -> tuple[list[dict], list[str]]:
+def parse_highland_report_xlsx(
+    xlsx_bytes_list: list[bytes],
+) -> tuple[list[dict], list[str]]:
     """Read one or more Highland Payroll Report Excel files. Returns
-    (rows, issues). Each row is one PID, aggregated across however many
-    invoices the report itself grouped together for that PID."""
+    (rows, issues). Each row is one PID (or, in the no-PID format, one
+    talent name), aggregated across however many invoices the report itself
+    grouped together for that person. 'pid' is '' when the file has no PID
+    column at all -- extract_highland_talent() matches those rows to the PDF
+    by name (with a fuzzy fallback) instead of by PID."""
     rows:   list[dict] = []
     issues: list[str]  = []
 
@@ -2714,13 +2750,13 @@ def parse_highland_report_xlsx(xlsx_bytes_list: list[bytes]) -> tuple[list[dict]
             wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
             ws, headers = _find_highland_report_sheet(wb)
             if ws is None:
-                issues.append(f"Payroll report {file_i + 1}: could not find a sheet with PID/Taxable Wages/Invoice Total columns")
+                issues.append(f"Payroll report {file_i + 1}: could not find a sheet with a Talent Name or PID column, a Taxable Wages/Gross column, and an Invoice Total column")
                 continue
 
             hdr_row_idx = None
             for r_idx, row_vals in enumerate(ws.iter_rows(max_row=10, values_only=True)):
                 norms = [_normalize_highland_col(v) for v in row_vals]
-                if all(col in norms for col in _HIGHLAND_REPORT_REQUIRED_COLS):
+                if _highland_report_cols_present(norms):
                     hdr_row_idx = r_idx
                     break
             if hdr_row_idx is None:
@@ -2728,34 +2764,60 @@ def parse_highland_report_xlsx(xlsx_bytes_list: list[bytes]) -> tuple[list[dict]
 
             file_headers = [_normalize_highland_col(v) for v in list(ws.iter_rows(
                 min_row=hdr_row_idx + 1, max_row=hdr_row_idx + 1, values_only=True))[0]]
+            has_pid_col = 'PID' in file_headers
 
             for row_vals in ws.iter_rows(min_row=hdr_row_idx + 2, values_only=True):
                 row = dict(zip(file_headers, row_vals))
-                pid = str(row.get('PID', '') or '').strip()
-                if not _HIGHLAND_PID_RE.match(pid):
-                    continue  # skips totals rows, stray dates, blank rows
-
                 name = str(row.get('Talent/Agency Name', '') or row.get('Talent Name', '') or '').strip()
+
+                if has_pid_col:
+                    pid = str(row.get('PID', '') or '').strip()
+                    if not _HIGHLAND_PID_RE.match(pid):
+                        continue  # skips totals rows, stray dates, blank rows
+                else:
+                    pid = ''
+                    if not name or name.strip().upper() in ('TOTAL', 'TOTALS'):
+                        continue  # skips totals rows, stray dates, blank rows
+
                 inv_no_raw = str(row.get('Invoice #', '') or '').strip()
+
+                er_taxes_combined = row.get("Employer's Payroll Taxes")
+                if er_taxes_combined is None:
+                    # No-PID format splits this into separate tax columns
+                    # instead of one combined figure -- sum them.
+                    er_taxes_combined = (
+                        _to_float(row.get('FICA')) + _to_float(row.get('MEDI'))
+                        + _to_float(row.get('FUTA')) + _to_float(row.get('SUTA'))
+                    )
 
                 rows.append({
                     'pid':             pid,
                     'name':            name,
-                    'loanout':         str(row.get('Loan-Out Company', '') or '').strip(),
+                    'loanout':         str(row.get('Loan-Out Company', '') or row.get('Loan-Out', '') or '').strip(),
+                    # Left blank when missing -- _build_highland_row() already
+                    # falls back to default_work_state for a blank report row.
                     'work_state':      str(row.get('Work State', '') or '').strip(),
                     'address':         str(row.get('Address', '') or '').strip(),
                     'city':            str(row.get('City', '') or '').strip(),
                     'state':           str(row.get('State', '') or '').strip(),
                     'zip':             str(row.get('Zip', '') or '').strip(),
                     'invoice_no_raw':  inv_no_raw,
-                    'gross_payment':   _to_float(row.get('Gross Payment')),
+                    'gross_payment':   _to_float(row.get('Gross Payment') if 'Gross Payment' in row else row.get('Gross Payments')),
                     'expense_reimb':   _to_float(row.get('Expense Reimb')),
-                    'taxable_wages':   _to_float(row.get('Taxable Wages')),
+                    'taxable_wages':   _to_float(row.get('Taxable Wages') if 'Taxable Wages' in row else row.get('Taxable Gross')),
                     'pension_health':  _to_float(row.get('Pension & Health')),
-                    'employer_taxes':  _to_float(row.get("Employer's Payroll Taxes")),
+                    'employer_taxes':  round(_to_float(er_taxes_combined), 2),
                     'workers_comp':    _to_float(row.get("Workers' Comp Insurance")),
                     'service_charge':  _to_float(row.get('Service Charge')),
                     'invoice_total':   _to_float(row.get('Invoice Total')),
+                    # No 'Invoice #' column at all (not just a blank cell) means
+                    # this report row consolidates however many invoices the
+                    # report itself grouped for this person, with no way to
+                    # tell how many from the report alone -- the invoice
+                    # number(s) we show come entirely from matching this row
+                    # to the PDF, so we always spell out that breakdown in the
+                    # notes for review, not just when more than one PDF hit.
+                    'invoice_col_present': 'Invoice #' in file_headers,
                 })
         except Exception as e:
             issues.append(f"Payroll report {file_i + 1}: parse error — {e}")
@@ -2775,6 +2837,7 @@ def _build_highland_row(
     received_invoice: bool,
     first_row_of_invoice: bool,    # PDF-only mode: absorb this invoice's footer totals
     notes: str = '',
+    default_work_state: str = 'GA',
 ) -> dict:
     """Assemble one workbook row, mirroring _build_row()'s output shape so
     main.py's response contract is identical regardless of payroll company."""
@@ -2783,7 +2846,7 @@ def _build_highland_row(
         name       = report_row['name']
         is_agent   = _is_company_name(name)
         title      = 'Agency fee' if is_agent else (pdf_row.get('title', '') if pdf_row else '')
-        work_state = report_row['work_state'] or 'GA'
+        work_state = report_row['work_state'] or default_work_state
         home_addr  = report_row['address']
         city       = report_row['city']
         state      = report_row['state']
@@ -2803,7 +2866,7 @@ def _build_highland_row(
         name       = pdf_row['name']
         is_agent   = pdf_row['is_agent']
         title      = pdf_row['title']
-        work_state = pdf_invoice['work_state'] if pdf_invoice else 'GA'
+        work_state = pdf_invoice['work_state'] if pdf_invoice else default_work_state
         home_addr = city = state = zip_code = ''
         wages    = pdf_row['wages']
         misc_pmt = pdf_row['misc_pmt']
@@ -2855,6 +2918,7 @@ def _build_highland_row(
         'total':          total,
         'check_number':   '',
         'received_invoice': received_invoice,
+        'on_pdf':         received_invoice,  # TX Talent Payroll's "On PDF" column
         'payment_entity': 'Highland Talent Payments, Inc',
         'type':           'Session',
         'home_address':   home_addr,
@@ -2870,12 +2934,39 @@ def _build_highland_row(
     }
 
 
+# Shared by any payroll-company report format with no reliable per-row join
+# key (Highland's no-PID report, CMS's payroll register). Threshold picked
+# from the one real TX mismatch seen so far (Highland/NIS 006: PTIP "JACOB
+# R. BEEBE" vs PDF "JACOB R. BEEGE", a one-letter OCR/typo difference, ratio
+# 0.929) -- high enough that two genuinely different people's names
+# shouldn't collide, since this is only a fallback for name-only formats
+# where exact matching is the norm (24 of 25 names on that same Highland job
+# matched exactly with no fuzzy step needed at all).
+_TALENT_NAME_FUZZY_THRESHOLD = 0.85
+
+
+def _normalize_talent_name(name: str) -> str:
+    return re.sub(r'\s+', ' ', (name or '')).strip().upper()
+
+
+def _fuzzy_match_talent_name(target: str, candidates: set[str]) -> str | None:
+    """Best-match `target` (already normalized) against `candidates` (also
+    normalized) via difflib ratio. Returns the matched candidate, or None if
+    nothing clears _TALENT_NAME_FUZZY_THRESHOLD."""
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda c: difflib.SequenceMatcher(None, target, c).ratio())
+    ratio = difflib.SequenceMatcher(None, target, best).ratio()
+    return best if ratio >= _TALENT_NAME_FUZZY_THRESHOLD else None
+
+
 def extract_highland_talent(
     pdf_files:         list[tuple[str, bytes]],
     report_bytes_list:  list[bytes] | None,
     project_title:      str,
     workbook_type:      str,
     openai_key:         str = '',
+    default_work_state: str = 'GA',
 ) -> dict:
     """Run the full Highland Talent extraction. Returns the same shape as
     extract_talent()/extract_teams_talent()."""
@@ -2886,7 +2977,7 @@ def extract_highland_talent(
     # the wage-mismatch note, and it's the only source at all in PDF-only mode.
     pdf_invoices: dict[str, dict] = {}
     for filename, data in pdf_files:
-        result = parse_highland_invoice_pdf(data)
+        result = parse_highland_invoice_pdf(data, default_work_state=default_work_state)
         if result is None:
             issues.append(f"{filename}: not recognized as a Highland Talent invoice")
             continue
@@ -2906,10 +2997,19 @@ def extract_highland_talent(
     # as the invoice-number fallback when the report has no Invoice # column.
     pid_pdf_hits: dict[str, list[tuple[str, float]]] = defaultdict(list)
     pid_pdf_row:  dict[str, dict] = {}  # last-seen raw PDF row per PID, for PDF-only mode
+    # Same, but keyed by normalized talent name -- for the no-PID report
+    # format, where PID<->PDF matching isn't available at all.
+    name_pdf_hits: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    name_pdf_row:  dict[str, dict] = {}
+    name_pdf_raw:  dict[str, str]  = {}  # normalized -> original PDF spelling, for the note text
     for inv_no, inv in pdf_invoices.items():
         for r in inv['talent_rows']:
             pid_pdf_hits[r['pid']].append((inv_no, r['row_total']))
             pid_pdf_row[r['pid']] = r
+            name_key = _normalize_talent_name(r['name'])
+            name_pdf_hits[name_key].append((inv_no, r['row_total']))
+            name_pdf_row[name_key] = r
+            name_pdf_raw[name_key] = r['name']
 
     # ── Step 2: Parse the payroll report, if provided ────────────────────────
     report_rows: list[dict] = []
@@ -2921,12 +3021,41 @@ def extract_highland_talent(
     item_no = 1
 
     if report_rows:
-        # ── Report-driven mode: one row per PID, at whatever granularity the
-        # report itself used. Never re-derive wages/taxes from the PDFs.
+        # ── Report-driven mode: one row per PID (or, no-PID format, per
+        # talent name), at whatever granularity the report itself used.
+        # Never re-derive wages/taxes from the PDFs. A report is either
+        # fully PID-keyed or fully name-keyed, never mixed within one file.
+        report_is_pid_keyed = any(rr['pid'] for rr in report_rows)
         report_pids = set()
+        matched_name_keys: set[str] = set()
+        pending: list[dict] = []  # built in file order, then sorted by invoice # before numbering
+
         for rr in report_rows:
-            report_pids.add(rr['pid'])
-            hits = pid_pdf_hits.get(rr['pid'], [])
+            discrepancy_note = ''
+            if rr['pid']:
+                report_pids.add(rr['pid'])
+                hits = pid_pdf_hits.get(rr['pid'], [])
+                matched_pdf_row = pid_pdf_row.get(rr['pid'])
+            else:
+                rr_key = _normalize_talent_name(rr['name'])
+                if rr_key in name_pdf_hits:
+                    matched_key = rr_key
+                else:
+                    pool = set(name_pdf_hits.keys()) - matched_name_keys
+                    matched_key = _fuzzy_match_talent_name(rr_key, pool)
+                    if matched_key:
+                        discrepancy_note = (
+                            f'Name Discrepancy: PDF "{name_pdf_raw[matched_key]}" '
+                            f'vs PTIP "{rr["name"]}"'
+                        )
+                if matched_key:
+                    matched_name_keys.add(matched_key)
+                    hits = name_pdf_hits.get(matched_key, [])
+                    matched_pdf_row = name_pdf_row.get(matched_key)
+                else:
+                    hits = []
+                    matched_pdf_row = None
+
             pdf_sum = round(sum(total for _, total in hits), 2)
             received = bool(hits)
 
@@ -2945,35 +3074,67 @@ def extract_highland_talent(
             elif abs(pdf_sum - rr['gross_payment']) > 0:
                 notes_parts.append(f"Production Report Gross Payment = ${rr['gross_payment']:,.2f} "
                                     f"but we only have ${pdf_sum:,.2f} in PDF wages")
-            if len(hits) > 1:
-                # Show how a multi-invoice PID's total actually breaks down,
-                # since the workbook only ever shows one combined number.
+            if hits and (len(hits) > 1 or not rr['invoice_col_present']):
+                # Show how the invoice number(s) actually break down --
+                # either because there's more than one (the workbook only
+                # ever shows one combined number), or because the report has
+                # no Invoice # column at all, so the invoice_no we're
+                # showing was entirely inferred from matching this row to
+                # the PDF rather than read from the report itself.
                 breakdown = ', '.join(
                     f"Invoice {inv} (${amt:,.2f})"
                     for inv, amt in sorted(hits, key=lambda h: h[0].zfill(20))
                 )
                 notes_parts.append(breakdown)
+            if discrepancy_note:
+                notes_parts.append(discrepancy_note)
             notes = '; '.join(notes_parts)
 
+            pending.append({
+                'report_row': rr, 'pdf_row': matched_pdf_row, 'invoice_no': invoice_no,
+                'received': received, 'notes': notes,
+            })
+
+        # Sort by invoice number (same rule as ER/Teams: group by invoice #,
+        # file order preserved within a group/for rows with no invoice # at
+        # all) before assigning ITEM # -- a person matched to more than one
+        # invoice sorts on the lowest of them.
+        def _highland_sort_key(invoice_no: str) -> tuple:
+            toks = [t.strip() for t in invoice_no.split(',') if t.strip()]
+            if not toks:
+                return (1, '')
+            return (0, min(t.zfill(20) for t in toks))
+
+        for p in sorted(pending, key=lambda p: _highland_sort_key(p['invoice_no'])):
             row = _build_highland_row(
                 item_no=item_no,
-                report_row=rr,
-                pdf_row=pid_pdf_row.get(rr['pid']),
+                report_row=p['report_row'],
+                pdf_row=p['pdf_row'],
                 pdf_invoice=None,
-                invoice_no=invoice_no,
-                received_invoice=received,
+                invoice_no=p['invoice_no'],
+                received_invoice=p['received'],
                 first_row_of_invoice=False,
-                notes=notes,
+                notes=p['notes'],
+                default_work_state=default_work_state,
             )
             workbook_rows.append(row)
             item_no += 1
 
-        # Completeness check: any PID seen on a PDF but absent from the report
-        for pid, hits in pid_pdf_hits.items():
-            if pid not in report_pids:
-                inv_list = ', '.join(sorted({inv for inv, _ in hits}))
-                name = pid_pdf_row.get(pid, {}).get('name', pid)
-                issues.append(f"{name} ({pid}), invoice(s) {inv_list}: on the PDF but not found in the payroll report")
+        if report_is_pid_keyed:
+            # Completeness check: any PID seen on a PDF but absent from the report
+            for pid, hits in pid_pdf_hits.items():
+                if pid not in report_pids:
+                    inv_list = ', '.join(sorted({inv for inv, _ in hits}))
+                    name = pid_pdf_row.get(pid, {}).get('name', pid)
+                    issues.append(f"{name} ({pid}), invoice(s) {inv_list}: on the PDF but not found in the payroll report")
+        else:
+            # Completeness check: any PDF name never matched (exactly or by
+            # fuzzy match) to a name-keyed report row
+            for name_key, hits in name_pdf_hits.items():
+                if name_key not in matched_name_keys:
+                    inv_list = ', '.join(sorted({inv for inv, _ in hits}))
+                    name = name_pdf_row.get(name_key, {}).get('name', name_key)
+                    issues.append(f"{name}, invoice(s) {inv_list}: on the PDF but not found in the payroll report")
 
         # Completeness check: any invoice # the report references that we
         # never received a PDF for
@@ -3004,6 +3165,7 @@ def extract_highland_talent(
                     invoice_no=inv_no,
                     received_invoice=True,
                     first_row_of_invoice=is_first,
+                    default_work_state=default_work_state,
                 )
                 workbook_rows.append(row)
                 item_no += 1
@@ -3023,6 +3185,518 @@ def extract_highland_talent(
 
     if _is_ga_workbook(workbook_type):
         _classify_aicp_codes_talent(workbook_rows, openai_key)
+
+    return {
+        'rows': workbook_rows,
+        'ptip_excel_b64': None,
+        'summary': {
+            'total_rows':         len(workbook_rows),
+            'invoices_with_pdf':  sorted(received_invoice_nos),
+            'invoices_ptip_only': [],
+            'duplicates_found':   0,
+            'issues':             issues,
+        },
+    }
+
+
+# ── CMS Productions (ART Payroll) invoice PDF parsing ───────────────────────
+# CMS sends one master bill per wire payment that bundles several separate
+# ART-numbered sub-invoices underneath it -- each sub-invoice is its own
+# commercial/spot, with its own per-performer summary page (Wages, Corp.,
+# Agent, Misc., Benefits, Tax Fee, Service Fee, Total) followed by several
+# pages of daily work-session backup for that same sub-invoice. Confirmed
+# real via SONI 005: master bill #36214 bundled 12 ART invoices (604117...
+# 604132), one per commercial ("Bacon Pretzel Smasher", "Booster", "Darlene",
+# "Injury", each split into OCP/BG sub-invoices). Only the summary page is
+# used as the row source -- a performer paid across several daily sessions
+# within one sub-invoice (e.g. two work days) already has those summed into
+# one line on their sub-invoice's own summary table, so the daily backup
+# pages are never itemized into separate rows.
+_CMS_SUMMARY_HEADER = 'Wages Corp. Agent Misc. Benefits Tax Fee Service Fee Total'
+
+_CMS_ROW_RE = re.compile(
+    r"^([A-Z][A-Z.,'\-]*(?:\s+[A-Z][A-Z.,'\-]*)*)\s+"
+    r"([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+"
+    r"([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+"
+    r"([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$"
+)
+_CMS_TOTALS_RE = re.compile(
+    r"^([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+"
+    r"([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+"
+    r"([\d,]+\.\d{2})\s+([\d,]+\.\d{2})$"
+)
+# The commercial title/ID line is the only line on a summary page shaped
+# "TITLE (ID)" -- e.g. "BACON PRETZEL SMASHER (BACNPRETZELSMASH)".
+_CMS_COMMERCIAL_RE = re.compile(r'^(.+?)\s+\(([A-Z0-9]+)\)$')
+
+
+def parse_cms_invoice_pdf(pdf_bytes: bytes) -> list[dict]:
+    """Parse a CMS Productions master bill PDF. Returns one dict per bundled
+    ART sub-invoice: {invoice_no, invoice_date, commercial_title,
+    commercial_id, talent_rows: [{name, wages, corp, agent, misc, benefits,
+    tax_fee, service_fee, total}, ...]}. A row's own 'total' already reflects
+    everything for that person on that sub-invoice -- corp > 0 (with wages
+    == 0) means the payment routed through a loan-out company instead of
+    being paid directly. Returns [] if this doesn't look like a CMS invoice
+    at all."""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            pages = [pg.extract_text() or '' for pg in pdf.pages]
+    except Exception:
+        return []
+
+    if not any('CMS PRODUCTIONS' in p for p in pages):
+        return []
+
+    invoices: dict[str, dict] = {}
+
+    for page_text in pages:
+        if _CMS_SUMMARY_HEADER not in page_text:
+            continue  # cover bill page, or a daily-backup detail page -- skip
+
+        m = re.search(r'INVOICE#\s*(\d+)', page_text)
+        if not m:
+            continue
+        inv_no = m.group(1)
+        if inv_no in invoices:
+            continue  # a summary page should only appear once per sub-invoice
+
+        m = re.search(r'DATE:\s*(\d{1,2}/\d{1,2}/\d{4})', page_text)
+        invoice_date = _fmt_date(m.group(1)) if m else ''
+
+        commercial_title = commercial_id = ''
+        for line in page_text.split('\n'):
+            cm = _CMS_COMMERCIAL_RE.match(line.strip())
+            if cm and cm.group(1).strip() != 'CMS PRODUCTIONS':
+                commercial_title, commercial_id = cm.group(1).strip(), cm.group(2).strip()
+                break
+
+        talent_rows: list[dict] = []
+        in_table = False
+        for raw_line in page_text.split('\n'):
+            line = raw_line.strip()
+            if line == _CMS_SUMMARY_HEADER:
+                in_table = True
+                continue
+            if not in_table:
+                continue
+            rm = _CMS_ROW_RE.match(line)
+            if rm:
+                name, wages, corp, agent, misc, benefits, tax_fee, service_fee, total = rm.groups()
+                talent_rows.append({
+                    'name':         name.strip(),
+                    'wages':        _to_float(wages),
+                    'corp':         _to_float(corp),
+                    'agent':        _to_float(agent),
+                    'misc':         _to_float(misc),
+                    'benefits':     _to_float(benefits),
+                    'tax_fee':      _to_float(tax_fee),
+                    'service_fee':  _to_float(service_fee),
+                    'total':        _to_float(total),
+                })
+                continue
+            if _CMS_TOTALS_RE.match(line):
+                in_table = False  # reached the table's own totals row -- done
+                continue
+
+        invoices[inv_no] = {
+            'invoice_no':        inv_no,
+            'invoice_date':      invoice_date,
+            'commercial_title':  commercial_title,
+            'commercial_id':     commercial_id,
+            'talent_rows':       talent_rows,
+        }
+
+    return list(invoices.values())
+
+
+# ── CMS Productions payroll register parsing ─────────────────────────────────
+# CMS's own payroll register ("Client Audit Report") has NO invoice-number
+# column at all and isn't scoped to one sub-invoice -- it can span every
+# commercial/spot CMS billed for the client in one file. Names are also
+# stored differently than the PDF: separate Last Name/First Name columns,
+# no middle initial, vs. the PDF's own "FIRST [MIDDLE] LAST" text -- see
+# _cms_name_key() below, which is why this needs its own name-matching key
+# rather than reusing _normalize_talent_name() as-is.
+
+def _normalize_cms_col(v) -> str:
+    if v is None:
+        return ''
+    return re.sub(r'\s+', ' ', str(v)).strip()
+
+
+_CMS_REPORT_HEADER_MARKERS = ('Gross Wages', 'Service Fee')
+
+
+def _find_cms_report_sheet(wb):
+    """CMS's register sometimes repeats itself across several sheets (a raw
+    'Original' export, a hand-edited working copy) at inconsistent header
+    row positions -- scan each sheet's first 30 rows for the header. Prefer
+    a sheet name suggesting a reviewed copy; otherwise the last match found,
+    since a hand-edited copy tends to be added after the raw export."""
+    candidates = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        for row_vals in ws.iter_rows(max_row=30, values_only=True):
+            norms = [_normalize_cms_col(v) for v in row_vals]
+            if (all(col in norms for col in _CMS_REPORT_HEADER_MARKERS)
+                    and ('Last Name' in norms or 'Full Name' in norms)):
+                candidates.append((sheet_name, ws, norms))
+                break
+    if not candidates:
+        return None, []
+    for sheet_name, ws, norms in candidates:
+        if 'edit' in sheet_name.lower():
+            return ws, norms
+    return candidates[-1][1], candidates[-1][2]
+
+
+def parse_cms_report_xlsx(xlsx_bytes_list: list[bytes]) -> tuple[list[dict], list[str]]:
+    """Read one or more CMS payroll register Excel files. Returns
+    (rows, issues). Every row is matched to the PDF entirely by name (see
+    extract_cms_talent) since there's no invoice number or ID column here to
+    join on at all."""
+    rows:   list[dict] = []
+    issues: list[str]  = []
+
+    for file_i, xlsx_bytes in enumerate(xlsx_bytes_list):
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+            ws, headers = _find_cms_report_sheet(wb)
+            if ws is None:
+                issues.append(f"Payroll register {file_i + 1}: could not find a sheet with Last Name/Full Name, Gross Wages, and Service Fee columns")
+                continue
+
+            hdr_row_idx = None
+            for r_idx, row_vals in enumerate(ws.iter_rows(max_row=30, values_only=True)):
+                norms = [_normalize_cms_col(v) for v in row_vals]
+                if (all(col in norms for col in _CMS_REPORT_HEADER_MARKERS)
+                        and ('Last Name' in norms or 'Full Name' in norms)):
+                    hdr_row_idx = r_idx
+                    break
+            if hdr_row_idx is None:
+                continue
+
+            file_headers = [_normalize_cms_col(v) for v in list(ws.iter_rows(
+                min_row=hdr_row_idx + 1, max_row=hdr_row_idx + 1, values_only=True))[0]]
+
+            for row_vals in ws.iter_rows(min_row=hdr_row_idx + 2, values_only=True):
+                row = dict(zip(file_headers, row_vals))
+                last  = str(row.get('Last Name', '') or '').strip()
+                first = str(row.get('First Name', '') or '').strip()
+                full  = str(row.get('Full Name', '') or '').strip()
+                name = full or (f"{last}, {first}" if last and first else (last or first))
+                gross_wages = _to_float(row.get('Gross Wages'))
+                service_fee = _to_float(row.get('Service Fee'))
+                if not name or (not gross_wages and not service_fee):
+                    continue  # skips totals rows, stray blank rows
+
+                rows.append({
+                    'name':         name,
+                    'address':      str(row.get('Address', '') or '').strip(),
+                    'city':         str(row.get('City', '') or '').strip(),
+                    'state':        str(row.get('State', '') or '').strip(),
+                    'zip':          str(row.get('ZIP Code', '') or '').strip(),
+                    'gross_wages':  gross_wages,
+                    'expenses':     _to_float(row.get('Expenses')),
+                    'benefit':      _to_float(row.get('Benefit')),
+                    'service_fee':  service_fee,
+                    'tax_fee':      _to_float(row.get('Tax Fee')),
+                })
+        except Exception as e:
+            issues.append(f"Payroll register {file_i + 1}: parse error — {e}")
+
+    return rows, issues
+
+
+# ── CMS row assembly and main extraction entry point ─────────────────────────
+
+def _cms_name_key(name: str) -> str:
+    """Order-independent, middle-initial-insensitive match key. Confirmed
+    necessary via SONI 005: the PDF summary table names a loan-out performer
+    "BLAKE J. GIBBONS" while the payroll register only ever has separate
+    Last Name "GIBBONS" / First Name "BLAKE" columns with no middle initial
+    at all -- a plain normalize-and-compare (which works fine for Highland,
+    where both sides already share one name order) would never match these
+    as the same person."""
+    tokens = re.split(r'[,\s]+', (name or '').upper())
+    significant = {t.strip('.') for t in tokens if len(t.strip('.')) > 1}
+    return ' '.join(sorted(significant))
+
+
+def _build_cms_row(
+    *,
+    item_no: int,
+    report_row: dict | None,
+    hits: list[dict],              # matched CMS PDF sub-invoice hits for this person (possibly >1)
+    received_invoice: bool,
+    invoice_no: str,
+    notes: str = '',
+    default_work_state: str = 'TX',
+) -> dict:
+    """Assemble one workbook row, mirroring _build_highland_row()'s output
+    shape so main.py's response contract is identical across payroll
+    companies. Financial figures always come from whichever single source is
+    authoritative for this row -- the payroll register when it's present
+    (report-driven mode never re-derives amounts from the PDF, only cross-
+    checks against it), otherwise the PDF hit(s) directly."""
+
+    pdf_name = hits[0]['pdf_row']['name'] if hits else ''
+    is_loan_out = any(h['pdf_row']['corp'] > 0 for h in hits)
+    commercial_titles = sorted({h['commercial_title'] for h in hits if h['commercial_title']})
+    commercial_ids    = sorted({h['commercial_id']    for h in hits if h['commercial_id']})
+    invoice_date = hits[0]['invoice_date'] if hits else ''
+
+    if report_row:
+        name     = pdf_name or report_row['name']
+        wages    = report_row['gross_wages']
+        misc_pmt = report_row['expenses']
+        sag      = report_row['benefit']
+        er_tax   = report_row['tax_fee']
+        handling = report_row['service_fee']
+        total    = round(wages + misc_pmt + sag + er_tax + handling, 2)
+        home_addr, city, state, zip_code = (
+            report_row['address'], report_row['city'], report_row['state'], report_row['zip'],
+        )
+        on_ptip = True
+    elif hits:
+        pdf_row  = hits[0]['pdf_row']
+        name     = pdf_row['name']
+        # Loan-out payments route through Corp. instead of Wages -- fold
+        # together into one wages figure the same way Agent (always 0 in
+        # every real example seen) folds into misc.
+        wages    = pdf_row['wages'] + pdf_row['corp']
+        misc_pmt = pdf_row['misc'] + pdf_row['agent']
+        sag      = pdf_row['benefits']
+        er_tax   = pdf_row['tax_fee']
+        handling = pdf_row['service_fee']
+        total    = pdf_row['total']
+        home_addr = city = state = zip_code = ''
+        on_ptip = False
+    else:
+        name = ''
+        wages = misc_pmt = sag = er_tax = handling = total = 0.0
+        home_addr = city = state = zip_code = ''
+        on_ptip = False
+
+    # Qualification is a human judgment call, not something the automation
+    # should decide -- always leave this blank for the reviewer to fill in.
+    qualify = ''
+
+    return {
+        'item_no':        item_no,
+        'qualify':        qualify,
+        'on_ptip':        on_ptip,
+        'ptip_amount':    round(wages + misc_pmt + sag + er_tax + handling, 2) if report_row else None,
+        'work_state':     default_work_state,  # CMS supplies no work-state column on either source
+        'talent_name':    name,
+        'loan_out':       'YES' if is_loan_out else 'NO',
+        'loan_out_company': '',  # not identifiable from the summary table alone; not needed for TX
+        'title':          '',
+        'work_days':      None,
+        'work_dates':     '',
+        'invoice_no':     invoice_no,
+        'invoice_date':   invoice_date,
+        'wages':          round(wages, 2),
+        'misc_pymt':      round(misc_pmt, 2),
+        'er_tax':         round(er_tax, 2),
+        'wc':             0.0,  # CMS has no separate Workers Comp line item
+        'handling':       round(handling, 2),
+        'sag':            round(sag, 2),
+        'signatory_fee':  0.0,
+        'other_fees':     0.0,
+        'state_tax_withheld':        0.0,
+        'local_tax_withheld':        0.0,
+        'state_disability_withheld': 0.0,
+        'total':          round(total, 2),
+        'check_number':   '',
+        'received_invoice': received_invoice,
+        'on_pdf':         received_invoice,
+        'payment_entity': 'Corporate Management Solutions, Inc. dba CMS Productions',
+        'type':           'Session',
+        'home_address':   home_addr,
+        'city':           city,
+        'state':          state,
+        'zip':            zip_code,
+        'ssn_fein':          '',
+        'commercial_id':     ', '.join(commercial_ids),
+        'commercial_title':  ', '.join(commercial_titles),
+        'notes':             notes,
+        'ptip_row_no':    None,
+        'is_duplicate':   False,
+    }
+
+
+def _cms_invoice_sort_key(invoice_no: str) -> tuple:
+    toks = [t.strip() for t in invoice_no.split(',') if t.strip()]
+    if not toks:
+        return (1, '')
+    return (0, min(t.zfill(20) for t in toks))
+
+
+def extract_cms_talent(
+    pdf_files:          list[tuple[str, bytes]],
+    report_bytes_list:  list[bytes] | None,
+    project_title:      str,
+    workbook_type:      str,
+    openai_key:         str = '',
+    default_work_state: str = 'TX',
+) -> dict:
+    """Run the full CMS Productions extraction. Returns the same shape as
+    extract_talent()/extract_teams_talent()/extract_highland_talent()."""
+    issues: list[str] = []
+
+    # ── Step 1: Parse every PDF (a "master bill" bundling several ART-
+    # numbered sub-invoices) -- always needed, both as the PDF-only fallback
+    # and to match against the payroll register when one exists.
+    all_sub_invoices: list[dict] = []
+    received_invoice_nos: set[str] = set()
+    for filename, data in pdf_files:
+        subs = parse_cms_invoice_pdf(data)
+        if not subs:
+            issues.append(f"{filename}: not recognized as a CMS Productions invoice")
+            continue
+        for sub in subs:
+            if sub['invoice_no'] in received_invoice_nos:
+                issues.append(f"{filename}: duplicate invoice number {sub['invoice_no']} — skipped")
+                continue
+            received_invoice_nos.add(sub['invoice_no'])
+            all_sub_invoices.append(sub)
+
+    name_pdf_hits: dict[str, list[dict]] = defaultdict(list)
+    name_pdf_raw:  dict[str, str] = {}
+    for sub in all_sub_invoices:
+        for r in sub['talent_rows']:
+            key = _cms_name_key(r['name'])
+            name_pdf_hits[key].append({
+                'invoice_no':       sub['invoice_no'],
+                'invoice_date':     sub['invoice_date'],
+                'commercial_title': sub['commercial_title'],
+                'commercial_id':    sub['commercial_id'],
+                'pdf_row':          r,
+            })
+            name_pdf_raw[key] = r['name']
+
+    # ── Step 2: Parse the payroll register, if provided ──────────────────────
+    report_rows: list[dict] = []
+    if report_bytes_list:
+        report_rows, report_issues = parse_cms_report_xlsx(report_bytes_list)
+        issues.extend(report_issues)
+
+    workbook_rows: list[dict] = []
+    item_no = 1
+
+    if report_rows:
+        # ── Report-driven mode: one row per register entry. Never re-derive
+        # wages/taxes from the PDFs -- only cross-check against them.
+        matched_name_keys: set[str] = set()
+        pending: list[dict] = []
+
+        for rr in report_rows:
+            rr_key = _cms_name_key(rr['name'])
+            discrepancy_note = ''
+            if rr_key in name_pdf_hits:
+                matched_key = rr_key
+            else:
+                pool = set(name_pdf_hits.keys()) - matched_name_keys
+                matched_key = _fuzzy_match_talent_name(rr_key, pool)
+                if matched_key:
+                    discrepancy_note = (
+                        f'Name Discrepancy: PDF "{name_pdf_raw[matched_key]}" '
+                        f'vs Payroll Register "{rr["name"]}"'
+                    )
+
+            hits = name_pdf_hits.get(matched_key, []) if matched_key else []
+            if matched_key:
+                matched_name_keys.add(matched_key)
+
+            received = bool(hits)
+            pdf_sum = round(sum(h['pdf_row']['total'] for h in hits), 2)
+            register_total = round(
+                rr['gross_wages'] + rr['expenses'] + rr['benefit'] + rr['tax_fee'] + rr['service_fee'], 2
+            )
+            invoice_no = ', '.join(
+                sorted({h['invoice_no'] for h in hits}, key=lambda x: x.zfill(20))
+            )
+
+            notes_parts = []
+            if not received:
+                notes_parts.append("Not found on any received PDF invoice")
+            elif abs(pdf_sum - register_total) > 0.01:
+                notes_parts.append(f"Payroll Register total = ${register_total:,.2f} "
+                                    f"but we only have ${pdf_sum:,.2f} in PDF wages")
+            if hits:
+                # The payroll register has no invoice-number column at all --
+                # same as Highland's consolidated-PTIP case -- so always show
+                # the breakdown, not just when there's more than one invoice.
+                breakdown = ', '.join(
+                    f"Invoice {h['invoice_no']} ({h['commercial_title']}, ${h['pdf_row']['total']:,.2f})"
+                    for h in sorted(hits, key=lambda h: h['invoice_no'].zfill(20))
+                )
+                notes_parts.append(breakdown)
+            if discrepancy_note:
+                notes_parts.append(discrepancy_note)
+            notes = '; '.join(notes_parts)
+
+            pending.append({
+                'report_row': rr, 'hits': hits, 'received': received,
+                'invoice_no': invoice_no, 'notes': notes,
+            })
+
+        for p in sorted(pending, key=lambda p: _cms_invoice_sort_key(p['invoice_no'])):
+            row = _build_cms_row(
+                item_no=item_no,
+                report_row=p['report_row'],
+                hits=p['hits'],
+                received_invoice=p['received'],
+                invoice_no=p['invoice_no'],
+                notes=p['notes'],
+                default_work_state=default_work_state,
+            )
+            workbook_rows.append(row)
+            item_no += 1
+
+        # Completeness check: any PDF name never matched to a register row
+        for name_key, hits in name_pdf_hits.items():
+            if name_key not in matched_name_keys:
+                inv_list = ', '.join(sorted({h['invoice_no'] for h in hits}))
+                issues.append(f"{name_pdf_raw[name_key]}, invoice(s) {inv_list}: on the PDF but not found in the payroll register")
+
+    else:
+        # ── PDF-only fallback: one row per performer row, in PDF order.
+        # Unlike Highland/ER/Teams, every CMS summary-table row already
+        # carries its own complete tax/benefit/service-fee figures -- there's
+        # no invoice-level-only lump sum that needs to land on a first row.
+        for sub in sorted(all_sub_invoices, key=lambda s: s['invoice_no'].zfill(20)):
+            for r in sub['talent_rows']:
+                hit = {
+                    'invoice_no': sub['invoice_no'], 'invoice_date': sub['invoice_date'],
+                    'commercial_title': sub['commercial_title'], 'commercial_id': sub['commercial_id'],
+                    'pdf_row': r,
+                }
+                row = _build_cms_row(
+                    item_no=item_no,
+                    report_row=None,
+                    hits=[hit],
+                    received_invoice=True,
+                    invoice_no=sub['invoice_no'],
+                    default_work_state=default_work_state,
+                )
+                workbook_rows.append(row)
+                item_no += 1
+
+    if not report_rows and not all_sub_invoices:
+        return {
+            'rows': [],
+            'ptip_excel_b64': None,
+            'summary': {
+                'total_rows': 0,
+                'invoices_with_pdf': [],
+                'invoices_ptip_only': [],
+                'duplicates_found': 0,
+                'issues': issues + ['No PDFs or payroll register provided.'],
+            },
+        }
 
     return {
         'rows': workbook_rows,
