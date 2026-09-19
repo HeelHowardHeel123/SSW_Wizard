@@ -1547,15 +1547,43 @@ class Component extends DCLogic {
   // from a blob: URL, where a relative specifier can't resolve — so the build
   // injects __OM_EMBEDDED_MODULES__ with a blob URL for the engine and we use
   // that instead. Cached after the first load.
+  // Four tiers, in order:
+  //   1. __OM_EMBEDDED_MODULES__ — the single-file production build's blob URL.
+  //   2. An ABSOLUTE URL resolved against document.baseURI. This is the one that
+  //      matters outside that build: a bare "./workbook-engine.js" resolves
+  //      against the *importing module's* base, and the logic class is evaluated
+  //      inside a blob: URL, where that relative specifier can't resolve at all
+  //      ("Failed to resolve module specifier"). Resolving against the document
+  //      instead points at the sibling file the page was served with.
+  //   3. Fetch that URL and import it as a blob — covers a host that serves the
+  //      file but blocks a cross-origin module import.
+  //   4. The bare relative specifier, for any context where it does work.
+  // Cached after the first success.
   async loadEngine() {
     if (this._engMod) return this._engMod;
-    let url = "./workbook-engine.js";
+    const tries = [];
     try {
       const m = window.__OM_EMBEDDED_MODULES__;
-      if (m && m["./workbook-engine.js"]) url = m["./workbook-engine.js"];
+      if (m && m["./workbook-engine.js"]) tries.push(["embedded", m["./workbook-engine.js"]]);
     } catch (e) {}
-    this._engMod = await import(url);
-    return this._engMod;
+    let abs = null;
+    try { abs = new URL("./workbook-engine.js", document.baseURI).href; } catch (e) {}
+    if (abs) tries.push(["document-relative", abs]);
+    const errs = [];
+    for (const [how, url] of tries) {
+      try { this._engMod = await import(url); return this._engMod; }
+      catch (e) { errs.push(how + ": " + (e.message || e)); }
+    }
+    if (abs) {
+      try {
+        const src = await (await fetch(abs)).text();
+        this._engMod = await import(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+        return this._engMod;
+      } catch (e) { errs.push("blob: " + (e.message || e)); }
+    }
+    try { this._engMod = await import("./workbook-engine.js"); return this._engMod; }
+    catch (e) { errs.push("relative: " + (e.message || e)); }
+    throw new Error("Could not load the workbook engine — " + errs.join(" | "));
   }
 
   // Resolution chain for a workbook type's bytes:
