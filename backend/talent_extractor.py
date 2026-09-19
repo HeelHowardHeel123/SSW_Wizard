@@ -776,6 +776,7 @@ def _build_row(
         'total':          total,
         'check_number':   check_number,
         'received_invoice': received_invoice,
+        'on_pdf':         received_invoice,  # TX Talent Payroll's "On PDF" column
         'payment_entity': payment_entity,
         'type':           pay_type,
         'home_address':   street,
