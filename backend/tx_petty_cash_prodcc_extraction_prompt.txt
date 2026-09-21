@@ -11,7 +11,7 @@ YOUR PROCESS:
    - A Purchase Order's "Sub-Total" / "TOTAL" line. (The PO's own line-item table on its face already breaks that total down by category -- you do NOT need to reproduce that breakdown; the total is all that matters here.)
 2. If you find such a total:
    - Set has_stated_total to true and stated_total to that number.
-   - Read name: the person's or card's name exactly as printed (the "Employee Name" field on a petty cash cover sheet, or the "Issued To" field on a Purchase Order). Empty string if not legible.
+   - Read name (the "Employee Name" field on a petty cash cover sheet, or the "Issued To" field on a Purchase Order) -- see the name field rule below. Empty string if not legible.
    - Read id_number: the Envelope No or Purchase Order No exactly as printed (e.g. "1 of 1", "25-012 - 3"). Empty string if not shown.
    - Leave the receipts array EMPTY. You do not need to itemize individual receipts when a stated total already exists.
 3. If you do NOT find a stated total anywhere in the document, set has_stated_total to false and stated_total to 0. Instead, find every individual receipt in the PDF and return one entry per receipt in the receipts array (fields below). Still try to read name and id_number from anywhere in the document (a receipt's own header, a handwritten note, a filename-like label printed on a page, etc.) -- leave them as empty strings if truly not present anywhere in the document itself.
@@ -20,7 +20,7 @@ YOUR PROCESS:
 FIELDS (top level, return exactly these keys):
 - has_stated_total: true or false
 - stated_total: plain number, no $ or commas (0 if has_stated_total is false)
-- name: string
+- name: if this identifies an actual individual person, return it as "Last, First" -- reorder from however it is printed (e.g. "Bonnie Cook" becomes "Cook, Bonnie"). If it is NOT a person -- a department ("Art Department"), company, card, or account name ("Amex 5005") -- return it exactly as printed, unchanged; never reorder or reformat a non-person name.
 - id_number: string
 - receipts: array (empty if has_stated_total is true)
 

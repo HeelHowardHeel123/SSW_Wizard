@@ -1144,6 +1144,10 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
     has_total    = bool(raw.get("has_stated_total"))
     stated_total = normalize_amount(raw.get("stated_total", 0)) if has_total else 0
 
+    # The prompt itself already returns a person's name as "Last, First" and
+    # leaves anything else (a department, company, card/account name) exactly
+    # as printed -- distinguishing "Bonnie Cook" from "Art Department" needs
+    # the document's own context, which only the extraction step has.
     name = clean_name(str(raw.get("name", "")).strip())
     if not name:
         name = _tx_name_from_filename(filename)
