@@ -262,6 +262,7 @@ _TX_AGENCY_VENDOR_EXPS_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspat
 _TX_POST_PRODUCTION_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_post_production_extraction_prompt.txt")
 _TX_CREW_IC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_crew_indep_contractors_extraction_prompt.txt")
 _TX_TALENT_IC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_talent_indep_contract_extraction_prompt.txt")
+_TX_PETTY_CASH_PRODCC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_petty_cash_prodcc_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -971,6 +972,306 @@ def _petty_cash_unreadable_file_row(filename: str) -> dict:
         "received_invoice": "NO",
         "amount":           0,
     }
+
+
+# ── TX Petty Cash / ProdCC extractor ─────────────────────────────────────────
+# TX's own template only wants ONE row per document -- the envelope's stated
+# total (Petty Cash) or the PO's stated total (ProdCC) -- unlike GA/IL's
+# line-item-per-receipt model above. When a document has no cover/PO page
+# stating a total at all, a single receipt gets filled in directly and
+# multiple receipts get summed into a live Excel formula (so a reviewer can
+# see the math without leaving the cell) with a "show your work" vendor/
+# amount breakdown in Notes. Each uploaded PDF is processed independently --
+# no cross-file envelope grouping -- since a split "(1 of 2)/(2 of 2)" pair
+# is not necessarily the same envelope (confirmed against real TX examples:
+# a second part with no cover sheet of its own is its own envelope).
+
+def _call_gpt_json_object(images_b64, system_prompt, client, user_text="", max_tokens=8000, max_retries=5):
+    """Same as _call_gpt but expects a single JSON object back, not an array
+    -- the malformed-JSON fallback regex has to look for {...} rather than
+    [...] to match."""
+    content = [{"type": "text", "text": user_text}]
+    for img in images_b64:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"},
+        })
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0,
+                max_tokens=max_tokens,
+            )
+            break
+        except RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
+    raw = resp.choices[0].message.content.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        print(f"[_call_gpt_json_object] JSON parse failed. Raw response (first 500 chars): {raw[:500]!r}", flush=True)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                return {}
+    return {}
+
+
+def _call_claude_json_object(images_b64, system_prompt, client, user_text, max_tokens=8000, max_retries=5):
+    """Claude fallback mirror of _call_gpt_json_object, for the same reason
+    the older petty cash engine has one: GPT-4o occasionally declines a file
+    for reasons that don't correspond to any real content problem."""
+    import anthropic
+
+    content = []
+    for img in images_b64:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": img},
+        })
+    content.append({"type": "text", "text": user_text})
+
+    for attempt in range(max_retries + 1):
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-5",
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": content}],
+            ) as stream:
+                for _ in stream.text_stream:
+                    pass
+                resp = stream.get_final_message()
+            break
+        except anthropic.RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
+    text_block = next((b for b in resp.content if b.type == "text"), None)
+    raw = text_block.text.strip() if text_block else ""
+    try:
+        return json.loads(raw)
+    except Exception:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                pass
+        return {}
+
+
+def _extract_tx_petty_cash_prodcc_from_file(filename, data, system_prompt, client, user_text=""):
+    images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
+    if not images:
+        return {}
+    return _call_gpt_json_object(images, system_prompt, client, user_text=user_text, max_tokens=8000)
+
+
+_TX_NAME_FROM_FILENAME_RE = re.compile(r"([A-Za-z][A-Za-z'\-]+,\s*[A-Za-z][A-Za-z'\-]+)")
+_TX_ID_FROM_FILENAME_RE   = re.compile(r"\((\d+)\s+of\s+(\d+)\)", re.IGNORECASE)
+
+
+def _tx_name_from_filename(filename: str) -> str:
+    """Fallback when the document itself has no readable name: parse a
+    "Lastname, Firstname" pattern out of the filename. If the filename
+    doesn't fit that pattern either, use the raw filename verbatim (per
+    explicit instruction: never leave Name silently blank)."""
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    m = _TX_NAME_FROM_FILENAME_RE.search(stem)
+    if m:
+        return clean_name(m.group(1))
+    return stem.strip()
+
+
+def _tx_id_from_filename(filename: str) -> str:
+    """Fallback envelope/PO number when the document has none of its own:
+    the "(N of M)" position in the filename. Empty string if absent."""
+    m = _TX_ID_FROM_FILENAME_RE.search(filename)
+    return m.group(1) if m else ""
+
+
+def _tx_sum_formula(amounts: list[float]) -> str:
+    """Builds a live Excel formula string (e.g. "=36.69+45.89-13.73") summing
+    every receipt amount -- written into the cell instead of a pre-computed
+    number so a reviewer can see and verify the math without leaving Excel."""
+    parts = []
+    for i, amt in enumerate(amounts):
+        amt = round(float(amt), 2)
+        if i == 0:
+            parts.append(f"{amt}")
+        elif amt >= 0:
+            parts.append(f"+{amt}")
+        else:
+            parts.append(f"{amt}")
+    return "=" + "".join(parts) if parts else "=0"
+
+
+def _tx_receipt_breakdown_notes(receipts: list[dict]) -> str:
+    """"Show your work" Notes text for a no-stated-total, multi-receipt
+    document -- e.g. "Jalisco's $36.69, Trader Joe's $45.89, ... Central
+    Market -$13.73" -- pairs with the formula from _tx_sum_formula so a
+    reviewer can tell which number is which without opening the source PDF."""
+    parts = []
+    for r in receipts:
+        vendor = clean_name(r.get("vendor", "")) or "Unknown vendor"
+        amt = normalize_amount(r.get("amount", 0))
+        if amt < 0:
+            parts.append(f"{vendor} -${abs(amt):,.2f}")
+        else:
+            parts.append(f"{vendor} ${amt:,.2f}")
+    return ", ".join(parts)
+
+
+def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, pymt_method: str) -> dict:
+    receipts = raw.get("receipts") or []
+    if not isinstance(receipts, list):
+        receipts = []
+    valid_receipts = [r for r in receipts if isinstance(r, dict)]
+
+    has_total    = bool(raw.get("has_stated_total"))
+    stated_total = normalize_amount(raw.get("stated_total", 0)) if has_total else 0
+
+    name = clean_name(str(raw.get("name", "")).strip())
+    if not name:
+        name = _tx_name_from_filename(filename)
+
+    id_number = str(raw.get("id_number", "")).strip()
+    if not id_number:
+        id_number = _tx_id_from_filename(filename)
+
+    row = {
+        "name":           name,
+        "id_number":      id_number,
+        "pymt_method":    pymt_method,
+        "payment_entity": prodco_name,
+        "amount":         0,
+        "vendor":         "",
+        "receipt_date":   "",
+        "description":    "",
+        "address":        "",
+        "city":           "",
+        "state":          "",
+        "zip":            "",
+        "notes":          "",
+        "sourceFile":     filename,
+    }
+
+    if has_total and stated_total:
+        row["amount"] = stated_total
+        return row
+
+    if len(valid_receipts) == 1:
+        r = valid_receipts[0]
+        addr = _parse_vendor_address(str(r.get("address", "")).strip())
+        row["amount"]       = normalize_amount(r.get("amount", 0))
+        row["vendor"]       = clean_name(r.get("vendor", ""))
+        row["receipt_date"] = normalize_date(str(r.get("date", "")).strip())
+        row["description"]  = str(r.get("description", "")).strip()
+        row["address"]      = addr["address"]
+        row["city"]         = addr["city"]
+        row["state"]        = addr["state"]
+        row["zip"]          = addr["zip"]
+        return row
+
+    if len(valid_receipts) > 1:
+        amounts = [normalize_amount(r.get("amount", 0)) for r in valid_receipts]
+        row["amount"] = _tx_sum_formula(amounts)
+        row["notes"]  = _tx_receipt_breakdown_notes(valid_receipts)
+        return row
+
+    row["notes"] = f"Could not find a stated total or any receipts in {filename} -- review manually"
+    return row
+
+
+def _load_tx_petty_cash_prodcc_prompt(prodco_name: str, doc_kind: str) -> str:
+    with open(_TX_PETTY_CASH_PRODCC_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    return template.format(prodco_name=prodco_name or "the production", doc_kind=doc_kind)
+
+
+async def _extract_tx_petty_cash_prodcc(files, prodco_name, doc_kind, pymt_method, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _client()
+    system_prompt = _load_tx_petty_cash_prodcc_prompt(prodco_name, doc_kind)
+    user_text = (
+        f"Extract this {doc_kind} document's stated total, name, and ID number. "
+        "Only itemize individual receipts if no stated total exists for the whole document."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, {}, size_err
+
+        async with sem:
+            try:
+                raw = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_petty_cash_prodcc_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                if not raw:
+                    print(f"[_extract_tx_petty_cash_prodcc] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                    try:
+                        anthropic_client = _anthropic_client()
+                        images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
+                        raw = _call_claude_json_object(images, system_prompt, anthropic_client, user_text, max_tokens=8000)
+                        if raw:
+                            existing = str(raw.get("notes", "") or "")
+                            flag = "Extracted by Claude (GPT declined)"
+                            raw["notes"] = f"{existing}; {flag}" if existing else flag
+                    except Exception as e:
+                        print(f"[_extract_tx_petty_cash_prodcc] {filename}: Claude fallback also failed: {e}", flush=True)
+                return filename, raw, None
+            except Exception as e:
+                return filename, {}, str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+    for filename, raw, err in extraction_results:
+        errs = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "company": "unknown", "rows": 0, "issues": errs})
+            continue
+
+        try:
+            row = _normalize_tx_petty_prodcc_row(raw or {}, prodco_name, filename, pymt_method)
+        except Exception as e:
+            errs.append(f"row normalization error: {e}")
+            issues.append(f"{filename}: row normalization error: {e}")
+            row = _normalize_tx_petty_prodcc_row({}, prodco_name, filename, pymt_method)
+            row["notes"] = "Could not extract any data -- review manually"
+
+        rows.append(row)
+        file_summaries.append({"filename": filename, "company": row["name"] or "unknown", "rows": 1, "issues": errs})
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
 
 
 # ── Claude vision call ───────────────────────────────────────────────────────
@@ -4977,6 +5278,33 @@ async def extract_tx_talent_payroll(
         row["talent_name"] = clean_name(row.get("talent_name", ""))
 
     return result
+
+
+# ── TX Petty Cash / ProdCC ───────────────────────────────────────────────────
+# One PDF = one row = one total (not GA/IL's line-item-per-receipt model --
+# see _normalize_tx_petty_prodcc_row above). Petty Cash and ProdCC share the
+# exact same engine and only differ in Pymt Method ("Petty Cash" vs "CC
+# Reimb") and which column their id_number lands in on the frontend (Env# vs
+# PO#) -- both endpoints just call the shared extractor with a different
+# doc_kind/pymt_method label.
+@app.post("/extract-tx-petty-cash")
+async def extract_tx_petty_cash_endpoint(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_petty_cash_prodcc(files, prodco_name, "Petty Cash", "Petty Cash", x_app_secret)
+
+
+@app.post("/extract-tx-prodcc")
+async def extract_tx_prodcc_endpoint(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_petty_cash_prodcc(
+        files, prodco_name, "Production Credit Card (ProdCC) reimbursement", "CC Reimb", x_app_secret,
+    )
 
 
 # ── Consolidated run summary email ───────────────────────────────────────────
