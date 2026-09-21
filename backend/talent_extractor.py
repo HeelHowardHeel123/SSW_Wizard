@@ -3230,16 +3230,88 @@ _CMS_TOTALS_RE = re.compile(
 # "TITLE (ID)" -- e.g. "BACON PRETZEL SMASHER (BACNPRETZELSMASH)".
 _CMS_COMMERCIAL_RE = re.compile(r'^(.+?)\s+\(([A-Z0-9]+)\)$')
 
+# The daily-backup pages (skipped for dollar figures -- the summary table
+# already has everything) carry two things the summary table doesn't: a
+# shoot location ("WORKED WEEK ENDING 07/22/2025 AUSTIN LOCATION IN TEXAS")
+# and a role/category divider ("PRINCIPAL", "EXTRA BUYOUT", ...) sitting
+# above each block of performer lines. Confirmed real via SONI 005.
+_CMS_LOCATION_RE = re.compile(
+    r'^(?:WORKED )?WEEK ENDING \d{1,2}/\d{1,2}/\d{4}\s+(.+?)\s+LOCATION IN\s+(.+)$'
+)
+# Known role/category divider lines seen on real CMS backup pages so far. A
+# label not in this set just leaves Title blank for that block rather than
+# guessing -- same "don't know, don't guess" rule as everywhere else here.
+_CMS_ROLE_LABELS = frozenset({'PRINCIPAL', 'EXTRA BUYOUT', 'TALENT COORDINATOR', 'PHOTO DOUBLE', 'STAND IN'})
+_CMS_PERFORMER_LINE_RE = re.compile(r'^(\d{3})\s*([A-Z].*)$')
+
+_US_STATE_ABBR = {
+    'ALABAMA': 'AL', 'ALASKA': 'AK', 'ARIZONA': 'AZ', 'ARKANSAS': 'AR',
+    'CALIFORNIA': 'CA', 'COLORADO': 'CO', 'CONNECTICUT': 'CT', 'DELAWARE': 'DE',
+    'FLORIDA': 'FL', 'GEORGIA': 'GA', 'HAWAII': 'HI', 'IDAHO': 'ID',
+    'ILLINOIS': 'IL', 'INDIANA': 'IN', 'IOWA': 'IA', 'KANSAS': 'KS',
+    'KENTUCKY': 'KY', 'LOUISIANA': 'LA', 'MAINE': 'ME', 'MARYLAND': 'MD',
+    'MASSACHUSETTS': 'MA', 'MICHIGAN': 'MI', 'MINNESOTA': 'MN', 'MISSISSIPPI': 'MS',
+    'MISSOURI': 'MO', 'MONTANA': 'MT', 'NEBRASKA': 'NE', 'NEVADA': 'NV',
+    'NEW HAMPSHIRE': 'NH', 'NEW JERSEY': 'NJ', 'NEW MEXICO': 'NM', 'NEW YORK': 'NY',
+    'NORTH CAROLINA': 'NC', 'NORTH DAKOTA': 'ND', 'OHIO': 'OH', 'OKLAHOMA': 'OK',
+    'OREGON': 'OR', 'PENNSYLVANIA': 'PA', 'RHODE ISLAND': 'RI', 'SOUTH CAROLINA': 'SC',
+    'SOUTH DAKOTA': 'SD', 'TENNESSEE': 'TN', 'TEXAS': 'TX', 'UTAH': 'UT',
+    'VERMONT': 'VT', 'VIRGINIA': 'VA', 'WASHINGTON': 'WA', 'WEST VIRGINIA': 'WV',
+    'WISCONSIN': 'WI', 'WYOMING': 'WY', 'DISTRICT OF COLUMBIA': 'DC',
+}
+
+
+def _cms_state_abbr(name: str) -> str:
+    name = (name or '').strip().upper()
+    if len(name) == 2:
+        return name
+    return _US_STATE_ABBR.get(name, name.title())
+
+
+def _cms_role_location_map(pages_text: list[str]) -> dict[str, dict]:
+    """Scan every page of one CMS sub-invoice (summary + daily backup) for
+    each performer's role/category label and shoot location, read from the
+    same divider lines a human reads them from. Returns {normalized name:
+    {'role': str, 'location': str}}. A loan-out's backup line prints
+    "COMPANY NAME F/S/O REAL PERFORMER NAME" -- keyed by the real name after
+    F/S/O so it matches the summary table's own name for that person."""
+    out: dict[str, dict] = {}
+    current_role = ''
+    current_location = ''
+    for page_text in pages_text:
+        for raw_line in page_text.split('\n'):
+            line = raw_line.strip()
+            if not line:
+                continue
+            m = _CMS_LOCATION_RE.match(line)
+            if m:
+                current_location = _cms_state_abbr(m.group(2))
+                continue
+            if line in _CMS_ROLE_LABELS:
+                current_role = line.title()
+                continue
+            pm = _CMS_PERFORMER_LINE_RE.match(line)
+            if pm:
+                raw_name = pm.group(2).strip()
+                fso = re.search(r'F/S/O\s*(.+)$', raw_name)
+                match_name = fso.group(1).strip() if fso else raw_name
+                out[_normalize_talent_name(match_name)] = {
+                    'role': current_role, 'location': current_location,
+                }
+    return out
+
 
 def parse_cms_invoice_pdf(pdf_bytes: bytes) -> list[dict]:
     """Parse a CMS Productions master bill PDF. Returns one dict per bundled
     ART sub-invoice: {invoice_no, invoice_date, commercial_title,
     commercial_id, talent_rows: [{name, wages, corp, agent, misc, benefits,
-    tax_fee, service_fee, total}, ...]}. A row's own 'total' already reflects
-    everything for that person on that sub-invoice -- corp > 0 (with wages
-    == 0) means the payment routed through a loan-out company instead of
-    being paid directly. Returns [] if this doesn't look like a CMS invoice
-    at all."""
+    tax_fee, service_fee, total, role, location}, ...]}. A row's own 'total'
+    already reflects everything for that person on that sub-invoice -- corp
+    > 0 (with wages == 0) means the payment routed through a loan-out
+    company instead of being paid directly. 'role'/'location' come from the
+    daily-backup pages (see _cms_role_location_map) and are '' when that
+    page didn't carry a recognized divider line. Returns [] if this doesn't
+    look like a CMS invoice at all."""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             pages = [pg.extract_text() or '' for pg in pdf.pages]
@@ -3249,32 +3321,37 @@ def parse_cms_invoice_pdf(pdf_bytes: bytes) -> list[dict]:
     if not any('CMS PRODUCTIONS' in p for p in pages):
         return []
 
+    # Group every page by its own invoice number first -- a summary page has
+    # the dollar table but no role/location info, its daily-backup pages
+    # have the opposite, and both need to be seen together per invoice.
+    pages_by_invoice: dict[str, list[str]] = defaultdict(list)
+    for page_text in pages:
+        m = re.search(r'INVOICE#\s*(\d+)', page_text)
+        if m:
+            pages_by_invoice[m.group(1)].append(page_text)
+
     invoices: dict[str, dict] = {}
 
-    for page_text in pages:
-        if _CMS_SUMMARY_HEADER not in page_text:
-            continue  # cover bill page, or a daily-backup detail page -- skip
+    for inv_no, inv_pages in pages_by_invoice.items():
+        summary_page = next((p for p in inv_pages if _CMS_SUMMARY_HEADER in p), None)
+        if summary_page is None:
+            continue  # no summary page seen for this invoice number -- nothing to build a row from
 
-        m = re.search(r'INVOICE#\s*(\d+)', page_text)
-        if not m:
-            continue
-        inv_no = m.group(1)
-        if inv_no in invoices:
-            continue  # a summary page should only appear once per sub-invoice
-
-        m = re.search(r'DATE:\s*(\d{1,2}/\d{1,2}/\d{4})', page_text)
+        m = re.search(r'DATE:\s*(\d{1,2}/\d{1,2}/\d{4})', summary_page)
         invoice_date = _fmt_date(m.group(1)) if m else ''
 
         commercial_title = commercial_id = ''
-        for line in page_text.split('\n'):
+        for line in summary_page.split('\n'):
             cm = _CMS_COMMERCIAL_RE.match(line.strip())
             if cm and cm.group(1).strip() != 'CMS PRODUCTIONS':
                 commercial_title, commercial_id = cm.group(1).strip(), cm.group(2).strip()
                 break
 
+        role_loc = _cms_role_location_map(inv_pages)
+
         talent_rows: list[dict] = []
         in_table = False
-        for raw_line in page_text.split('\n'):
+        for raw_line in summary_page.split('\n'):
             line = raw_line.strip()
             if line == _CMS_SUMMARY_HEADER:
                 in_table = True
@@ -3284,6 +3361,7 @@ def parse_cms_invoice_pdf(pdf_bytes: bytes) -> list[dict]:
             rm = _CMS_ROW_RE.match(line)
             if rm:
                 name, wages, corp, agent, misc, benefits, tax_fee, service_fee, total = rm.groups()
+                info = role_loc.get(_normalize_talent_name(name.strip()), {})
                 talent_rows.append({
                     'name':         name.strip(),
                     'wages':        _to_float(wages),
@@ -3294,6 +3372,8 @@ def parse_cms_invoice_pdf(pdf_bytes: bytes) -> list[dict]:
                     'tax_fee':      _to_float(tax_fee),
                     'service_fee':  _to_float(service_fee),
                     'total':        _to_float(total),
+                    'role':         info.get('role', ''),
+                    'location':     info.get('location', ''),
                 })
                 continue
             if _CMS_TOTALS_RE.match(line):
@@ -3448,6 +3528,27 @@ def _build_cms_row(
     commercial_ids    = sorted({h['commercial_id']    for h in hits if h['commercial_id']})
     invoice_date = hits[0]['invoice_date'] if hits else ''
 
+    # Title/Location come from the daily-backup pages (see
+    # _cms_role_location_map), never from the payroll register -- a person
+    # who worked under more than one role or in more than one place across
+    # their invoices gets every distinct value, comma-joined (e.g. "Extra
+    # Buyout, Photo Double"). Confirmed real via SONI 005.
+    titles    = sorted({h['pdf_row'].get('role', '')     for h in hits if h['pdf_row'].get('role')})
+    locations = sorted({h['pdf_row'].get('location', '') for h in hits if h['pdf_row'].get('location')})
+    title    = ', '.join(titles)
+    location = ', '.join(locations)
+    notes_parts = [notes] if notes else []
+    if len(locations) > 1:
+        # More than one location is unusual enough to spell out which
+        # invoice had which, rather than leaving the reader to guess.
+        by_invoice = ', '.join(
+            f"Invoice {h['invoice_no']}: {h['pdf_row']['location']}"
+            for h in sorted(hits, key=lambda h: h['invoice_no'].zfill(20))
+            if h['pdf_row'].get('location')
+        )
+        notes_parts.append(f"Location by invoice: {by_invoice}")
+    notes = '; '.join(notes_parts)
+
     if report_row:
         name     = pdf_name or report_row['name']
         wages    = report_row['gross_wages']
@@ -3493,7 +3594,8 @@ def _build_cms_row(
         'talent_name':    name,
         'loan_out':       'YES' if is_loan_out else 'NO',
         'loan_out_company': '',  # not identifiable from the summary table alone; not needed for TX
-        'title':          '',
+        'title':          title,
+        'location':       location,
         'work_days':      None,
         'work_dates':     '',
         'invoice_no':     invoice_no,
