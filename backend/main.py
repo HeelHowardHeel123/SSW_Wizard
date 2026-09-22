@@ -1105,6 +1105,27 @@ def _tx_env_number_from_filename(filename: str) -> str:
     return m.group(1) if m else ""
 
 
+_TX_LEADING_NUM_RE = re.compile(r"\d+")
+
+
+def _tx_format_envelope_number(raw: str) -> str:
+    """Bare number(s) only -- "1", or "1, 2 & 3" for a PDF bundling several
+    cover pages. The model is only asked for the raw digits (comma-separated
+    when there's more than one); this does the actual formatting/joining
+    deterministically in Python rather than trusting the model with it --
+    confirmed today that a mechanical formatting task like this is safer
+    done here than asked of the model repeatedly across a prompt rewrite."""
+    if not raw:
+        return ""
+    parts = [_TX_LEADING_NUM_RE.search(p) for p in raw.split(",")]
+    numbers = [m.group() for m in parts if m]
+    if not numbers:
+        return ""
+    if len(numbers) == 1:
+        return numbers[0]
+    return ", ".join(numbers[:-1]) + f" & {numbers[-1]}"
+
+
 def _tx_sum_formula(amounts: list[float]) -> str:
     """Builds a live Excel formula string (e.g. "=36.69+45.89-13.73") summing
     every receipt amount -- written into the cell instead of a pre-computed
@@ -1161,7 +1182,7 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
     # number, even though the file landed in the Petty Cash zone). Each maps
     # to its own fixed column on the frontend regardless of which zone/
     # endpoint the file came through.
-    env_number = str(raw.get("envelope_number", "")).strip()
+    env_number = _tx_format_envelope_number(str(raw.get("envelope_number", "")).strip())
     po_number = str(raw.get("po_number", "")).strip()
     if env_number and po_number:
         # Confirmed real on SONI 005: the model can still return both when a
