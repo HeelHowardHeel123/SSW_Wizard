@@ -1166,6 +1166,17 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
         env_number = _tx_env_number_from_filename(filename)
     po_number = str(raw.get("po_number", "")).strip()
 
+    # Normally one PDF = one envelope, but occasionally a production submits
+    # two full "PETTY CASH SUMMARY" cover pages for the same person in a
+    # single file instead of splitting them out (confirmed real on SONI 005's
+    # "Esposito, Luca - CC Reimb.pdf": Envelope 1 and Envelope 2, each with
+    # its own total, in one PDF). The prompt joins that case's envelope
+    # numbers as "1 & 2" -- flag it here so it's never silently missed.
+    envelope_count = env_number.count(" & ") + 1 if env_number else 0
+    multi_envelope_note = (
+        f"{envelope_count} Petty Cash envelopes in PDF" if envelope_count > 1 else ""
+    )
+
     row = {
         "name":           name,
         "env_number":     env_number,
@@ -1181,7 +1192,7 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
         "city":           "",
         "state":          "",
         "zip":            "",
-        "notes":          "",
+        "notes":          multi_envelope_note,
         "sourceFile":     filename,
     }
 
@@ -1221,14 +1232,16 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
         else:
             amounts = [normalize_amount(r.get("amount", 0)) for r in valid_receipts]
             row["amount"] = _tx_sum_formula(amounts)
-            row["notes"]  = _tx_receipt_breakdown_notes(valid_receipts)
+            breakdown = _tx_receipt_breakdown_notes(valid_receipts)
+            row["notes"] = f"{multi_envelope_note}; {breakdown}" if multi_envelope_note else breakdown
         return row
 
     if amount_from_total is not None:
         row["amount"] = amount_from_total
         return row
 
-    row["notes"] = f"Could not find a stated total or any receipts in {filename} -- review manually"
+    fallback = f"Could not find a stated total or any receipts in {filename} -- review manually"
+    row["notes"] = f"{multi_envelope_note}; {fallback}" if multi_envelope_note else fallback
     return row
 
 
