@@ -4004,8 +4004,6 @@ class Component extends DCLogic {
             for (const c of this.txPettyFormulaRow())
               cellPatches.push({ sheetName: this.TX_PETTY_SHEET, addr: c.col + R, value: c.value.replace(/\{R\}/g, R), type: c.type });
             for (const [f, col, type] of map) put(col, type, r[f]);
-            // The id column this zone doesn't use, plus the manual columns.
-            put(map === this.TX_PETTY_CASH_MAP ? "C" : "D", "text", null);
             for (const col of this.TX_PETTY_MANUAL) put(col, "text", null);
           });
         };
@@ -6648,12 +6646,17 @@ class Component extends DCLogic {
     ["city", "Q", "text"], ["state", "R", "text"], ["zip", "S", "text"],
     ["notes", "V", "text"],
   ];
-  TX_PETTY_CASH_MAP = [["id_number", "D", "text"], ...this.TX_PETTY_COMMON_MAP];
-  TX_PRODCC_MAP = [["id_number", "C", "text"], ...this.TX_PETTY_COMMON_MAP];
+  // id_number was split backend-side into env_number (D) + po_number (C), and
+  // line_number (E) was added. All three are text: env_number can be "1 & 2"
+  // when one PDF bundles two envelopes. Same map for both zones — a field the
+  // zone doesn't return just clears its cell.
+  TX_PETTY_ID_MAP = [
+    ["po_number", "C", "text"], ["env_number", "D", "text"], ["line_number", "E", "text"],
+  ];
+  TX_PETTY_CASH_MAP = [...this.TX_PETTY_ID_MAP, ...this.TX_PETTY_COMMON_MAP];
+  TX_PRODCC_MAP = [...this.TX_PETTY_ID_MAP, ...this.TX_PETTY_COMMON_MAP];
 
-  // Blanked on every row we write. E (Line #) is deliberately NOT here — it is
-  // the reviewer's own column and the template leaves it empty, so we never
-  // touch it. N Type, T Contact #, U Qualify? are manual.
+  // Blanked on every row we write. N Type, T Contact #, U Qualify? are manual.
   TX_PETTY_MANUAL = ["N", "T", "U"];
 
   // I (Qualified Total) = this row's G minus H. H is always 0 today, so it
@@ -6698,6 +6701,13 @@ class Component extends DCLogic {
         merged.issues.push(...(j.issues || []));
         merged.files.push(...(j.files || []));
         jIssues = j.issues || [];
+        // Diagnostic: exact keys + non-empty values the backend returned, so a
+        // field-name mismatch shows up in the run log instead of a blank column.
+        (j.rows || []).forEach((row, i) => {
+          const filled = Object.keys(row).filter(k => row[k] != null && String(row[k]).trim() !== "");
+          this.runLog("info", "  " + f.name + " row " + (i + 1) + " keys: [" + Object.keys(row).join(", ") +
+            "] · non-empty: [" + filled.join(", ") + "]");
+        });
       } catch (e) {
         caught = label + " extraction failed — " + (e.message || e);
         merged.issues.push({ file: f.name, reason: caught });
