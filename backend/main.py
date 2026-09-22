@@ -1159,6 +1159,7 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
     row = {
         "name":           name,
         "id_number":      id_number,
+        "line_number":    "",
         "pymt_method":    pymt_method,
         "payment_entity": prodco_name,
         "amount":         0,
@@ -1173,14 +1174,18 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
         "sourceFile":     filename,
     }
 
-    if has_total and stated_total:
-        row["amount"] = stated_total
-        return row
+    # A stated total is always trusted for the dollar amount, whether or not
+    # receipts were also itemized. What the receipt count changes is only
+    # Line#/Vendor/Date/Description/Address/City/State/Zip: a single receipt
+    # gets its own real values, more than one gets "Various" in all of them
+    # (nothing to show your work for here -- the stated total is already
+    # trusted, unlike the no-total multi-receipt formula case below).
+    amount_from_total = stated_total if (has_total and stated_total) else None
 
     if len(valid_receipts) == 1:
         r = valid_receipts[0]
         addr = _parse_vendor_address(str(r.get("address", "")).strip())
-        row["amount"]       = normalize_amount(r.get("amount", 0))
+        row["line_number"]  = "1"
         row["vendor"]       = clean_name(r.get("vendor", ""))
         row["receipt_date"] = normalize_date(str(r.get("date", "")).strip())
         row["description"]  = str(r.get("description", "")).strip()
@@ -1188,12 +1193,28 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
         row["city"]         = addr["city"]
         row["state"]        = addr["state"]
         row["zip"]          = addr["zip"]
+        row["amount"] = amount_from_total if amount_from_total is not None else normalize_amount(r.get("amount", 0))
         return row
 
     if len(valid_receipts) > 1:
-        amounts = [normalize_amount(r.get("amount", 0)) for r in valid_receipts]
-        row["amount"] = _tx_sum_formula(amounts)
-        row["notes"]  = _tx_receipt_breakdown_notes(valid_receipts)
+        row["line_number"]  = "Various"
+        row["vendor"]       = "Various"
+        row["receipt_date"] = "Various"
+        row["description"]  = "Various"
+        row["address"]      = "Various"
+        row["city"]         = "Various"
+        row["state"]        = "Various"
+        row["zip"]          = "Various"
+        if amount_from_total is not None:
+            row["amount"] = amount_from_total
+        else:
+            amounts = [normalize_amount(r.get("amount", 0)) for r in valid_receipts]
+            row["amount"] = _tx_sum_formula(amounts)
+            row["notes"]  = _tx_receipt_breakdown_notes(valid_receipts)
+        return row
+
+    if amount_from_total is not None:
+        row["amount"] = amount_from_total
         return row
 
     row["notes"] = f"Could not find a stated total or any receipts in {filename} -- review manually"
