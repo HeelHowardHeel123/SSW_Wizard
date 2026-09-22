@@ -1162,9 +1162,16 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
     # to its own fixed column on the frontend regardless of which zone/
     # endpoint the file came through.
     env_number = str(raw.get("envelope_number", "")).strip()
-    if not env_number:
-        env_number = _tx_env_number_from_filename(filename)
     po_number = str(raw.get("po_number", "")).strip()
+    if env_number and po_number:
+        # Confirmed real on SONI 005: the model can still return both when a
+        # genuine Purchase Order also happens to carry an unrelated generic
+        # "Page 1 of 1" boilerplate footer. A document with a real PO # is
+        # definitively a Purchase Order, not a petty cash envelope, so PO #
+        # wins and the false-positive envelope reading is dropped.
+        env_number = ""
+    if not env_number and not po_number:
+        env_number = _tx_env_number_from_filename(filename)
 
     # Normally one PDF = one envelope, but occasionally a production submits
     # two full "PETTY CASH SUMMARY" cover pages for the same person in a
@@ -1259,8 +1266,9 @@ async def _extract_tx_petty_cash_prodcc(files, prodco_name, doc_kind, pymt_metho
     client        = _client()
     system_prompt = _load_tx_petty_cash_prodcc_prompt(prodco_name, doc_kind)
     user_text = (
-        f"Extract this {doc_kind} document's stated total, name, and ID number. "
-        "Only itemize individual receipts if no stated total exists for the whole document."
+        f"Extract this {doc_kind} document. Start by itemizing every individual receipt or PO line "
+        "item into the receipts array -- do this first and always, regardless of whether the document "
+        "also has a stated total. Then find the stated total (if any), name, and envelope/PO number."
     )
 
     loaded = []
@@ -1294,6 +1302,31 @@ async def _extract_tx_petty_cash_prodcc(files, prodco_name, doc_kind, pymt_metho
                             raw["notes"] = f"{existing}; {flag}" if existing else flag
                     except Exception as e:
                         print(f"[_extract_tx_petty_cash_prodcc] {filename}: Claude fallback also failed: {e}", flush=True)
+                # GPT-4o has been observed to skip itemizing receipts on some
+                # calls and not others for the identical cover-sheet template
+                # (confirmed live: two files using the exact same "PETTY CASH
+                # ENVELOPE" form, one itemized correctly, one came back with an
+                # empty receipts array) -- not a prompt-following gap, plain
+                # run-to-run variance. A stated-total petty cash/PO document
+                # essentially always has real receipts behind it, so an empty
+                # array alongside a found total is treated as a likely miss
+                # worth one retry, rather than trusted at face value.
+                elif raw.get("has_stated_total") and not raw.get("receipts"):
+                    print(f"[_extract_tx_petty_cash_prodcc] {filename}: has a stated total but no itemized receipts, retrying once", flush=True)
+                    try:
+                        retry_text = user_text + (
+                            " REMINDER: the receipts array must not be empty when this document has a "
+                            "stated total and real receipts/line items behind its cover page -- go back "
+                            "through every page and list them."
+                        )
+                        retry_raw = await loop.run_in_executor(
+                            None,
+                            functools.partial(_extract_tx_petty_cash_prodcc_from_file, filename, data, system_prompt, client, user_text=retry_text),
+                        )
+                        if retry_raw and retry_raw.get("receipts"):
+                            raw = retry_raw
+                    except Exception as e:
+                        print(f"[_extract_tx_petty_cash_prodcc] {filename}: retry for empty receipts failed: {e}", flush=True)
                 return filename, raw, None
             except Exception as e:
                 return filename, {}, str(e)
