@@ -1081,7 +1081,7 @@ def _extract_tx_petty_cash_prodcc_from_file(filename, data, system_prompt, clien
 
 
 _TX_NAME_FROM_FILENAME_RE = re.compile(r"([A-Za-z][A-Za-z'\-]+,\s*[A-Za-z][A-Za-z'\-]+)")
-_TX_ID_FROM_FILENAME_RE   = re.compile(r"\((\d+)\s+of\s+(\d+)\)", re.IGNORECASE)
+_TX_ENV_FROM_FILENAME_RE  = re.compile(r"\((\d+)\s+of\s+(\d+)\)", re.IGNORECASE)
 
 
 def _tx_name_from_filename(filename: str) -> str:
@@ -1096,10 +1096,12 @@ def _tx_name_from_filename(filename: str) -> str:
     return stem.strip()
 
 
-def _tx_id_from_filename(filename: str) -> str:
-    """Fallback envelope/PO number when the document has none of its own:
-    the "(N of M)" position in the filename. Empty string if absent."""
-    m = _TX_ID_FROM_FILENAME_RE.search(filename)
+def _tx_env_number_from_filename(filename: str) -> str:
+    """Fallback envelope number when the document has none of its own: the
+    "(N of M)" position in the filename. Empty string if absent. Envelope-
+    only -- a PO number has no comparable filename convention to fall back
+    to, and isn't guessable from a "(N of M)" pattern."""
+    m = _TX_ENV_FROM_FILENAME_RE.search(filename)
     return m.group(1) if m else ""
 
 
@@ -1152,13 +1154,22 @@ def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, p
     if not name:
         name = _tx_name_from_filename(filename)
 
-    id_number = str(raw.get("id_number", "")).strip()
-    if not id_number:
-        id_number = _tx_id_from_filename(filename)
+    # Envelope number and PO number are two independent, mutually-exclusive
+    # fields -- a real document only ever has one of them (confirmed on SONI
+    # 005's "PO 21917 - Petty Cash.pdf": a Purchase Order used to authorize a
+    # petty cash advance still carries a real "PO # 21917", not an envelope
+    # number, even though the file landed in the Petty Cash zone). Each maps
+    # to its own fixed column on the frontend regardless of which zone/
+    # endpoint the file came through.
+    env_number = str(raw.get("envelope_number", "")).strip()
+    if not env_number:
+        env_number = _tx_env_number_from_filename(filename)
+    po_number = str(raw.get("po_number", "")).strip()
 
     row = {
         "name":           name,
-        "id_number":      id_number,
+        "env_number":     env_number,
+        "po_number":      po_number,
         "line_number":    "",
         "pymt_method":    pymt_method,
         "payment_entity": prodco_name,
