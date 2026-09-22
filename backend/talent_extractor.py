@@ -3522,7 +3522,14 @@ def _build_cms_row(
     (report-driven mode never re-derives amounts from the PDF, only cross-
     checks against it), otherwise the PDF hit(s) directly."""
 
-    pdf_name = hits[0]['pdf_row']['name'] if hits else ''
+    # The CMS invoice PDF's own summary table prints "First [Middle] Last"
+    # (confirmed real: "MIKE GARCIA", "EVAN A SOTO", "BLAKE J. GIBBONS" for a
+    # loan-out) -- every name here is always one individual performer (a
+    # loan-out routes through the corp/wages fields, never the name itself),
+    # so reordering to "Last, First" is always safe, unlike Petty Cash/ProdCC
+    # where a name field can hold a department or company instead of a
+    # person. Reuses the same converter Highland/ER's PTIP path already uses.
+    pdf_name = _ptip_name_to_last_first(hits[0]['pdf_row']['name']) if hits else ''
     is_loan_out = any(h['pdf_row']['corp'] > 0 for h in hits)
     commercial_titles = sorted({h['commercial_title'] for h in hits if h['commercial_title']})
     commercial_ids    = sorted({h['commercial_id']    for h in hits if h['commercial_id']})
@@ -3563,7 +3570,7 @@ def _build_cms_row(
         on_ptip = True
     elif hits:
         pdf_row  = hits[0]['pdf_row']
-        name     = pdf_row['name']
+        name     = pdf_name  # already reordered to "Last, First" above
         # Loan-out payments route through Corp. instead of Wages -- fold
         # together into one wages figure the same way Agent (always 0 in
         # every real example seen) folds into misc.
