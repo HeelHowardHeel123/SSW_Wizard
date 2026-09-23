@@ -4061,12 +4061,16 @@ class Component extends DCLogic {
         const S = this.TX_LOC_SHEET, F = this.TX_LOC_FIRST;
         locRows.forEach((r, idx) => {
           const R = F + idx;
+          // Rows past the legacy block don't exist in the template, so they
+          // carry no style of their own -- mirror the last formatted row's
+          // per-column style onto every row we add beyond it.
+          const styleFrom = R > this.TX_LOC_LEGACY_LAST ? this.TX_LOC_LEGACY_LAST : null;
           for (const [f, col, type] of this.TX_LOCATIONS_MAP) {
-            const v = r[f];
-            if (v != null && String(v).trim() !== "")
-              cellPatches.push({ sheetName: S, addr: col + R, value: String(v), type, ensureRow: true });
+            const sf = styleFrom != null ? col + styleFrom : undefined;
+            if (r[f] != null && String(r[f]).trim() !== "")
+              cellPatches.push({ sheetName: S, addr: col + R, value: String(r[f]), type, ensureRow: true, styleFrom: sf });
             else
-              cellPatches.push({ sheetName: S, addr: col + R, clear: true });
+              cellPatches.push({ sheetName: S, addr: col + R, clear: true, ensureRow: true, styleFrom: sf });
           }
         });
         // Older templates still carry the hardcoded "DAY 1 of 4"…"DAY 4 of 4"
