@@ -1580,6 +1580,18 @@ def normalize_date(val: str) -> str:
     m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', s)
     if m:
         return f"{m.group(1).zfill(2)}/{m.group(2).zfill(2)}/{m.group(3)}"
+    # Month-name dates (call sheets commonly print these): "September 3,
+    # 2025", "Wednesday, September 3, 2025", "Sep 3 2025". Purely additive --
+    # every format above is tried first, so numeric-format behavior for every
+    # existing caller is unchanged; this only helps input that previously
+    # fell through to being returned as-is.
+    cleaned = re.sub(r'^[A-Za-z]+,\s*', '', s)  # drop a leading weekday name
+    cleaned = re.sub(r'(\d+)(st|nd|rd|th)\b', r'\1', cleaned, flags=re.IGNORECASE)  # "12th" -> "12"
+    for fmt in ("%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y"):
+        try:
+            return _dt.strptime(cleaned, fmt).strftime("%m/%d/%Y")
+        except ValueError:
+            continue
     return s
 
 
@@ -5442,6 +5454,195 @@ async def extract_tx_prodcc_endpoint(
     return await _extract_tx_petty_cash_prodcc(
         files, prodco_name, "Production Credit Card (ProdCC) reimbursement", "CC Reimb", x_app_secret,
     )
+
+
+# ── TX Locations ──────────────────────────────────────────────────────────────
+# One row per shoot location per shoot day, read from call sheets. Day-header
+# and location-box wording vary a lot between productions (confirmed against
+# 8 real TX call sheets: "SHOOT DAY 1 OF 2", "Day 1 of 5", "SHOOT 1", "SHOOT
+# DAY 1", "CALLSHEET DAY 1 OF 2", "Tech Scout D1"), so this needs the same
+# vision-extraction approach as Petty Cash/ProdCC, not fixed text parsing. Day
+# numbering is formatted in Python from bare digits the model reports, not
+# assembled by the model itself -- same reasoning as the envelope-number fix:
+# a mechanical formatting task is more reliable done deterministically here
+# than asked of the model.
+
+_TX_LOCATIONS_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_locations_extraction_prompt.txt")
+
+
+def _load_tx_locations_prompt() -> str:
+    with open(_TX_LOCATIONS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _extract_tx_locations_from_file(filename, data, system_prompt, client, user_text=""):
+    images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
+    if not images:
+        return {}
+    return _call_gpt_json_object(images, system_prompt, client, user_text=user_text, max_tokens=8000)
+
+
+def _tx_format_shoot_day(day_number: str, day_total: str) -> str:
+    """"DAY {N} of {M}", or "DAY {N}" alone when no total is stated -- matches
+    the template's own prior convention ("DAY 1 of 4"). Defensive against
+    stray non-digit text slipping through, same as the envelope-number
+    formatter: extracts the leading digit sequence rather than trusting the
+    model sent bare digits exactly as asked."""
+    n = _TX_LEADING_NUM_RE.search(day_number or "")
+    if not n:
+        return ""
+    m = _TX_LEADING_NUM_RE.search(day_total or "")
+    return f"DAY {n.group()} of {m.group()}" if m else f"DAY {n.group()}"
+
+
+def _tx_build_location_row(day: dict, loc: dict, filename: str) -> dict:
+    shoot_day = _tx_format_shoot_day(str(day.get("day_number", "")), str(day.get("day_total", "")))
+    is_shoot_day = bool(day.get("is_shoot_day"))
+    date_raw = str(day.get("date", "")).strip()
+    date = normalize_date(date_raw) if date_raw else ""
+
+    location_name = clean_name(str(loc.get("location_name", "")).strip())
+    street_number = str(loc.get("street_number", "")).strip()
+    street_name   = clean_address(str(loc.get("street_name", "")).strip())
+    city          = clean_name(str(loc.get("city", "")).strip())
+    state         = clean_state(str(loc.get("state", "")).strip()) or "TX"
+    zip_code      = clean_zip(str(loc.get("zip", "")).strip())
+    coordinates      = str(loc.get("coordinates", "")).strip()
+    no_location_text = str(loc.get("no_location_text", "")).strip()
+
+    # Address beats coordinates beats plain descriptive text -- confirmed
+    # explicitly: coordinates only stand in for a real address, and only go
+    # in Street Name (there's nowhere else in a postal-address-shaped column
+    # set for them to live).
+    has_address = bool(street_number or street_name or city or zip_code)
+    fallback_note = ""
+    if not has_address:
+        if coordinates:
+            street_name = coordinates
+        elif no_location_text:
+            fallback_note = no_location_text
+        else:
+            fallback_note = "No location information found for this day -- review source call sheet manually"
+
+    # Notes carries two independent things: the non-shoot-day flag (e.g.
+    # "Tech Scout D1") and the address-fallback text -- a prep day whose one
+    # location also has no real address needs both, not just one.
+    notes_parts = []
+    if not is_shoot_day:
+        notes_parts.append(str(day.get("day_label", "")).strip() or "Non-shoot day")
+    if fallback_note:
+        notes_parts.append(fallback_note)
+    notes = "; ".join(notes_parts)
+
+    county = tx_county_from_zip(zip_code) if zip_code else ""
+
+    return {
+        "shoot_day":     shoot_day,
+        "location_name": location_name,
+        "street_number": street_number,
+        "street_name":   street_name,
+        "city":          city,
+        "state":         state,
+        "zip":           zip_code,
+        "date":          date,
+        "notes":         notes,
+        "county":        county,
+        "sourceFile":    filename,
+    }
+
+
+async def _extract_tx_locations(files, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _client()
+    system_prompt = _load_tx_locations_prompt()
+    user_text = (
+        "Extract every shoot day and every location for each day from this call sheet. "
+        "Never skip a location for having an incomplete address -- always return every "
+        "location box found, using whichever of address/coordinates/descriptive text applies."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, {}, size_err
+
+        async with sem:
+            try:
+                raw = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_locations_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                if not raw or not raw.get("days"):
+                    print(f"[_extract_tx_locations] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                    try:
+                        anthropic_client = _anthropic_client()
+                        images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
+                        claude_raw = _call_claude_json_object(images, system_prompt, anthropic_client, user_text, max_tokens=8000)
+                        if claude_raw and claude_raw.get("days"):
+                            raw = claude_raw
+                    except Exception as e:
+                        print(f"[_extract_tx_locations] {filename}: Claude fallback also failed: {e}", flush=True)
+                return filename, raw, None
+            except Exception as e:
+                return filename, {}, str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+    for filename, raw, err in extraction_results:
+        errs = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "company": "unknown", "rows": 0, "issues": errs})
+            continue
+
+        days = (raw or {}).get("days") or []
+        file_rows = []
+        for day in days:
+            if not isinstance(day, dict):
+                continue
+            for loc in (day.get("locations") or []):
+                if not isinstance(loc, dict):
+                    continue
+                try:
+                    file_rows.append(_tx_build_location_row(day, loc, filename))
+                except Exception as e:
+                    errs.append(f"row build error: {e}")
+                    issues.append(f"{filename}: row build error: {e}")
+
+        if not file_rows:
+            errs.append("no location data extracted -- review manually")
+            issues.append(f"{filename}: no location data extracted")
+
+        rows.extend(file_rows)
+        file_summaries.append({
+            "filename": filename,
+            "company":  f"{len(days)} day(s)" if days else "unknown",
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+@app.post("/extract-tx-locations")
+async def extract_tx_locations_endpoint(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_locations(files, x_app_secret)
 
 
 # ── Consolidated run summary email ───────────────────────────────────────────
