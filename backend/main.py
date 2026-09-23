@@ -5476,10 +5476,21 @@ def _load_tx_locations_prompt() -> str:
 
 
 def _extract_tx_locations_from_file(filename, data, system_prompt, client, user_text=""):
-    images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
+    # Claude, not GPT-4o -- confirmed head-to-head against real TX call sheets
+    # (a standalone test harness comparing both providers on the same
+    # images/prompt): GPT-4o produced at least one real error on every single
+    # document tested (fabricated addresses, a systematically wrong date
+    # offset on a 5-day call sheet, and a complete failure -- 0 results -- on
+    # a separate crew-roster extraction test), while Claude matched the real
+    # call sheet exactly except for the rare single-character misread.
+    # dpi_scale=2.0 (not the usual 1.5) because the same test harness showed
+    # a 1.5-scale render is below Claude's effective resolution ceiling
+    # (~1568px long edge) and caused misreads that 2.0 fixed, including a
+    # wrong "DAY N of M" total on this same document.
+    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_pages=40)
     if not images:
         return {}
-    return _call_gpt_json_object(images, system_prompt, client, user_text=user_text, max_tokens=8000)
+    return _call_claude_json_object(images, system_prompt, client, user_text, max_tokens=8000)
 
 
 def _tx_format_shoot_day(day_number: str, day_total: str) -> str:
@@ -5556,7 +5567,7 @@ async def _extract_tx_locations(files, x_app_secret):
         raise HTTPException(401, "Bad or missing X-App-Secret header.")
 
     files = sorted(files, key=lambda f: (f.filename or "").lower())
-    client        = _client()
+    client        = _anthropic_client()
     system_prompt = _load_tx_locations_prompt()
     user_text = (
         "Extract every shoot day and every location for each day from this call sheet. "
@@ -5584,15 +5595,20 @@ async def _extract_tx_locations(files, x_app_secret):
                     functools.partial(_extract_tx_locations_from_file, filename, data, system_prompt, client, user_text=user_text),
                 )
                 if not raw or not raw.get("days"):
-                    print(f"[_extract_tx_locations] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                    # Claude only -- retry Claude itself rather than falling
+                    # back to GPT-4o, since GPT-4o has shown it can return
+                    # confidently wrong data here, not just decline the file.
+                    # A second empty result is treated as a real failure.
+                    print(f"[_extract_tx_locations] {filename}: Claude returned nothing, retrying once", flush=True)
                     try:
-                        anthropic_client = _anthropic_client()
-                        images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
-                        claude_raw = _call_claude_json_object(images, system_prompt, anthropic_client, user_text, max_tokens=8000)
-                        if claude_raw and claude_raw.get("days"):
-                            raw = claude_raw
+                        retry_raw = await loop.run_in_executor(
+                            None,
+                            functools.partial(_extract_tx_locations_from_file, filename, data, system_prompt, client, user_text=user_text),
+                        )
+                        if retry_raw and retry_raw.get("days"):
+                            raw = retry_raw
                     except Exception as e:
-                        print(f"[_extract_tx_locations] {filename}: Claude fallback also failed: {e}", flush=True)
+                        print(f"[_extract_tx_locations] {filename}: retry also failed: {e}", flush=True)
                 return filename, raw, None
             except Exception as e:
                 return filename, {}, str(e)
