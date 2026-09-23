@@ -568,6 +568,31 @@ function patchCellInSheet(xml, addr, value, type, sOverride) {
   return xml.slice(0, rm.index) + rm[1] + newInner + rm[3] + xml.slice(rm.index + rm[0].length);
 }
 
+// Create an empty <row r="N"> in sheetData order if the sheet has none, and
+// stretch the dimension to cover it. For tabs that are a genuine blank slate
+// below the header (TX Locations), where rows can't be INSERTED because an
+// unrelated side column (L) shares the same rows and must not shift.
+function ensureRowInSheet(xml, R) {
+  // Existing row: drop its spans hint, which can predate the cells we add.
+  if (new RegExp(`<row r="${R}"[\\s>/]`).test(xml))
+    return xml.replace(new RegExp(`(<row r="${R}")\\s+spans="[^"]*"`), "$1");
+  const sd = xml.match(/(<sheetData>)([\s\S]*?)(<\/sheetData>)|<sheetData\s*\/>/);
+  if (!sd) return xml;
+  const newRow = `<row r="${R}"></row>`;
+  let out;
+  if (sd[1] == null) {
+    out = xml.replace(sd[0], `<sheetData>${newRow}</sheetData>`);
+  } else {
+    const inner = sd[2];
+    let insertAt = inner.length;
+    for (const m of inner.matchAll(/<row r="(\d+)"/g)) {
+      if (+m[1] > R) { insertAt = m.index; break; }
+    }
+    out = xml.replace(sd[0], sd[1] + inner.slice(0, insertAt) + newRow + inner.slice(insertAt) + sd[3]);
+  }
+  return out.replace(/(<dimension ref="[A-Z]+\d+:[A-Z]+)(\d+)("\s*\/>)/, (m, a, d, b) => a + Math.max(+d, R) + b);
+}
+
 function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 // XML-encode a sheet name the way it appears inside attribute values / formulas
 function xmlName(s) { return s.replace(/&/g, "&amp;"); }
@@ -777,6 +802,7 @@ function styleOfCell(xml, addr) {
           continue;
         }
         if (p.value == null || String(p.value).trim() === "") continue;
+        if (p.ensureRow) px = ensureRowInSheet(px, +p.addr.match(/\d+/)[0]);
         const sOverride = p.styleFrom ? styleOfCell(px, p.styleFrom) : null;
         px = patchCellInSheet(px, p.addr, p.value, p.type, sOverride);
         written++;
