@@ -1511,6 +1511,40 @@ _STATE_ABBR = {
 
 _STATE_SET = frozenset(_STATE_ABBR.values())
 
+# ── TX ZIP -> County lookup (for the Locations tab) ──────────────────────────
+# Sourced from a public ZIP/city/county reference dataset, filtered down to
+# Texas's ~2,600 ZIP codes. Loaded once into a dict at import time -- small
+# enough that a plain in-memory lookup is simplest, no need for a DB or
+# per-request file read.
+_TX_ZIP_COUNTY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_zip_county.csv")
+
+def _load_tx_zip_county() -> dict:
+    table: dict[str, str] = {}
+    try:
+        with open(_TX_ZIP_COUNTY_PATH, "r", encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                zip5 = row.get("zip", "").strip().zfill(5)
+                county = row.get("county", "").strip()
+                if zip5 and county:
+                    table[zip5] = county
+    except FileNotFoundError:
+        print(f"[_load_tx_zip_county] {_TX_ZIP_COUNTY_PATH} not found -- TX County lookup will be empty", flush=True)
+    return table
+
+_TX_ZIP_COUNTY = _load_tx_zip_county()
+
+
+def tx_county_from_zip(zip_code: str) -> str:
+    """A ZIP code's TX county, or empty string if not found (a non-TX ZIP, a
+    malformed value, or a ZIP genuinely missing from the reference table).
+    A handful of real ZIP codes straddle two counties; this table (like any
+    standard ZIP/county crosswalk) resolves those to the majority-population
+    county, not a guaranteed match for every address in a split ZIP."""
+    zip5 = re.sub(r"\D", "", str(zip_code or ""))[:5]
+    if len(zip5) != 5:
+        return ""
+    return _TX_ZIP_COUNTY.get(zip5, "")
+
 _PYMT_MAP = {
     "check":"Check","cheque":"Check","p-card":"P-Card","pcard":"P-Card","p card":"P-Card",
     "purchasing card":"P-Card","credit card":"Credit Card","credit":"Credit Card",
