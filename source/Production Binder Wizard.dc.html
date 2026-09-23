@@ -4061,16 +4061,16 @@ class Component extends DCLogic {
         const S = this.TX_LOC_SHEET, F = this.TX_LOC_FIRST;
         locRows.forEach((r, idx) => {
           const R = F + idx;
-          // Rows past the legacy block don't exist in the template, so they
-          // carry no style of their own -- mirror the last formatted row's
-          // per-column style onto every row we add beyond it.
-          const styleFrom = R > this.TX_LOC_LEGACY_LAST ? this.TX_LOC_LEGACY_LAST : null;
+          // Template only styles rows 5-8; past that, borrow row 8's style per
+          // column, on cleared cells too, so rows 9+ aren't unformatted.
+          const sty = R > this.TX_LOC_LEGACY_LAST;
           for (const [f, col, type] of this.TX_LOCATIONS_MAP) {
-            const sf = styleFrom != null ? col + styleFrom : undefined;
-            if (r[f] != null && String(r[f]).trim() !== "")
-              cellPatches.push({ sheetName: S, addr: col + R, value: String(r[f]), type, ensureRow: true, styleFrom: sf });
+            const v = r[f];
+            const extra = sty ? { styleFrom: col + this.TX_LOC_LEGACY_LAST } : {};
+            if (v != null && String(v).trim() !== "")
+              cellPatches.push({ sheetName: S, addr: col + R, value: String(v), type, ensureRow: true, ...extra });
             else
-              cellPatches.push({ sheetName: S, addr: col + R, clear: true, ensureRow: true, styleFrom: sf });
+              cellPatches.push({ sheetName: S, addr: col + R, clear: true, ensureRow: true, ...extra });
           }
         });
         // Older templates still carry the hardcoded "DAY 1 of 4"…"DAY 4 of 4"
@@ -5086,6 +5086,7 @@ class Component extends DCLogic {
       // unrelated backup, any order) exactly like GA's AP zone. Upload only —
       // no extraction wired yet.
       { id: "txCrewIc", label: "Crew - Independent Contractors", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
+      { id: "txCallSheet", label: "Call Sheets", accept: [".pdf"], hint: "Multi-day call sheets · .pdf · up to 200", max: 200, txOnly: true },
     ]},
     { title: "Talent & Extras", zones: [
       { id: "talentPdfs", label: "Talent Invoice PDFs", accept: [".pdf"], hint: "Multiple files · .pdf · payroll & agent invoices" },
@@ -5110,7 +5111,6 @@ class Component extends DCLogic {
       // other txOnly vendor-packet zones started from.
       { id: "txPettyCash", label: "Petty Cash", accept: [".pdf"], hint: "Custodian envelope packets · .pdf · up to 200", max: 200, txOnly: true },
       { id: "txProdCC", label: "ProdCC", accept: [".pdf"], hint: "Crew card / cash reimbursements · .pdf · up to 200", max: 200, txOnly: true },
-      { id: "txCallSheet", label: "Call Sheets (Locations)", accept: [".pdf"], hint: "Multi-day call sheets · .pdf · up to 200", max: 200, txOnly: true },
     ]},
     { title: "Agency", zones: [
       { id: "agencyBillings", label: "Agency Billings", accept: [".pdf"], hint: "Multiple files · .pdf", notGa: true },

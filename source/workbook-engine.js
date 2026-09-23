@@ -520,6 +520,7 @@ function buildCell(addr, attrs, value, type, sOverride) {
   // the value's type doesn't match the placeholder's format (a date written into
   // an accounting-formatted cell) or when the cell didn't exist at all.
   if (sOverride != null) keep = keep.replace(/\s+s="\d+"/g, "") + ` s="${sOverride}"`;
+  // blank -> a styled cell with no value (a cleared field on a brand-new row).
   if (type === "blank") return `<c r="${addr}"${keep}/>`;
   if (type === "currency" || type === "number") {
     const num = parseFloat(String(value).replace(/[^0-9.\-]/g, ""));
@@ -794,24 +795,22 @@ function styleOfCell(xml, addr) {
       let px = await curText(target.path);
       if (px == null) continue;
       for (const p of patches) {
-        if (p.ensureRow) px = ensureRowInSheet(px, +p.addr.match(/\d+/)[0]);
         if (p.clear) {
-          const re = new RegExp(`<c r="${p.addr}"([^>]*?)(?:/>|>[\\s\\S]*?</c>)`);
-          if (re.test(px)) {
-            // Blank the cell but keep its style (removes template placeholder values).
-            px = px.replace(re, (full, attrs) => {
-              const s = (attrs.match(/\s+s="\d+"/) || [""])[0];
-              return `<c r="${p.addr}"${s}/>`;
-            });
-          } else if (p.styleFrom) {
-            // Cell doesn't exist (a row added beyond the template) -- create an
-            // empty styled cell so it lines up visually with the real columns.
-            const sOverride = styleOfCell(px, p.styleFrom);
-            if (sOverride != null) px = patchCellInSheet(px, p.addr, "", "blank", sOverride);
+          if (p.ensureRow) px = ensureRowInSheet(px, +p.addr.match(/\d+/)[0]);
+          // Cell missing + styleFrom: create a styled blank so the row stays formatted.
+          if (p.styleFrom && !new RegExp(`<c r="${p.addr}"[\\s>/]`).test(px)) {
+            px = patchCellInSheet(px, p.addr, "", "blank", styleOfCell(px, p.styleFrom));
+            continue;
           }
+          // Blank the cell but keep its style (removes template placeholder values).
+          px = px.replace(new RegExp(`<c r="${p.addr}"([^>]*?)(?:/>|>[\\s\\S]*?</c>)`), (full, attrs) => {
+            const s = (attrs.match(/\s+s="\d+"/) || [""])[0];
+            return `<c r="${p.addr}"${s}/>`;
+          });
           continue;
         }
         if (p.value == null || String(p.value).trim() === "") continue;
+        if (p.ensureRow) px = ensureRowInSheet(px, +p.addr.match(/\d+/)[0]);
         const sOverride = p.styleFrom ? styleOfCell(px, p.styleFrom) : null;
         px = patchCellInSheet(px, p.addr, p.value, p.type, sOverride);
         written++;
