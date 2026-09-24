@@ -3616,6 +3616,13 @@ class Component extends DCLogic {
     this._rosterRows = [];
     this._glBillingRows = [];
     this._glProdcoRows = [];
+    // getCallSheetCrew()'s cache -- without this reset, a second TX run in
+    // the same session (different production, different call sheet) would
+    // silently reuse the FIRST run's crew roster instead of re-extracting,
+    // since nothing else ever invalidates it. Confirmed with real data: a
+    // SONIC 005 run followed by an ABBVIE 022 run in one session wrote
+    // SONIC's crew (e.g. "Jody Hill / Director") into ABBVIE's workbook.
+    this._callSheetCrew = null;
     for (const k of ["_fringeCount", "_payrollCount", "_billingCount", "_subVendorCount",
                      "_agencyHoursCount", "_retainerCount", "_residencyCount",
                      "_talentCount", "_talentFreelanceCount"]) this[k] = 0;
