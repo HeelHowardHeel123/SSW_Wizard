@@ -526,6 +526,14 @@ def _reconcile_person_level(
         parts = _invoice_breakdown_parts(group)
         row["automationTotal"] = round(sum(amt for _, amt in parts), 2)
         row["notes"] = _format_invoice_breakdown(parts)
+        # Inv # (E) has no field of its own in this mode -- the Production
+        # Report row it started from carries none (that's why this whole
+        # path exists) -- so it's built the same way CMS Talent already
+        # does for a person spanning several invoices: every distinct
+        # invoice number the group actually has, comma-joined. Reuses
+        # `parts` rather than re-deriving the list so this always agrees
+        # with the Notes breakdown above.
+        row["invoiceNo"] = ", ".join(inv for inv, _ in parts if inv != "?")
         # Only set when there's genuinely more than one invoice -- the
         # frontend uses this to decide whether Automation Total should be
         # written as a live formula (so a reviewer can see at a glance that
