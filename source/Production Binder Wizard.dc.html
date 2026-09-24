@@ -1148,8 +1148,14 @@ class Component extends DCLogic {
       if (Array.isArray(j.crew)) {
         if (!j.crew.length) this.runLog("warn", "  crew list is EMPTY — the call sheet parsed but no crew were returned");
         for (const c of j.crew) {
+          // Two different call-sheet-crew shapes share this `crew` key:
+          // {name, positions[], dates[]} (AP-description matching) and
+          // {name, title} (TX Crew Payroll/Crew IC roster matching) — show
+          // whichever position-like field this entry actually has instead of
+          // assuming one shape and printing "(no position)" for the other.
+          const position = (c.positions || []).join("/") || c.title || "(no position)";
           this.runLog("detail", "  crew: " + (c.name || "(no name)") +
-            " · " + ((c.positions || []).join("/") || "(no position)") +
+            " · " + position +
             ((c.dates || []).length ? " · " + c.dates.join(", ") : ""));
         }
       }
@@ -6881,8 +6887,23 @@ class Component extends DCLogic {
       if (res.ok) {
         const j = await res.json();
         mapping = (j && j.mapping) || {};
+        // A clean 200 with an empty mapping and an `error` field means the
+        // match attempt itself failed server-side (e.g. an unparseable/
+        // truncated Claude response) — surfaced so this reads as "the
+        // matcher broke" rather than silently looking like "nobody on the
+        // call sheet matched anyone," which would otherwise turn every
+        // single call-sheet person into a duplicate orphan row.
+        if (!Object.keys(mapping).length && j && j.error)
+          issues.push("Call-sheet name matching failed (" + j.error + ") — every call-sheet " +
+            "person was added as a new row instead of being matched to an existing one; re-run to retry.");
+      } else {
+        issues.push("Call-sheet name matching request failed (HTTP " + res.status + ") — every " +
+          "call-sheet person was added as a new row instead of being matched to an existing one.");
       }
-    } catch (e) { /* mapping stays {} — everyone falls through as unmatched */ }
+    } catch (e) {
+      issues.push("Call-sheet name matching failed (" + (e.message || e) + ") — every call-sheet " +
+        "person was added as a new row instead of being matched to an existing one.");
+    }
 
     const matchedRosterNames = new Set();
     const orphans = [];

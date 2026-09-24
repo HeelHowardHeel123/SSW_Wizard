@@ -4937,7 +4937,15 @@ async def match_names(
             functools.partial(
                 claude_client.messages.create,
                 model="claude-sonnet-5",
-                max_tokens=4096,
+                # Was 4096 -- confirmed too low against a real ~90-name TX
+                # crew roster (call-sheet matching): every single name came
+                # back unmatched, consistent with the response getting cut
+                # off mid-JSON and silently falling back to {} below, same
+                # failure mode already seen and fixed on crew-roster
+                # extraction's own max_tokens. The mapping's size scales with
+                # BOTH lists' length (every List A name gets a key even when
+                # null), so a large two-list match needs real headroom.
+                max_tokens=16000,
                 messages=[{"role": "user", "content": user_prompt}],
             )
         )
@@ -4960,6 +4968,11 @@ async def match_names(
                 mapping = {}
         else:
             mapping = {}
+        if not mapping:
+            # Surfaced so a caller can tell "nobody matched" apart from
+            # "the response was unparseable" instead of both looking like a
+            # silent empty mapping.
+            return {"mapping": {}, "error": "Claude response was not valid JSON (possible truncation)"}
 
     return {"mapping": mapping}
 
