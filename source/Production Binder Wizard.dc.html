@@ -4121,11 +4121,18 @@ class Component extends DCLogic {
       await this.logStep("Extracting " + ic.label + " — " + nIc + (nIc === 1 ? " packet" : " packets"),
         false, this.beginProgress(ic.zone));
       const res = await this.parseTxIc(ic.kind);
-      const icRows = res.rows || [];
+      let icRows = res.rows || [];
+      const icIssues = res.issues || [];
+      // Same call-sheet-orphans-land-at-the-end trick as Crew Payroll — only
+      // for the Crew IC tab (Talent isn't in scope for this pass).
+      if (ic.kind === "crew") {
+        const orphans = await this.matchCallSheetToRoster(icRows, "worker_name", "worker_position", icIssues);
+        if (orphans.length) icRows = icRows.concat(orphans);
+      }
       const icWritten = icRows.length;
-      this._runData[ic.dataKey] = { files: res.files || [], issues: res.issues || [], rows: icWritten };
-      this._fringeIssues = [...(this._fringeIssues || []), ...(res.issues || [])];
-      for (const iss of res.issues || []) this.runLog("warn", "  " + (iss.reason || iss));
+      this._runData[ic.dataKey] = { files: res.files || [], issues: icIssues, rows: icWritten };
+      this._fringeIssues = [...(this._fringeIssues || []), ...icIssues];
+      for (const iss of icIssues) this.runLog("warn", "  " + (iss.reason || iss));
 
       const insert = Math.max(0, icWritten - ic.prebuilt);
       if (insert) inserts.push({
@@ -4162,6 +4169,13 @@ class Component extends DCLogic {
         // pay_date arrives on the row shape but has NO column on either IC tab
         // (P/Q/R are Pymt Method / Pymt # / Proof of Payment), so it is dropped.
         for (const col of this.TX_IC_MANUAL) put(col, "text", null);
+        // AD/AE On Call Sheet / Name on Call sheet — Crew tab only, and only
+        // when a call sheet was actually matched against (see
+        // matchCallSheetToRoster; onCallSheet stays undefined otherwise).
+        if (ic.kind === "crew" && r.onCallSheet != null) {
+          put("AD", "text", r.onCallSheet ? "YES" : "NO");
+          put("AE", "text", r.callSheetName || "");
+        }
       });
       // Every one of these 7 columns carries a literal 0 or a formula on all 31
       // pre-built rows, so an unwritten row would read as a real $0.00 line.
@@ -6440,6 +6454,14 @@ class Component extends DCLogic {
       : r.payrollCompany === "wrapbook" ? "Wrapbook"
       : (r.payrollCompany || ""));
     put("AI", "text", (r.loanOut === true || /loan/i.test(r.type || "")) ? "YES" : "NO");
+    // AQ/AR On Call Sheet / Name on Call sheet — only ever set when a call
+    // sheet was actually matched against (matchCallSheetToRoster left
+    // `onCallSheet` undefined on every row when no call sheet was uploaded),
+    // same convention as C/D only ever being written when a source exists.
+    if (r.onCallSheet != null) {
+      put("AQ", "text", r.onCallSheet ? "YES" : "NO");
+      put("AR", "text", r.callSheetName || "");
+    }
     return Object.values(byCol);
   }
 
@@ -6492,6 +6514,11 @@ class Component extends DCLogic {
         "Both sources were written as-is, so anyone appearing in both now has two rows — check for " +
         "duplicates before filing.");
     }
+    // Call-sheet crew with no PDF/Report match land at the END of `raw`, so
+    // they naturally write to rows after everyone else once the existing
+    // growth math below runs — no separate insertion pass needed.
+    const orphans = await this.matchCallSheetToRoster(raw, "worker", "jobTitle", issues);
+    if (orphans.length) raw = raw.concat(orphans);
     // Nothing is dropped: the tab grows by insertion instead (see
     // TX_PAYROLL_LAST_ROW and buildTexasBlob).
     const CAP = this.TX_PAYROLL_LAST_ROW - this.TX_PAYROLL_FIRST_ROW + 1;
@@ -6783,6 +6810,105 @@ class Component extends DCLogic {
       }
     }
     return merged;
+  }
+
+  // ALL call sheet files in one POST (unlike extractTxLocations' one-per-file
+  // loop) — the backend dedupes a person across every page of every file in a
+  // single pass, and doing that split across separate requests would mean
+  // re-implementing the same merge-by-name logic here just to recombine them.
+  async extractTxCrewRoster(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return { crew: [], issues: [], files: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    await this.progressFile(sorted[sorted.length - 1].name, sorted.length);
+    try {
+      const fd = new FormData();
+      sorted.forEach((f) => fd.append("files", f));
+      const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-crew-roster", fd);
+      return { crew: j.crew || [], issues: j.issues || [], files: j.files || [] };
+    } catch (e) {
+      const why = "TX Crew Roster extraction failed — " + (e.message || e);
+      return { crew: [], issues: [why], files: [] };
+    }
+  }
+
+  // Cached per build: both Crew Payroll and Crew - Indepen. Contractors match
+  // against the same call-sheet roster, so this pays the extraction cost —
+  // and surfaces any extraction issues — exactly once, not once per tab.
+  async getCallSheetCrew() {
+    if (this._callSheetCrew) return this._callSheetCrew;
+    const files = this.files.txCallSheet || [];
+    this._callSheetCrew = files.length
+      ? await this.extractTxCrewRoster(files)
+      : { crew: [], issues: [], files: [] };
+    if (this._callSheetCrew.issues.length)
+      this._fringeIssues = [...(this._fringeIssues || []), ...this._callSheetCrew.issues];
+    return this._callSheetCrew;
+  }
+
+  // Matches a call-sheet crew roster against an already-built tab's rows by
+  // name (via /match-names, reused as-is — its field names are historical
+  // from the residency/diversity feature it was first built for, but the
+  // prompt itself is generic name-vs-name fuzzy matching with no residency or
+  // diversity logic in it). Mutates `rosterRows` in place, adding
+  // `onCallSheet` (bool) and `callSheetName` (string) to every row, and
+  // returns an array of orphan pseudo-rows (call-sheet people matched to
+  // nobody) to concat onto the end of `rosterRows`. A no-op (returns []
+  // without touching rosterRows) when there's no call-sheet data at all, so
+  // the caller's flag columns stay completely untouched, same as today.
+  async matchCallSheetToRoster(rosterRows, nameField, titleField, issues) {
+    // getCallSheetCrew() already surfaces extraction issues into
+    // this._fringeIssues once (cached) — not re-pushed here to avoid
+    // reporting the same warning twice when both tabs match in one build.
+    const { crew } = await this.getCallSheetCrew();
+    if (!crew.length) return [];
+
+    const callSheetNames = crew.map((c) => c.name);
+    const rosterNames = rosterRows.map((r) => r[nameField]).filter((n) => n != null && String(n).trim() !== "");
+    if (!rosterNames.length) {
+      // Nobody on the roster yet to match against — everyone on the call
+      // sheet is an orphan.
+      return crew.map((c) => ({ [nameField]: c.name, [titleField]: c.title, onCallSheet: true, callSheetName: c.name }));
+    }
+
+    let mapping = {};
+    try {
+      const res = await fetch(this.BACKEND_URL + "/match-names", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Secret": this.BACKEND_SECRET },
+        body: JSON.stringify({ residency_names: callSheetNames, diversity_names: rosterNames }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        mapping = (j && j.mapping) || {};
+      }
+    } catch (e) { /* mapping stays {} — everyone falls through as unmatched */ }
+
+    const matchedRosterNames = new Set();
+    const orphans = [];
+    for (const c of crew) {
+      const matched = mapping[c.name];
+      if (matched && rosterNames.includes(matched) && !matchedRosterNames.has(matched)) {
+        matchedRosterNames.add(matched);
+      } else {
+        if (matched && matchedRosterNames.has(matched))
+          issues.push(c.name + " and another call-sheet name both matched \"" + matched +
+            "\" — only the first was kept; the rest is treated as not on the roster.");
+        orphans.push({ [nameField]: c.name, [titleField]: c.title, onCallSheet: true, callSheetName: c.name });
+      }
+    }
+    // Invert once: roster name -> the call-sheet name that matched it.
+    const byRosterName = {};
+    for (const c of crew) {
+      const matched = mapping[c.name];
+      if (matched && matchedRosterNames.has(matched) && !byRosterName[matched]) byRosterName[matched] = c.name;
+    }
+    for (const r of rosterRows) {
+      const callSheetName = byRosterName[r[nameField]];
+      r.onCallSheet = !!callSheetName;
+      r.callSheetName = callSheetName || "";
+    }
+    return orphans;
   }
 
   // Both zones share one extractor — same request shape, same row shape, only

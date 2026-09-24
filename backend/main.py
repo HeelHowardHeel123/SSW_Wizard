@@ -5661,6 +5661,128 @@ async def extract_tx_locations_endpoint(
     return await _extract_tx_locations(files, x_app_secret)
 
 
+# ── TX Crew Roster (call sheet) ──────────────────────────────────────────────
+# Same call sheets as TX Locations, different question: every crew member row
+# on every page, for matching against the Crew Payroll / Crew - Indepen.
+# Contractors rosters ("On Call Sheet" / "Name on Call sheet"). Unlike
+# Locations -- one call for the whole PDF -- this sends ONE PAGE PER CLAUDE
+# CALL. Confirmed in a standalone test harness against a real 5-day, dense
+# crew grid: a whole-PDF call (even at max_tokens=16000) returned 0 rows after
+# 69s, almost certainly a mid-response truncation given ~90 crew rows per
+# page; switching to page-by-page calls fixed it outright (81-96 rows per
+# page, no truncation, faster overall). Dedup happens once, in Python, across
+# every page of every uploaded file -- the model is deliberately told NOT to
+# deduplicate itself (a person on only one day out of five must still be
+# reported from that one page).
+
+_TX_CREW_ROSTER_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_crew_roster_extraction_prompt.txt")
+
+
+def _load_tx_crew_roster_prompt() -> str:
+    with open(_TX_CREW_ROSTER_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def dedupe_crew(rows: list[dict]) -> list[dict]:
+    """Merge repeat sightings of the same person across every page/day into
+    one entry, keeping every distinct title seen for them (a person's title
+    is usually stable, but this surfaces it rather than silently picking one
+    if it ever varies). Someone who only appears on one page out of several
+    still gets exactly one entry here, same as everyone else."""
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for r in rows:
+        name = str(r.get("name", "")).strip()
+        title = str(r.get("title", "")).strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key not in merged:
+            merged[key] = {"name": name, "titles": []}
+            order.append(key)
+        if title and title not in merged[key]["titles"]:
+            merged[key]["titles"].append(title)
+    return [{"name": merged[k]["name"], "title": ", ".join(merged[k]["titles"])} for k in order]
+
+
+def _extract_tx_crew_roster_from_file(filename, data, system_prompt, client, user_text=""):
+    # dpi_scale=2.0, same reasoning as TX Locations (source-comment there):
+    # 1.5-scale render is below Claude's effective resolution ceiling and
+    # caused misreads on this same real call sheet.
+    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_pages=40)
+    raw_rows = []
+    for page_img in images:
+        try:
+            raw = _call_claude_json_object([page_img], system_prompt, client, user_text, max_tokens=16000)
+        except Exception:
+            continue
+        crew = (raw or {}).get("crew") or []
+        raw_rows.extend(c for c in crew if isinstance(c, dict))
+    return raw_rows
+
+
+async def _extract_tx_crew_roster(files, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _anthropic_client()
+    system_prompt = _load_tx_crew_roster_prompt()
+    user_text = (
+        "List every crew member row on every page of this call sheet, exactly as printed. "
+        "Someone working only one day still needs to be reported from that page."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, [], size_err
+
+        async with sem:
+            try:
+                raw_rows = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_crew_roster_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_rows, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    all_raw_rows, issues, file_summaries = [], [], []
+    for filename, raw_rows, err in extraction_results:
+        if err:
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "rows": 0, "issues": [err]})
+            continue
+        if not raw_rows:
+            issues.append(f"{filename}: no crew data extracted")
+            file_summaries.append({"filename": filename, "rows": 0, "issues": ["no crew data extracted"]})
+            continue
+        all_raw_rows.extend(raw_rows)
+        file_summaries.append({"filename": filename, "rows": len(raw_rows), "issues": []})
+
+    crew = dedupe_crew(all_raw_rows)
+    return {"crew": crew, "issues": issues, "files": file_summaries}
+
+
+@app.post("/extract-tx-crew-roster")
+async def extract_tx_crew_roster_endpoint(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_crew_roster(files, x_app_secret)
+
+
 # ── Consolidated run summary email ───────────────────────────────────────────
 
 class _FileSummaryIn(BaseModel):
