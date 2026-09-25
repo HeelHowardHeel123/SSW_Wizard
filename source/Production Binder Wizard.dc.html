@@ -1856,6 +1856,40 @@ class Component extends DCLogic {
   // check below and the tab is skipped with a visible issue — same deliberate
   // arrangement as the GA Talent tab. Publish the current TX template in
   // Wizard 04 (or Replace it locally) and the tab writes.
+  // ══ Cast & Crew List tab (Texas) ═════════════════════════════════════════
+  // Aggregated roster built from the other 4 tabs' already-computed rows
+  // (Crew Payroll, Crew IC, Talent Payroll, Talent IC) — no new extraction
+  // or matching, see the castCrewEntries accumulation in buildTexasBlob.
+  // Single continuous 85-row band, no per-row formulas at all (row numbers
+  // in B are template literals, not a formula — same fix as Crew Payroll's
+  // ITEM #, written explicitly per row).
+  TX_CAST_CREW_SHEET = "Cast & Crew List";
+  TX_CAST_CREW_FIRST_ROW = 5;
+  TX_CAST_CREW_LAST_ROW = 89;
+  TX_CAST_CREW_EXPECT = {
+    headerRow: 4,
+    headerCells: {
+      C: "Crew Or Talent", D: "Name (Last, First)", E: "Crew Position / Role",
+      F: "DTR Form (Y/N)", H: "Notes", I: "From Documents",
+    },
+    firstRow: 5,
+    lastRow: 89,
+  };
+  txCastCrewFormulaRow() { return []; }
+  // Provenance tag list for the "From Documents" column: the tab-specific
+  // document label only when this row was actually matched from that tab's
+  // own payroll/invoice/production-report source (an `_orphan` row was only
+  // ever added via call-sheet or DTR matching, never that source), plus
+  // Call Sheet / DTR tags whenever those matched — same onCallSheet/hasDtr
+  // flags already written to each tab's own columns, no re-matching here.
+  txCastCrewTagList(r, ownDocLabel) {
+    const tags = [];
+    if (!r._orphan) tags.push(ownDocLabel);
+    if (r.onCallSheet) tags.push("Call Sheet");
+    if (r.hasDtr) tags.push("DTR");
+    return tags.join(", ");
+  }
+
   TX_PAYROLL_SHEET = "Crew Payroll";
   TX_PAYROLL_FIRST_ROW = 9;
   // 46 pre-built rows, 9-54. Every summary below the table — the SUBTOTAL band
@@ -3550,6 +3584,7 @@ class Component extends DCLogic {
     const buf = await this.loadTemplateBytes("tx", file);
     const eng = await this.loadEngine();
     const inserts = [], cellPatches = [], rowWrites = [], preconditions = [];
+    const castCrewEntries = [];
     const p = this.state.project;
 
     // C9 is a real date cell on the template; H13 is in the budget block and
@@ -3648,7 +3683,13 @@ class Component extends DCLogic {
       false, this.beginProgress("payroll", "prodReport", "timecards"));
     const txPay = nPay
       ? await this.parseTxPayrollRows()
-      : { rows: [], issues: [], files: [], count: 0, overflow: 0, grow: 0, generatedParsers: [] };
+      : { rows: [], raw: [], issues: [], files: [], count: 0, overflow: 0, grow: 0, generatedParsers: [] };
+    for (const r of txPay.raw || []) {
+      if (r.worker) castCrewEntries.push({
+        kind: "Crew", name: r.worker, role: r.jobTitle, hasDtr: r.hasDtr,
+        fromDocs: this.txCastCrewTagList(r, "Crew Payroll"),
+      });
+    }
 
     // Checked SOFTLY first: the bundled texas.xlsx predates the four inserted
     // columns, so a hard precondition would abort the whole workbook for a
@@ -3722,6 +3763,12 @@ class Component extends DCLogic {
         // orphan list is discarded. tp.issues is a real array reference, so
         // pushing into it here is picked up by the spreads just below.
         await this.matchDtrToRoster(tpRows, "talent_name", tp.issues);
+        for (const r of tpRows) {
+          if (r.talent_name) castCrewEntries.push({
+            kind: "Talent", name: r.talent_name, role: r.title, hasDtr: r.hasDtr,
+            fromDocs: this.txCastCrewTagList(r, "Talent Payroll"),
+          });
+        }
         const tpWritten = tpRows.length;
         this._runData.tx_talent_payroll = { files: tp.files || [], issues: tp.issues || [], rows: tpWritten };
         this._fringeIssues = [...(this._fringeIssues || []), ...(tp.issues || [])];
@@ -4159,12 +4206,22 @@ class Component extends DCLogic {
       // for the Crew IC tab (Talent isn't in scope for this pass).
       if (ic.kind === "crew") {
         const orphans = await this.matchCallSheetToRoster(icRows, "worker_name", "worker_position", icIssues);
+        for (const o of orphans) o._orphan = true;
         if (orphans.length) icRows = icRows.concat(orphans);
       }
       // DTR matching applies to BOTH kinds (unlike call-sheet matching,
       // which is crew-only) — neither tab adds new rows for it though, so
       // the returned orphan list is discarded here.
       await this.matchDtrToRoster(icRows, "worker_name", icIssues);
+      {
+        const ownLabel = ic.kind === "crew" ? "Crew Freelance Invoice" : "Talent Freelance Invoice";
+        for (const r of icRows) {
+          if (r.worker_name) castCrewEntries.push({
+            kind: ic.kind === "crew" ? "Crew" : "Talent", name: r.worker_name, role: r.worker_position,
+            hasDtr: r.hasDtr, fromDocs: this.txCastCrewTagList(r, ownLabel),
+          });
+        }
+      }
       const icWritten = icRows.length;
       this._runData[ic.dataKey] = { files: res.files || [], issues: icIssues, rows: icWritten };
       this._fringeIssues = [...(this._fringeIssues || []), ...icIssues];
@@ -4228,6 +4285,43 @@ class Component extends DCLogic {
         (icWritten === 1 ? "" : "s") + " written to rows " + ic.first + "-" + (ic.first + icWritten - 1) +
         (insert ? " (grew by " + insert + ")" : ""));
       await this.logStep(ic.label + " — " + icWritten + (icWritten === 1 ? " row" : " rows") + " written", true);
+    }
+
+    // ── Cast & Crew List — aggregated roster across all 4 tabs above, no new
+    //    extraction/matching, just reusing hasDtr/onCallSheet already computed.
+    if (castCrewEntries.length) {
+      const crewList = castCrewEntries.filter((e) => e.kind === "Crew")
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const talentList = castCrewEntries.filter((e) => e.kind === "Talent")
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const combined = crewList.concat(talentList);
+      const ccCAP = this.TX_CAST_CREW_LAST_ROW - this.TX_CAST_CREW_FIRST_ROW + 1;
+      const ccGrow = Math.max(0, combined.length - ccCAP);
+      if (ccGrow) inserts.push({
+        sheetName: this.TX_CAST_CREW_SHEET,
+        at: this.TX_CAST_CREW_FIRST_ROW + 1,
+        rows: Array.from({ length: ccGrow }, () => this.txCastCrewFormulaRow()),
+      });
+      combined.forEach((e, idx) => {
+        const R = this.TX_CAST_CREW_FIRST_ROW + idx;
+        const put = (col, type, val) => {
+          if (val != null && String(val).trim() !== "")
+            cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: col + R, value: val, type });
+          else
+            cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: col + R, clear: true });
+        };
+        put("B", "number", idx + 1);
+        put("C", "text", e.kind);
+        put("D", "text", e.name);
+        put("E", "text", e.role);
+        if (e.hasDtr != null) put("F", "text", e.hasDtr ? "YES" : "NO");
+        put("I", "text", e.fromDocs);
+      });
+      preconditions.push({ sheetName: this.TX_CAST_CREW_SHEET, expect: this.TX_CAST_CREW_EXPECT });
+      this.runLog("res", "Cast & Crew List · " + combined.length + " row" + (combined.length === 1 ? "" : "s") +
+        " written to rows " + this.TX_CAST_CREW_FIRST_ROW + "-" + (this.TX_CAST_CREW_FIRST_ROW + combined.length - 1) +
+        (ccGrow ? " (grew by " + ccGrow + ")" : ""));
+      await this.logStep("Cast & Crew List — " + combined.length + (combined.length === 1 ? " row" : " rows") + " written", true);
     }
 
     await this.logStep("Populating fields, formulas & rows into the workbook");
@@ -6590,11 +6684,13 @@ class Component extends DCLogic {
     // they naturally write to rows after everyone else once the existing
     // growth math below runs — no separate insertion pass needed.
     const orphans = await this.matchCallSheetToRoster(raw, "worker", "jobTitle", issues);
+    for (const o of orphans) o._orphan = true;
     if (orphans.length) raw = raw.concat(orphans);
     // Same idea for unmatched DTR forms — Crew Payroll is the only tab that
     // adds new rows for these (Crew IC / Talent Payroll / Talent IC only
     // ever flag existing rows).
     const dtrOrphans = await this.matchDtrToRoster(raw, "worker", issues);
+    for (const o of dtrOrphans) o._orphan = true;
     if (dtrOrphans.length) raw = raw.concat(dtrOrphans);
     // Nothing is dropped: the tab grows by insertion instead (see
     // TX_PAYROLL_LAST_ROW and buildTexasBlob).
@@ -6603,7 +6699,7 @@ class Component extends DCLogic {
     if (grow) issues.push("Crew Payroll grew by " + grow + " row" + (grow === 1 ? "" : "s") +
       " (" + CAP + " → " + (CAP + grow) + ") to fit everyone.");
     const rows = raw.map((r, idx) => this.txPayrollToCells(r, idx));
-    return { rows, issues, files: fileSummary, count: rows.length, overflow: 0, grow, generatedParsers };
+    return { rows, raw, issues, files: fileSummary, count: rows.length, overflow: 0, grow, generatedParsers };
   }
 
   // ══ Agency Vendor Exps tab (Texas) ═══════════════════════════════════════
