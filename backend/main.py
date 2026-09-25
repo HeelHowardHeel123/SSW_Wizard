@@ -5815,7 +5815,14 @@ def _load_tx_dtr_prompt() -> str:
 
 
 def _extract_tx_dtr_from_file(filename, data, system_prompt, client, user_text=""):
-    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_pages=3)
+    # max_dim=2000, same cap /extract-residency-docs already uses for this
+    # same class of document -- confirmed real (ABBVIE 022): a DTR's second
+    # page is sometimes a phone photo of a driver's license inserted at its
+    # native resolution as the page itself, so dpi_scale alone rendered a
+    # 30 MB PNG on one real submission -- Claude's hard per-image limit is
+    # 10 MB. Uncapped, that's both a 400 (single image too large) and a 413
+    # (whole request too large).
+    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=2000, max_pages=3)
     if not images:
         return ""
     raw = _call_claude_json_object(images, system_prompt, client, user_text, max_tokens=1024)
