@@ -1882,12 +1882,13 @@ class Component extends DCLogic {
 
   // Cleared on every row we touch. Stops at AN: AO onward (Notes, On Call
   // Sheet, and the CPA / Ineligible formula band at AP-AV) is either manual or
-  // sheet-owned. H (Ref Number), K (Valid DTR Form) and AJ (Qualify?) are in
-  // the list but never written — Ref Number's derivation is undecided, and the
-  // other two depend on DTR/residency matching that isn't built yet, so they
-  // are blanked rather than guessed at.
+  // sheet-owned. H (Ref Number) and AJ (Qualify?) are in the list but never
+  // written — Ref Number's derivation is undecided, and Qualify depends on
+  // residency matching that isn't built yet, so they are blanked rather than
+  // guessed at. K (Valid DTR Form) used to be in this list too — now written
+  // explicitly (see txPayrollToCells) by matchDtrToRoster.
   TX_PAYROLL_BLANK = [
-    "C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T",
+    "C","D","E","F","G","H","I","J","L","M","N","O","P","Q","R","S","T",
     "U","V","W","X","Y","Z","AD","AF","AG","AH","AI","AJ","AK","AL","AM","AN",
     "AO",
   ];
@@ -3606,6 +3607,10 @@ class Component extends DCLogic {
     // SONIC 005 run followed by an ABBVIE 022 run in one session wrote
     // SONIC's crew (e.g. "Jody Hill / Director") into ABBVIE's workbook.
     this._callSheetCrew = null;
+    // Same reasoning, same bug class — getDtrNames()'s cache needs the
+    // identical reset, added here up front instead of after a repeat of
+    // the call-sheet-crew leak.
+    this._dtrNames = null;
     this._fringeIssues = [];
     this._runFails = 0;
     this._runHalted = null;
@@ -3713,6 +3718,10 @@ class Component extends DCLogic {
           false, this.beginProgress("talentPdfs", "talentPtip"));
         const tp = await this.parseTxTalentPayroll();
         const tpRows = tp.rows || [];
+        // DTR matching, no new rows on this tab (see matchDtrToRoster) — the
+        // orphan list is discarded. tp.issues is a real array reference, so
+        // pushing into it here is picked up by the spreads just below.
+        await this.matchDtrToRoster(tpRows, "talent_name", tp.issues);
         const tpWritten = tpRows.length;
         this._runData.tx_talent_payroll = { files: tp.files || [], issues: tp.issues || [], rows: tpWritten };
         this._fringeIssues = [...(this._fringeIssues || []), ...(tp.issues || [])];
@@ -3743,6 +3752,8 @@ class Component extends DCLogic {
             cellPatches.push({ sheetName: this.TX_TALENT_PAYROLL_SHEET, addr: c.col + R, value: c.value.replace(/\{R\}/g, R), type: c.type });
           for (const [f, col, type] of this.TX_TALENT_PAYROLL_MAP) put(col, type, r[f]);
           for (const col of this.TX_TALENT_PAYROLL_MANUAL) put(col, "text", null);
+          // J Valid DTR Form — only when DTR forms were uploaded.
+          if (r.hasDtr != null) put("J", "text", r.hasDtr ? "YES" : "NO");
         });
         if (!insert) {
           for (let R = this.TX_TALENT_PAYROLL_FIRST + tpWritten; R <= this.TX_TALENT_PAYROLL_LAST_PREBUILT; R++)
@@ -4150,6 +4161,10 @@ class Component extends DCLogic {
         const orphans = await this.matchCallSheetToRoster(icRows, "worker_name", "worker_position", icIssues);
         if (orphans.length) icRows = icRows.concat(orphans);
       }
+      // DTR matching applies to BOTH kinds (unlike call-sheet matching,
+      // which is crew-only) — neither tab adds new rows for it though, so
+      // the returned orphan list is discarded here.
+      await this.matchDtrToRoster(icRows, "worker_name", icIssues);
       const icWritten = icRows.length;
       this._runData[ic.dataKey] = { files: res.files || [], issues: icIssues, rows: icWritten };
       this._fringeIssues = [...(this._fringeIssues || []), ...icIssues];
@@ -4197,6 +4212,8 @@ class Component extends DCLogic {
           put("AD", "text", r.onCallSheet ? "YES" : "NO");
           put("AE", "text", r.callSheetName || "");
         }
+        // O Valid DTR Form — both kinds, only when DTR forms were uploaded.
+        if (r.hasDtr != null) put("O", "text", r.hasDtr ? "YES" : "NO");
       });
       // Every one of these 7 columns carries a literal 0 or a formula on all 31
       // pre-built rows, so an unwritten row would read as a real $0.00 line.
@@ -5122,6 +5139,7 @@ class Component extends DCLogic {
       // no extraction wired yet.
       { id: "txCrewIc", label: "Crew - Independent Contractors", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
       { id: "txCallSheet", label: "Call Sheets", accept: [".pdf"], hint: "Multi-day call sheets · .pdf · up to 200", max: 200, txOnly: true },
+      { id: "txDtrForms", label: "DTR Forms", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "One per person · up to 200", max: 200, txOnly: true },
     ]},
     { title: "Talent & Extras", zones: [
       { id: "talentPdfs", label: "Talent Invoice PDFs", accept: [".pdf"], hint: "Multiple files · .pdf · payroll & agent invoices" },
@@ -6487,6 +6505,10 @@ class Component extends DCLogic {
       put("AQ", "text", r.onCallSheet ? "YES" : "NO");
       put("AR", "text", r.callSheetName || "");
     }
+    // K Valid DTR Form — only ever set when DTR forms were actually
+    // uploaded (matchDtrToRoster left `hasDtr` undefined otherwise), same
+    // convention as the call-sheet flags above.
+    if (r.hasDtr != null) put("K", "text", r.hasDtr ? "YES" : "NO");
     return Object.values(byCol);
   }
 
@@ -6544,6 +6566,11 @@ class Component extends DCLogic {
     // growth math below runs — no separate insertion pass needed.
     const orphans = await this.matchCallSheetToRoster(raw, "worker", "jobTitle", issues);
     if (orphans.length) raw = raw.concat(orphans);
+    // Same idea for unmatched DTR forms — Crew Payroll is the only tab that
+    // adds new rows for these (Crew IC / Talent Payroll / Talent IC only
+    // ever flag existing rows).
+    const dtrOrphans = await this.matchDtrToRoster(raw, "worker", issues);
+    if (dtrOrphans.length) raw = raw.concat(dtrOrphans);
     // Nothing is dropped: the tab grows by insertion instead (see
     // TX_PAYROLL_LAST_ROW and buildTexasBlob).
     const CAP = this.TX_PAYROLL_LAST_ROW - this.TX_PAYROLL_FIRST_ROW + 1;
@@ -6951,6 +6978,101 @@ class Component extends DCLogic {
     return orphans;
   }
 
+  // ALL DTR files in one POST, same reasoning as extractTxCrewRoster — the
+  // backend dedupes a person across a "with ID"/"no ID" duplicate pair in
+  // one pass rather than needing that redone here.
+  async extractTxDtr(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return { names: [], issues: [], files: [] };
+    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    await this.progressFile(sorted[sorted.length - 1].name, sorted.length);
+    try {
+      const fd = new FormData();
+      sorted.forEach((f) => fd.append("files", f));
+      const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-dtr", fd);
+      return { names: j.names || [], issues: j.issues || [], files: j.files || [] };
+    } catch (e) {
+      const why = "TX DTR extraction failed — " + (e.message || e);
+      return { names: [], issues: [why], files: [] };
+    }
+  }
+
+  // Cached per build: all four DTR tabs match against the same name list, so
+  // this pays the extraction cost — and surfaces any extraction issues —
+  // exactly once, not once per tab.
+  async getDtrNames() {
+    if (this._dtrNames) return this._dtrNames;
+    const files = this.files.txDtrForms || [];
+    this._dtrNames = files.length
+      ? await this.extractTxDtr(files)
+      : { names: [], issues: [], files: [] };
+    if (this._dtrNames.issues.length)
+      this._fringeIssues = [...(this._fringeIssues || []), ...this._dtrNames.issues];
+    return this._dtrNames;
+  }
+
+  // Matches uploaded DTR names against an already-built tab's rows by name
+  // (via /match-names, same reuse as matchCallSheetToRoster). A deliberate
+  // separate function rather than a generalized shared one: the call-sheet
+  // matcher above is hardened by several rounds of real-data bug fixes this
+  // session, and this is simple enough (no title field, unlike a call-sheet
+  // crew entry) that duplicating its ~40 lines costs far less than risking
+  // a regression there by threading optional params through it. Mutates
+  // `rosterRows` in place, adding `hasDtr` (bool) to every row, and returns
+  // orphan pseudo-rows (DTR people matched to nobody) for callers that want
+  // them — Crew Payroll is the only tab that concats them onto its own
+  // rows; the other three tabs call this and discard the return value. A
+  // no-op (returns [] without touching rosterRows) when no DTR files were
+  // uploaded, so hasDtr stays undefined and the caller's flag column stays
+  // completely untouched.
+  async matchDtrToRoster(rosterRows, nameField, issues) {
+    const { names } = await this.getDtrNames();
+    if (!names.length) return [];
+
+    const rosterNames = rosterRows.map((r) => r[nameField]).filter((n) => n != null && String(n).trim() !== "");
+    if (!rosterNames.length) {
+      return names.map((n) => ({ [nameField]: n, hasDtr: true }));
+    }
+
+    let mapping = {};
+    try {
+      const res = await fetch(this.BACKEND_URL + "/match-names", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Secret": this.BACKEND_SECRET },
+        body: JSON.stringify({ residency_names: names, diversity_names: rosterNames }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        mapping = (j && j.mapping) || {};
+        if (!Object.keys(mapping).length && j && j.error)
+          issues.push("DTR name matching failed (" + j.error + ") — every DTR form was treated " +
+            "as unmatched; re-run to retry.");
+      } else {
+        issues.push("DTR name matching request failed (HTTP " + res.status + ") — every DTR " +
+          "form was treated as unmatched.");
+      }
+    } catch (e) {
+      issues.push("DTR name matching failed (" + (e.message || e) + ") — every DTR form was " +
+        "treated as unmatched.");
+    }
+
+    const matchedRosterNames = new Set();
+    const orphans = [];
+    for (const n of names) {
+      const matched = mapping[n];
+      if (matched && rosterNames.includes(matched) && !matchedRosterNames.has(matched)) {
+        matchedRosterNames.add(matched);
+      } else {
+        if (matched && matchedRosterNames.has(matched))
+          issues.push(n + " and another DTR form both matched \"" + matched +
+            "\" — only the first was kept; the rest is treated as not on the roster.");
+        orphans.push({ [nameField]: n, hasDtr: true });
+      }
+    }
+    for (const r of rosterRows) r.hasDtr = matchedRosterNames.has(r[nameField]);
+    return orphans;
+  }
+
   // Both zones share one extractor — same request shape, same row shape, only
   // the endpoint and the label differ. No work_state param on either.
   async extractTxPetty(kind, fileList) {
@@ -7080,12 +7202,13 @@ class Component extends DCLogic {
     ["state", "AG", "text"], ["zip", "AH", "text"], ["notes", "AI", "text"],
   ];
 
-  // Reviewer-judgment columns, never derived: J Valid DTR Form (no DTR matching
-  // on this tab) and L TX Resident (confirmed manual even when the row's State
-  // is known), X Pymt Method, Z Proof of Payment, AD Qualify?. K Location is now
-  // mapped — CMS derives it from the daily work-backup pages; every other
-  // company sends "" (or omits the key), so K stays blank on their rows.
-  TX_TALENT_PAYROLL_MANUAL = ["J", "L", "X", "Z", "AD"];
+  // Reviewer-judgment columns, never derived: L TX Resident (confirmed manual
+  // even when the row's State is known), X Pymt Method, Z Proof of Payment,
+  // AD Qualify?. K Location is now mapped — CMS derives it from the daily
+  // work-backup pages; every other company sends "" (or omits the key), so K
+  // stays blank on their rows. J Valid DTR Form used to be manual too — now
+  // written explicitly (see matchDtrToRoster) when DTR forms were uploaded.
+  TX_TALENT_PAYROLL_MANUAL = ["L", "X", "Z", "AD"];
 
   // Every formula the template carries on a data row, read off row 9 and shifted
   // to this layout. Seeded on inserted rows and re-written on every row we touch,
@@ -7200,11 +7323,13 @@ class Component extends DCLogic {
   TX_TALENT_IC_PREBUILT = 31;       // rows 8-38
   TX_TALENT_IC_LAST_PREBUILT = 38;
 
-  // O (Valid DTR Form), S (Payment Entity), T (Type) and AA (Qualify?) are
-  // manual on both tabs. The Crew tab's AD/AE (On Call Sheet / Name on Call
-  // sheet) are NOT in this list — they are left completely untouched, pending
-  // the deferred call-sheet pass, rather than cleared.
-  TX_IC_MANUAL = ["O", "S", "T", "AA"];
+  // S (Payment Entity), T (Type) and AA (Qualify?) are manual on both tabs.
+  // The Crew tab's AD/AE (On Call Sheet / Name on Call sheet) are NOT in
+  // this list — they are left completely untouched when no call sheet was
+  // uploaded, rather than cleared. O (Valid DTR Form) used to be manual too
+  // — now written explicitly on both tabs (see matchDtrToRoster) when DTR
+  // forms were uploaded.
+  TX_IC_MANUAL = ["S", "T", "AA"];
 
   // Shared by both tabs. E and F differ per tab and are written separately:
   // Crew's E is ONE combined "Pay Period/Invoice Date" column, Talent splits

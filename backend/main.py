@@ -5796,6 +5796,99 @@ async def extract_tx_crew_roster_endpoint(
     return await _extract_tx_crew_roster(files, x_app_secret)
 
 
+# ── TX DTR (Declaration of Texas Residency) ──────────────────────────────────
+# One PDF = one person, unlike a call sheet -- so this is one Claude call per
+# FILE, not per page (no truncation risk on a 1-2 page single-person form).
+# Vision only, deliberately not AcroForm field reading: confirmed real DTR
+# submissions are mostly fillable PDFs, but this codebase has already hit a
+# real case (see has_form_fields/flatten_form_fields in pdf_namer.py) where a
+# different form's field NAMES were themselves scrambled by whatever tool
+# produced the file -- a field literally named "Zip" held a city. Reading the
+# rendered page is what actually matches what a human would see.
+
+_TX_DTR_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_dtr_extraction_prompt.txt")
+
+
+def _load_tx_dtr_prompt() -> str:
+    with open(_TX_DTR_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _extract_tx_dtr_from_file(filename, data, system_prompt, client, user_text=""):
+    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_pages=3)
+    if not images:
+        return ""
+    raw = _call_claude_json_object(images, system_prompt, client, user_text, max_tokens=1024)
+    return str((raw or {}).get("name", "")).strip()
+
+
+async def _extract_tx_dtr(files, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _anthropic_client()
+    system_prompt = _load_tx_dtr_prompt()
+    user_text = "What name is written in Section II's Name field on this Declaration of Texas Residency form?"
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, "", size_err
+
+        async with sem:
+            try:
+                name = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_dtr_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, name, None
+            except Exception as e:
+                return filename, "", str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    # Dedupe by lowercased name, keeping the first spelling seen -- real
+    # productions submit the same DTR twice (a "with ID" and a "no ID" copy
+    # of the identical form), and there's no title/extra data to merge here
+    # the way dedupe_crew merges titles, just distinct people.
+    seen: set[str] = set()
+    names: list[str] = []
+    issues, file_summaries = [], []
+    for filename, name, err in extraction_results:
+        if err:
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "issues": [err]})
+            continue
+        if not name:
+            issues.append(f"{filename}: no name extracted -- not recognized as a DTR form, or the Name field was blank/illegible")
+            file_summaries.append({"filename": filename, "issues": ["no name extracted"]})
+            continue
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            names.append(name)
+        file_summaries.append({"filename": filename, "issues": []})
+
+    return {"names": names, "issues": issues, "files": file_summaries}
+
+
+@app.post("/extract-tx-dtr")
+async def extract_tx_dtr_endpoint(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_dtr(files, x_app_secret)
+
+
 # ── Consolidated run summary email ───────────────────────────────────────────
 
 class _FileSummaryIn(BaseModel):
