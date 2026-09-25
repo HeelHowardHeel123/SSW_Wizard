@@ -5139,7 +5139,7 @@ class Component extends DCLogic {
       // no extraction wired yet.
       { id: "txCrewIc", label: "Crew - Independent Contractors", accept: [".pdf"], hint: "Vendor packets · .pdf · up to 200", max: 200, txOnly: true },
       { id: "txCallSheet", label: "Call Sheets", accept: [".pdf"], hint: "Multi-day call sheets · .pdf · up to 200", max: 200, txOnly: true },
-      { id: "txDtrForms", label: "DTR Forms", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "One per person · up to 200", max: 200, txOnly: true },
+      { id: "txDtrForms", label: "DTR Forms", accept: [".pdf", ".jpg", ".jpeg", ".png"], hint: "One per person · up to 1,000", max: 1000, txOnly: true },
     ]},
     { title: "Talent & Extras", zones: [
       { id: "talentPdfs", label: "Talent Invoice PDFs", accept: [".pdf"], hint: "Multiple files · .pdf · payroll & agent invoices" },
@@ -6978,23 +6978,43 @@ class Component extends DCLogic {
     return orphans;
   }
 
-  // ALL DTR files in one POST, same reasoning as extractTxCrewRoster — the
-  // backend dedupes a person across a "with ID"/"no ID" duplicate pair in
-  // one pass rather than needing that redone here.
+  // Batched at 5 files per POST — same CHUNK as extractFringe, matching the
+  // backend's own 5-concurrent Semaphore so one request is a single
+  // concurrent round. The DTR Forms zone allows up to 1,000 files; sending
+  // them all in one request (the original call-sheet-derived design here)
+  // would mean one request awaiting hundreds of sequential Claude calls —
+  // easily 15+ minutes behind Cloudflare's ~100s proxy timeout, the same
+  // 524 failure mode extractFringe's own CHUNK=5 was already built to avoid.
+  // Names are deduped again client-side across the merged batches (not just
+  // trusting the backend's per-batch dedupe): a "with ID"/"no ID" duplicate
+  // pair sharing one filename can land in two different batches depending
+  // on where the 5-file boundary falls.
   async extractTxDtr(fileList) {
     const files = Array.from(fileList || []);
     if (!files.length) return { names: [], issues: [], files: [] };
+    const CHUNK = 5;
     const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-    await this.progressFile(sorted[sorted.length - 1].name, sorted.length);
-    try {
-      const fd = new FormData();
-      sorted.forEach((f) => fd.append("files", f));
-      const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-dtr", fd);
-      return { names: j.names || [], issues: j.issues || [], files: j.files || [] };
-    } catch (e) {
-      const why = "TX DTR extraction failed — " + (e.message || e);
-      return { names: [], issues: [why], files: [] };
+    const merged = { names: [], issues: [], files: [] };
+    const seen = new Set();
+    for (let i = 0; i < sorted.length; i += CHUNK) {
+      const batch = sorted.slice(i, i + CHUNK);
+      await this.progressFile(batch[batch.length - 1].name, batch.length);
+      try {
+        const fd = new FormData();
+        batch.forEach((f) => fd.append("files", f));
+        const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-dtr", fd);
+        for (const n of (j.names || [])) {
+          const key = n.toLowerCase();
+          if (!seen.has(key)) { seen.add(key); merged.names.push(n); }
+        }
+        merged.issues.push(...(j.issues || []));
+        merged.files.push(...(j.files || []));
+      } catch (e) {
+        merged.issues.push("TX DTR extraction failed for " + batch.length + " file" +
+          (batch.length === 1 ? "" : "s") + " (" + (e.message || e) + ")");
+      }
     }
+    return merged;
   }
 
   // Cached per build: all four DTR tabs match against the same name list, so
