@@ -1866,11 +1866,19 @@ class Component extends DCLogic {
   // us. No cap — a run bigger than 46 people inserts what it needs.
   TX_PAYROLL_LAST_ROW = 54;
 
-  // Never written. B is the sheet's own 1..46 item number. AA (Total), AB
-  // (Ineligible $), AC (Submitted Amount) and AE (Automation Check) are the
-  // template's own formulas — AE is =Total-AutomationTotal, the same convention
-  // as GA's "Automation Check" in GA_PAYROLL_SKIP.
-  TX_PAYROLL_SKIP = ["B", "AA", "AB", "AC", "AE"];
+  // AA (Total), AB (Ineligible $), AC (Submitted Amount) and AE (Automation
+  // Check) are the template's own formulas — AE is =Total-AutomationTotal,
+  // the same convention as GA's "Automation Check" in GA_PAYROLL_SKIP.
+  // B (ITEM #) used to be skipped on the assumption the template's own
+  // literal 1..46 numbering (not a formula -- confirmed real, B9-B54 are
+  // plain <v> numbers) would keep working after growth. It doesn't:
+  // insertRowsIntoSheet shifts those literals down along with everything
+  // else, so growing past 46 leaves a long blank gap where the inserted
+  // rows landed, followed by "2, 3, 4..." resuming on whatever real rows
+  // happened to land where the old template rows shifted to -- meaningless
+  // by that point. Now written explicitly (see txPayrollToCells), same as
+  // the Crew IC tab already does.
+  TX_PAYROLL_SKIP = ["AA", "AB", "AC", "AE"];
 
   // Cleared on every row we touch. Stops at AN: AO onward (Notes, On Call
   // Sheet, and the CPA / Ineligible formula band at AP-AV) is either manual or
@@ -6438,9 +6446,13 @@ class Component extends DCLogic {
   }
 
   // Map one canonical fringe row -> cells for the TX Crew Payroll tab.
-  txPayrollToCells(r) {
+  // `idx` is this row's 0-based position in the full written list -- used
+  // only for ITEM # (B), which has to number every row 1..N in sheet order
+  // regardless of where the template's own leftover literals ended up.
+  txPayrollToCells(r, idx) {
     const byCol = {};
     const put = (col, type, val) => { if (val != null && String(val) !== "") byCol[col] = { col, type, value: val }; };
+    put("B", "number", idx + 1);
     for (const [field, col, type] of this.TX_PAYROLL_MAP) put(col, type, r[field]);
     // C/D source flags, same convention as GA's B/C. The reconciler sets them
     // per person; without it we fall back to `_src`, stamped at extraction.
@@ -6538,7 +6550,7 @@ class Component extends DCLogic {
     const grow = Math.max(0, raw.length - CAP);
     if (grow) issues.push("Crew Payroll grew by " + grow + " row" + (grow === 1 ? "" : "s") +
       " (" + CAP + " → " + (CAP + grow) + ") to fit everyone.");
-    const rows = raw.map((r) => this.txPayrollToCells(r));
+    const rows = raw.map((r, idx) => this.txPayrollToCells(r, idx));
     return { rows, issues, files: fileSummary, count: rows.length, overflow: 0, grow, generatedParsers };
   }
 
