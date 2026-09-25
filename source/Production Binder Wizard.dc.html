@@ -4508,6 +4508,31 @@ class Component extends DCLogic {
     return parts[parts.length - 1] + "," + parts.slice(0, -1).join(" ");
   }
 
+  // "ROBBIE MECKNA" / "Rob Janecka" -> "Meckna, Robbie" / "Janecka, Rob" —
+  // reorder + proper-case an orphan row's name (call-sheet/DTR names arrive
+  // "First Last", straight off the source document and sometimes ALL CAPS),
+  // to match the "Last, First" convention every matched payroll row's own
+  // Crew Name cell already uses. Only applied to orphan rows — a matched
+  // row's name comes from the payroll/report data, already in this shape.
+  // Same scope as _lastFirst above: the LAST word becomes the surname, so a
+  // compound surname ("Van Amber") splits wrong — a known, accepted
+  // limitation, not something this chases further.
+  _properLastFirst(name) {
+    const s = String(name == null ? "" : name).trim().replace(/\s+/g, " ");
+    if (!s) return "";
+    const titleWord = (w) => w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w;
+    // Title-case each word but keep hyphen/apostrophe segments each their own
+    // word ("Fox-Mills", "O'Brien") rather than lowercasing after the mark.
+    const properWord = (w) => w.split(/([-'])/).map((p) => (p === "-" || p === "'") ? p : titleWord(p)).join("");
+    if (s.includes(",")) {
+      return s.split(",").map((x) => x.trim()).filter(Boolean)
+        .map((part) => part.split(" ").filter(Boolean).map(properWord).join(" ")).join(", ");
+    }
+    const words = s.split(" ").filter(Boolean).map(properWord);
+    if (words.length < 2) return words.join(" ");
+    return words[words.length - 1] + ", " + words.slice(0, -1).join(" ");
+  }
+
   // One reconciled Payroll Report row -> a GL (PRODCO) ledger row. Same
   // granularity as the Payroll Report tab: one payroll row in, one ledger row
   // out, so a person's separate invoices / pay periods / line items each keep
@@ -6919,8 +6944,10 @@ class Component extends DCLogic {
     const rosterNames = rosterRows.map((r) => r[nameField]).filter((n) => n != null && String(n).trim() !== "");
     if (!rosterNames.length) {
       // Nobody on the roster yet to match against — everyone on the call
-      // sheet is an orphan.
-      return crew.map((c) => ({ [nameField]: c.name, [titleField]: c.title, onCallSheet: true, callSheetName: c.name }));
+      // sheet is an orphan. callSheetName keeps the raw call-sheet spelling
+      // (that's its whole point); [nameField] — the actual Crew Name cell —
+      // gets reordered/proper-cased to match every other row's convention.
+      return crew.map((c) => ({ [nameField]: this._properLastFirst(c.name), [titleField]: c.title, onCallSheet: true, callSheetName: c.name }));
     }
 
     let mapping = {};
@@ -6961,7 +6988,7 @@ class Component extends DCLogic {
         if (matched && matchedRosterNames.has(matched))
           issues.push(c.name + " and another call-sheet name both matched \"" + matched +
             "\" — only the first was kept; the rest is treated as not on the roster.");
-        orphans.push({ [nameField]: c.name, [titleField]: c.title, onCallSheet: true, callSheetName: c.name });
+        orphans.push({ [nameField]: this._properLastFirst(c.name), [titleField]: c.title, onCallSheet: true, callSheetName: c.name });
       }
     }
     // Invert once: roster name -> the call-sheet name that matched it.
@@ -7051,7 +7078,7 @@ class Component extends DCLogic {
 
     const rosterNames = rosterRows.map((r) => r[nameField]).filter((n) => n != null && String(n).trim() !== "");
     if (!rosterNames.length) {
-      return names.map((n) => ({ [nameField]: n, hasDtr: true }));
+      return names.map((n) => ({ [nameField]: this._properLastFirst(n), hasDtr: true }));
     }
 
     let mapping = {};
@@ -7086,7 +7113,7 @@ class Component extends DCLogic {
         if (matched && matchedRosterNames.has(matched))
           issues.push(n + " and another DTR form both matched \"" + matched +
             "\" — only the first was kept; the rest is treated as not on the roster.");
-        orphans.push({ [nameField]: n, hasDtr: true });
+        orphans.push({ [nameField]: this._properLastFirst(n), hasDtr: true });
       }
     }
     for (const r of rosterRows) r.hasDtr = matchedRosterNames.has(r[nameField]);
