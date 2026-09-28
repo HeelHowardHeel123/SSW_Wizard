@@ -1,55 +1,44 @@
-# New TX tab populated: Cast & Crew List — needs a bundle rebuild
+# Cast & Crew List — fixed per your review, ready to rebuild
 
-## First: did this message already reach you?
+Thanks for catching both issues — you were right on both counts, and the
+column map is confirmed fine (matches exactly, no changes needed there).
 
-I'm not sure if I sent you this prompt before the weekend or not — if you
-already saw this and started (or finished) the rebuild, pick up from
-there and just send back whatever you've got. If this is the first time
-you're seeing it, start fresh from the "What I need from you" section
-below. Either way, reply and let me know which case it was.
+## What I fixed (source only, pushed to `dev` as `84a5fae`)
 
-## What's new
+1. **Dropped row insertion entirely.** You were right that the K/L totals
+   block (1st Shoot date, TX-only counts) sharing rows 4-9 with the top of
+   the data band meant inserting rows would push those formula cells down.
+   Switched to the same pattern `Locations` already uses for the identical
+   reason (its column L Rural Uplift list shares rows with Locations' own
+   data): every person is written with direct `cellPatches` using
+   `ensureRow: true`, which creates the row if it doesn't exist yet without
+   shifting anything else — no `inserts` job at all anymore. Rows past the
+   85 pre-built (row 89) borrow row 89's cell style, same as Locations does
+   past its own legacy band.
+2. **L7/L8 range fix — went with your second option** (code rewrites the
+   formulas) rather than widening the template: after writing, if the
+   actual combined headcount pushes past row 89, the code now rewrites
+   `L7 = COUNTIF(F5:F<actual last row>,"Y")` and
+   `L8 = COUNTA(C5:C<actual last row + 1>)` to match. Preferred this over a
+   template edit so the tab stays correct regardless of which template
+   revision ends up loaded for a given run (Replace → Published →
+   bundled) — same defensive posture the rest of this tab's structural
+   checks already take. Left the ranges untouched for the common case
+   (≤85 people), since the template's own default is already correct there.
 
-The TX template's "Cast & Crew List" tab has never been populated by the
-wizard before — it was just recently updated (filler text removed, new
-"From Documents" column added, the old two-block Crew/Cast layout
-collapsed into one continuous 85-row band). This is the first code that
-writes to it.
-
-## What I already built (source only, pushed to `dev` as `e99aa9e`)
-
-`source/Production Binder Wizard.dc.html`, inside `buildTexasBlob()`:
-
-- A new `castCrewEntries` accumulator that collects one entry per person
-  from all 4 existing TX rosters (Crew Payroll, Crew - Indepen.
-  Contractors, Talent Payroll, Talent - Indep. Contract) as each of those
-  tabs finishes being computed — reusing the `hasDtr` / `onCallSheet`
-  flags those tabs already compute, no new extraction or matching calls.
-- A new explicit `_orphan: true` marker set on call-sheet/DTR orphan rows
-  at the 3 places they're created (previously there was no way to tell a
-  "real" payroll/invoice match from an orphan added only via matching).
-- After all 4 tabs finish, the Cast & Crew List tab is written: Crew block
-  first (alphabetized by last name), Talent block after (alphabetized
-  separately), with columns B (row #), C (Crew/Talent), D (Name), E
-  (Role), F (DTR Y/N), and the new I ("From Documents" — e.g. "Crew
-  Payroll, Call Sheet, DTR"). Same insert-rows-to-grow pattern as every
-  other tab if the combined headcount exceeds the 85 pre-built rows.
-- New constants: `TX_CAST_CREW_SHEET`, `TX_CAST_CREW_FIRST_ROW`,
-  `TX_CAST_CREW_LAST_ROW`, `TX_CAST_CREW_EXPECT`, plus
-  `txCastCrewFormulaRow()` (returns `[]` — this sheet has no per-row
-  formulas at all) and `txCastCrewTagList()`.
+No other changes — the column map, provenance-tag logic, and everything
+else from the first pass stands as-is.
 
 ## What I need from you
 
 1. **Rebuild `backend/frontend/index.html`** from the current
-   `source/Production Binder Wizard.dc.html` and send it back, same
-   pattern as prior rebuild handoffs.
+   `source/Production Binder Wizard.dc.html` and send it back.
 2. **Re-verify the two post-rebuild injection markers**:
    - `__OM_EMBEDDED_WORKBOOKS__` — 4 keys present
    - `__OM_EMBEDDED_MODULE_SOURCE__` — 1 key present
 
 ## Not asking you to change anything else
 
-No new dc.html edits needed — the fix is already written and pushed. This
-is purely: rebuild the compiled artifact from current source and confirm
-the two markers.
+This is purely: rebuild the compiled artifact from current source and
+confirm the two markers. No template edits needed on your end either —
+the fix is entirely code-side.
