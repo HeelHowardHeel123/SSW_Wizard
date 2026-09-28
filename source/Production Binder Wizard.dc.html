@@ -3765,6 +3765,7 @@ class Component extends DCLogic {
         // orphan list is discarded. tp.issues is a real array reference, so
         // pushing into it here is picked up by the spreads just below.
         await this.matchDtrToRoster(tpRows, "talent_name", tp.issues);
+        for (const r of tpRows) if (r.talent_name) r.talent_name = this._properLastFirst(r.talent_name);
         for (const r of tpRows) {
           if (r.talent_name) castCrewEntries.push({
             kind: "Talent", name: r.talent_name, role: r.title, hasDtr: r.hasDtr,
@@ -4215,6 +4216,7 @@ class Component extends DCLogic {
       // which is crew-only) — neither tab adds new rows for it though, so
       // the returned orphan list is discarded here.
       await this.matchDtrToRoster(icRows, "worker_name", icIssues);
+      for (const r of icRows) if (r.worker_name) r.worker_name = this._properLastFirst(r.worker_name);
       {
         const ownLabel = ic.kind === "crew" ? "Crew Freelance Invoice" : "Talent Freelance Invoice";
         for (const r of icRows) {
@@ -6727,6 +6729,11 @@ class Component extends DCLogic {
     const dtrOrphans = await this.matchDtrToRoster(raw, "worker", issues);
     for (const o of dtrOrphans) o._orphan = true;
     if (dtrOrphans.length) raw = raw.concat(dtrOrphans);
+    // Every crew name, not just orphans, gets forced to Last, First proper
+    // case here -- whatever order/casing the source (production report,
+    // payroll PDF, or call-sheet orphan) delivered it in. callSheetName is
+    // deliberately left untouched; that column is the verbatim spelling.
+    for (const r of raw) if (r.worker) r.worker = this._properLastFirst(r.worker);
     // Nothing is dropped: the tab grows by insertion instead (see
     // TX_PAYROLL_LAST_ROW and buildTexasBlob).
     const CAP = this.TX_PAYROLL_LAST_ROW - this.TX_PAYROLL_FIRST_ROW + 1;
