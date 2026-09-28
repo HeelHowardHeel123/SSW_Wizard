@@ -1,5 +1,13 @@
 # New TX tab populated: Cast & Crew List — needs a bundle rebuild
 
+## First: did this message already reach you?
+
+I'm not sure if I sent you this prompt before the weekend or not — if you
+already saw this and started (or finished) the rebuild, pick up from
+there and just send back whatever you've got. If this is the first time
+you're seeing it, start fresh from the "What I need from you" section
+below. Either way, reply and let me know which case it was.
+
 ## What's new
 
 The TX template's "Cast & Crew List" tab has never been populated by the
