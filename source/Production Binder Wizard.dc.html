@@ -4298,7 +4298,24 @@ class Component extends DCLogic {
     //    L Rural Uplift list. Rows past the 85 pre-built (row 89) are created
     //    on demand via ensureRow, borrowing row 89's style, same as Locations
     //    past its own legacy band.
+    // Checked softly first (like Locations): a template predating the
+    // "From Documents" column would otherwise fail the hard precondition and
+    // abort the WHOLE workbook, not just this tab.
+    let ccSkip = null;
     if (castCrewEntries.length) {
+      const ccFound = await eng.inspectStructure(buf, [{ sheetName: this.TX_CAST_CREW_SHEET, expect: this.TX_CAST_CREW_EXPECT }]);
+      const ccProblems = ccFound[this.TX_CAST_CREW_SHEET];
+      if (ccProblems && ccProblems.length) {
+        ccSkip = ccProblems.join("; ");
+        const msg = "Cast & Crew List tab was SKIPPED — the template in use does not match the expected " +
+          "layout (" + ccSkip + "). Publish the current TX template in Wizard 04, or upload it as a " +
+          "Replace, and re-run. The other TX tabs were written normally.";
+        this._fringeIssues = [...(this._fringeIssues || []), msg];
+        this.runLog("warn", msg);
+        await this.logStep("Cast & Crew List — skipped, template layout mismatch", true);
+      }
+    }
+    if (castCrewEntries.length && !ccSkip) {
       const crewList = castCrewEntries.filter((e) => e.kind === "Crew")
         .sort((a, b) => a.name.localeCompare(b.name));
       const talentList = castCrewEntries.filter((e) => e.kind === "Talent")
@@ -4318,7 +4335,9 @@ class Component extends DCLogic {
         put("C", "text", e.kind);
         put("D", "text", e.name);
         put("E", "text", e.role);
-        if (e.hasDtr != null) put("F", "text", e.hasDtr ? "YES" : "NO");
+        // Y/N, not YES/NO like the other TX tabs: header is "DTR Form (Y/N)" and
+        // L7 is COUNTIF(F:F,"Y"), so YES would read as zero TX-only people.
+        if (e.hasDtr != null) put("F", "text", e.hasDtr ? "Y" : "N");
         put("I", "text", e.fromDocs);
       });
       // L7/L8 (TOTAL TX ONLY / TOTAL ALL) are template formulas hardcoded to
