@@ -1891,6 +1891,36 @@ class Component extends DCLogic {
     if (r.hasDtr) tags.push("DTR");
     return tags.join(", ");
   }
+  // Fixed display order for "From Documents" tags once merged -- insertion
+  // order would otherwise depend on which source tab happened to produce
+  // the person first, which isn't meaningful to a reader.
+  TX_CAST_CREW_TAG_ORDER = [
+    "Crew Payroll", "Crew Freelance Invoice", "Talent Payroll",
+    "Talent Freelance Invoice", "Call Sheet", "DTR",
+  ];
+  // Same physical person can legitimately appear on more than one source tab
+  // (e.g. a real Crew Payroll match AND a separate Crew Freelance Invoice) --
+  // collapse to one row per name (case/whitespace-insensitive; names are
+  // already forced to Last, First by this point), unioning their "From
+  // Documents" tags and OR-ing hasDtr, keeping the first non-empty role seen.
+  txCastCrewDedupe(entries) {
+    const byKey = new Map();
+    for (const e of entries) {
+      const key = e.name.trim().toLowerCase();
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, { ...e, _tags: new Set((e.fromDocs || "").split(", ").filter(Boolean)) });
+        continue;
+      }
+      (e.fromDocs || "").split(", ").filter(Boolean).forEach((t) => existing._tags.add(t));
+      if (!existing.role && e.role) existing.role = e.role;
+      if (e.hasDtr) existing.hasDtr = true;
+    }
+    return Array.from(byKey.values()).map((e) => ({
+      kind: e.kind, name: e.name, role: e.role, hasDtr: e.hasDtr,
+      fromDocs: this.TX_CAST_CREW_TAG_ORDER.filter((t) => e._tags.has(t)).join(", "),
+    }));
+  }
 
   TX_PAYROLL_SHEET = "Crew Payroll";
   TX_PAYROLL_FIRST_ROW = 9;
@@ -4318,9 +4348,9 @@ class Component extends DCLogic {
       }
     }
     if (castCrewEntries.length && !ccSkip) {
-      const crewList = castCrewEntries.filter((e) => e.kind === "Crew")
+      const crewList = this.txCastCrewDedupe(castCrewEntries.filter((e) => e.kind === "Crew"))
         .sort((a, b) => a.name.localeCompare(b.name));
-      const talentList = castCrewEntries.filter((e) => e.kind === "Talent")
+      const talentList = this.txCastCrewDedupe(castCrewEntries.filter((e) => e.kind === "Talent"))
         .sort((a, b) => a.name.localeCompare(b.name));
       const combined = crewList.concat(talentList);
       combined.forEach((e, idx) => {
