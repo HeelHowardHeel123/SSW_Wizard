@@ -1860,9 +1860,12 @@ class Component extends DCLogic {
   // Aggregated roster built from the other 4 tabs' already-computed rows
   // (Crew Payroll, Crew IC, Talent Payroll, Talent IC) — no new extraction
   // or matching, see the castCrewEntries accumulation in buildTexasBlob.
-  // Single continuous 85-row band, no per-row formulas at all (row numbers
-  // in B are template literals, not a formula — same fix as Crew Payroll's
-  // ITEM #, written explicitly per row).
+  // Single continuous 85-row band (rows 5-89), no per-row formulas at all
+  // (row numbers in B are template literals, not a formula — same fix as
+  // Crew Payroll's ITEM #, written explicitly per row). Grows past row 89
+  // via ensureRow, never row insertion — the K/L totals block shares rows
+  // 4-9 with the top of this data band, so an insert would push it down
+  // (same reasoning as Locations' column L Rural Uplift list).
   TX_CAST_CREW_SHEET = "Cast & Crew List";
   TX_CAST_CREW_FIRST_ROW = 5;
   TX_CAST_CREW_LAST_ROW = 89;
@@ -1875,7 +1878,6 @@ class Component extends DCLogic {
     firstRow: 5,
     lastRow: 89,
   };
-  txCastCrewFormulaRow() { return []; }
   // Provenance tag list for the "From Documents" column: the tab-specific
   // document label only when this row was actually matched from that tab's
   // own payroll/invoice/production-report source (an `_orphan` row was only
@@ -4289,26 +4291,28 @@ class Component extends DCLogic {
 
     // ── Cast & Crew List — aggregated roster across all 4 tabs above, no new
     //    extraction/matching, just reusing hasDtr/onCallSheet already computed.
+    //    Written by direct cell patches from row 5, never by row insertion:
+    //    the K/L summary block (1st Shoot date, TX-only totals) shares rows
+    //    4-9 with the top of this same data band, so inserting rows would
+    //    push those formula cells down — same reasoning as Locations' column
+    //    L Rural Uplift list. Rows past the 85 pre-built (row 89) are created
+    //    on demand via ensureRow, borrowing row 89's style, same as Locations
+    //    past its own legacy band.
     if (castCrewEntries.length) {
       const crewList = castCrewEntries.filter((e) => e.kind === "Crew")
         .sort((a, b) => a.name.localeCompare(b.name));
       const talentList = castCrewEntries.filter((e) => e.kind === "Talent")
         .sort((a, b) => a.name.localeCompare(b.name));
       const combined = crewList.concat(talentList);
-      const ccCAP = this.TX_CAST_CREW_LAST_ROW - this.TX_CAST_CREW_FIRST_ROW + 1;
-      const ccGrow = Math.max(0, combined.length - ccCAP);
-      if (ccGrow) inserts.push({
-        sheetName: this.TX_CAST_CREW_SHEET,
-        at: this.TX_CAST_CREW_FIRST_ROW + 1,
-        rows: Array.from({ length: ccGrow }, () => this.txCastCrewFormulaRow()),
-      });
       combined.forEach((e, idx) => {
         const R = this.TX_CAST_CREW_FIRST_ROW + idx;
+        const sty = R > this.TX_CAST_CREW_LAST_ROW;
         const put = (col, type, val) => {
+          const extra = sty ? { styleFrom: col + this.TX_CAST_CREW_LAST_ROW } : {};
           if (val != null && String(val).trim() !== "")
-            cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: col + R, value: val, type });
+            cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: col + R, value: val, type, ensureRow: true, ...extra });
           else
-            cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: col + R, clear: true });
+            cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: col + R, clear: true, ensureRow: true, ...extra });
         };
         put("B", "number", idx + 1);
         put("C", "text", e.kind);
@@ -4317,10 +4321,22 @@ class Component extends DCLogic {
         if (e.hasDtr != null) put("F", "text", e.hasDtr ? "YES" : "NO");
         put("I", "text", e.fromDocs);
       });
+      // L7/L8 (TOTAL TX ONLY / TOTAL ALL) are template formulas hardcoded to
+      // F5:F89 / C5:C90 — fine as-is for a normal-size cast, but with no row
+      // insertion to carry bumpFormulaRefs, those ranges won't stretch on
+      // their own past the 85 pre-built rows. Only rewrite them when we
+      // actually wrote past that band.
+      const ccLastRow = Math.max(this.TX_CAST_CREW_LAST_ROW, this.TX_CAST_CREW_FIRST_ROW + combined.length - 1);
+      if (ccLastRow > this.TX_CAST_CREW_LAST_ROW) {
+        cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: "L7",
+          value: "COUNTIF(F" + this.TX_CAST_CREW_FIRST_ROW + ":F" + ccLastRow + ",\"Y\")", type: "formula" });
+        cellPatches.push({ sheetName: this.TX_CAST_CREW_SHEET, addr: "L8",
+          value: "COUNTA(C" + this.TX_CAST_CREW_FIRST_ROW + ":C" + (ccLastRow + 1) + ")", type: "formula" });
+      }
       preconditions.push({ sheetName: this.TX_CAST_CREW_SHEET, expect: this.TX_CAST_CREW_EXPECT });
       this.runLog("res", "Cast & Crew List · " + combined.length + " row" + (combined.length === 1 ? "" : "s") +
         " written to rows " + this.TX_CAST_CREW_FIRST_ROW + "-" + (this.TX_CAST_CREW_FIRST_ROW + combined.length - 1) +
-        (ccGrow ? " (grew by " + ccGrow + ")" : ""));
+        (ccLastRow > this.TX_CAST_CREW_LAST_ROW ? " (past the " + this.TX_CAST_CREW_LAST_ROW + "-row template band, totals formulas extended)" : ""));
       await this.logStep("Cast & Crew List — " + combined.length + (combined.length === 1 ? " row" : " rows") + " written", true);
     }
 
