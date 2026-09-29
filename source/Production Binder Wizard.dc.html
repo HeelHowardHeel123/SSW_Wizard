@@ -7743,12 +7743,15 @@ class Component extends DCLogic {
   };
 
   async extractTxAp(fileList) {
-    // Deliberately NOT sorted -- AP rows should come out in the same order
-    // the PO packets were added (a plain alphabetical sort on filename
-    // actively breaks this: "PO 25-012 - 10" sorts before "PO 25-012 - 2"
-    // as strings, so a numbered PO list ends up scrambled). Preserve
-    // whatever order the browser's file picker/drop gave us.
-    const files = Array.from(fileList || []);
+    // Numeric-aware sort, not plain alphabetical -- a plain string sort
+    // on filename puts "PO 25-012 - 10" before "PO 25-012 - 2" (since "1"
+    // < "2" character-by-character), scrambling a numbered PO list. This
+    // also doesn't rely on the browser/OS handing back files in the order
+    // they were picked/dropped, which isn't guaranteed -- it deterministically
+    // orders numbered filenames the way a human would expect regardless.
+    const files = Array.from(fileList || []).sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true })
+    );
     const p = this.state.project;
     const merged = { rows: [], issues: [], files: [] };
     for (const f of files) {
