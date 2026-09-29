@@ -1,22 +1,23 @@
-# AP tab row order fix — needs a bundle rebuild
+# AP tab row order fix (revised) — needs a bundle rebuild
 
 ## What's new
 
-The TX AP tab was writing rows out of upload order because
-`extractTxAp()` alphabetically sorted the uploaded PDFs by filename
-before processing them. That breaks numeric PO ordering: "PO 25-012 -
-10" sorts before "PO 25-012 - 2" as strings, since "1" < "2"
-character-by-character. Confirmed on real data — "PO 25-012 - 2 -
-Aspen Travel" was the first PDF added to the batch but ended up the
-37th row in the AP tab.
+Thanks for the catch on the previous version of this fix — you're
+right that "preserve upload order" isn't a safe bet, since a
+multi-select file picker can hand files back in OS listing order
+rather than true pick order. Steven confirmed: switch to a
+numeric-aware sort instead of no-sort at all. Scoped to just the AP tab
+for now — not touching the other ~25 steps you flagged with the same
+plain-alphabetical-sort pattern; that's a separate ask for later.
 
-## What I already built (source only, pushed to `dev` as `d341d8a`)
+## What I already built (source only, pushed to `dev` as `55c2d4c`, supersedes `d341d8a`)
 
 `source/Production Binder Wizard.dc.html`, `extractTxAp(fileList)`:
-removed the `.sort()` call entirely. Rows are now written in whatever
-order the browser's file picker/drop provided them — i.e. the order
-the files were actually added — instead of any alphabetical or
-numeric re-sort.
+replaced the removed sort with
+`a.name.localeCompare(b.name, undefined, { numeric: true })` — the
+exact fix you suggested. This orders "PO 25-012 - 2" before
+"PO 25-012 - 10" deterministically, regardless of what order the
+browser/OS actually hands the files back in.
 
 ## What I need from you
 
@@ -28,6 +29,7 @@ numeric re-sort.
 
 ## Not asking you to change anything else
 
-No new dc.html edits needed — the fix is already written and pushed.
-This is purely: rebuild the compiled artifact from current source and
-confirm the two markers.
+The ~25 other upload steps with the same plain-alphabetical-sort
+pattern (TX Locations, Crew/Talent IC, Petty Cash, ProdCC, DTR, etc.)
+are noted but intentionally out of scope for this rebuild — Steven
+wants to revisit those separately, not bundle them into this fix.
