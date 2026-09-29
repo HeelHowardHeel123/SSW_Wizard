@@ -473,6 +473,12 @@
 - Header row 4 (C Crew/Talent, D Name, E Role, F DTR, G Parent, H Notes,
   I From Documents), B pre-numbered, 85 rows 5–89. Crew block first, then
   Talent, each alphabetized.
+- **One row per person**: `txCastCrewDedupe()` collapses Crew and Talent
+  (separately) by case/whitespace-insensitive name before the sort — unions
+  "From Documents" tags (fixed order), ORs `hasDtr`, keeps first non-empty role.
+  Safe because `_properLastFirst()` now forces "Last, First" on every name on
+  all 4 source tabs (`r.worker`, `r.talent_name`, `r.worker_name`), mutated in
+  place. `callSheetName` stays verbatim.
 - **Direct cell patches with `ensureRow`, never insertion**: the K/L summary
   (K4:L9) shares rows with the data. Rows past 89 borrow row 89's style.
 - **F is `Y`/`N`, not YES/NO** like the other TX tabs — L7 is
