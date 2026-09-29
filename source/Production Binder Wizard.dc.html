@@ -7743,11 +7743,15 @@ class Component extends DCLogic {
   };
 
   async extractTxAp(fileList) {
+    // Deliberately NOT sorted -- AP rows should come out in the same order
+    // the PO packets were added (a plain alphabetical sort on filename
+    // actively breaks this: "PO 25-012 - 10" sorts before "PO 25-012 - 2"
+    // as strings, so a numbered PO list ends up scrambled). Preserve
+    // whatever order the browser's file picker/drop gave us.
     const files = Array.from(fileList || []);
     const p = this.state.project;
     const merged = { rows: [], issues: [], files: [] };
-    const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-    for (const f of sorted) {
+    for (const f of files) {
       await this.progressFile(f.name, 1);
       const before = merged.rows.length;
       let caught = null, jIssues = [];
