@@ -33,7 +33,7 @@ This does NOT include a line item whose own description merely contains the word
 
 FIELDS -- return exactly these key names:
 
-1.  po_number -- the PO number from the PO document itself if one is included in this packet. If no PO document is present, use the PO number as stated on the invoice instead. Empty string if not found anywhere.
+1.  po_number -- the PO number from the PO document itself if one is included in this packet (labeled "PO #", "PURCHASE ORDER #", or similar). Do NOT use a "Job Number" or project number printed on the same PO/cover page -- that's a broader internal code shared across every PO for the whole production, not the identifier for this specific one, even though the two often look similar (e.g. a PO # "25-012 - 7" next to a Job Number "25-012" -- use the former, never the latter). If no PO document is present, use the PO number as stated on the invoice instead. If one PO/cover document covers a bundled packet (per the bundling rule above), repeat that SAME po_number on every row you emit for this packet, even for sub-invoices or backup receipts that show no PO number of their own -- same as packet_total below. Empty string if not found anywhere.
 2.  invoice_number -- invoice or reference number as shown. If no formal invoice number exists, use the Transaction Number, Receipt Number, or Tracking Number instead. If the document has no identifying number of any kind, use the literal label "Receipt" -- never leave this field blank.
 3.  invoice_date -- in YYYY-MM-DD format. Convert all date formats to ISO. Empty string if not found.
 4.  vendor_name -- the business or individual who issued the invoice (or PO, per the fallback above). Required.
