@@ -3617,6 +3617,11 @@ class Component extends DCLogic {
     const eng = await this.loadEngine();
     const inserts = [], cellPatches = [], rowWrites = [], preconditions = [];
     const castCrewEntries = [];
+    // Populated by matchDtrToRoster() across Talent Payroll and Crew/Talent
+    // IC (all 3 processed before Crew Payroll now — see below) so Crew
+    // Payroll's own DTR-orphan step can tell "matched nowhere" from
+    // "matched on a different tab" before adding a new row for it.
+    const dtrMatchedElsewhere = new Set();
     const p = this.state.project;
 
     // C9 is a real date cell on the template; H13 is in the budget block and
@@ -3707,69 +3712,6 @@ class Component extends DCLogic {
                      "_agencyHoursCount", "_retainerCount", "_residencyCount",
                      "_talentCount", "_talentFreelanceCount"]) this[k] = 0;
 
-    // ── Crew Payroll. Same three sources Georgia uses (payroll PDFs,
-    //    Production Report, timecards) through the TX endpoints.
-    const nPay = (this.files.payroll || []).length + (this.files.prodReport || []).length +
-      (this.files.timecards || []).length;
-    if (nPay) await this.logStep("Extracting payroll — " + nPay + (nPay === 1 ? " file" : " files"),
-      false, this.beginProgress("payroll", "prodReport", "timecards"));
-    const txPay = nPay
-      ? await this.parseTxPayrollRows()
-      : { rows: [], raw: [], issues: [], files: [], count: 0, overflow: 0, grow: 0, generatedParsers: [] };
-    for (const r of txPay.raw || []) {
-      if (r.worker) castCrewEntries.push({
-        kind: "Crew", name: r.worker, role: r.jobTitle, hasDtr: r.hasDtr,
-        fromDocs: this.txCastCrewTagList(r, "Crew Payroll"),
-      });
-    }
-
-    // Checked SOFTLY first: the bundled texas.xlsx predates the four inserted
-    // columns, so a hard precondition would abort the whole workbook for a
-    // first-time user who never published a template. A mismatch skips this one
-    // tab with a visible issue; the Overview fields still write.
-    let paySkip = null;
-    if (txPay.count) {
-      const found = await eng.inspectStructure(buf, [{ sheetName: this.TX_PAYROLL_SHEET, expect: this.TX_PAYROLL_EXPECT }]);
-      const problems = found[this.TX_PAYROLL_SHEET];
-      if (problems && problems.length) paySkip = problems.join("; ");
-    }
-    if (paySkip) {
-      const msg = "Crew Payroll tab was SKIPPED — the template in use does not match the expected Texas " +
-        "layout (" + paySkip + "). Publish the current TX template in Wizard 04, or upload it as a " +
-        "Replace, and re-run. The Overview fields in this workbook were written normally.";
-      txPay.issues = [...(txPay.issues || []), msg];
-      this.runLog("warn", msg);
-    }
-    if (txPay.count && !paySkip) {
-      // Insert BEFORE the rowWrite so the write lands on the grown table.
-      if (txPay.grow) inserts.push({
-        sheetName: this.TX_PAYROLL_SHEET,
-        at: this.TX_PAYROLL_FIRST_ROW + 1,
-        rows: Array.from({ length: txPay.grow }, () => this.txPayrollFormulaRow()),
-      });
-      rowWrites.push({
-        sheetName: this.TX_PAYROLL_SHEET,
-        startRow: this.TX_PAYROLL_FIRST_ROW,
-        rows: txPay.rows,
-        blankCols: this.TX_PAYROLL_BLANK,
-        skipCols: this.TX_PAYROLL_SKIP,
-      });
-      // Also asserted hard, so geometry can't shift between check and write.
-      preconditions.push({ sheetName: this.TX_PAYROLL_SHEET, expect: this.TX_PAYROLL_EXPECT });
-      this._gaPayrollCount = txPay.count;
-      this.runLog("res", "Crew Payroll · " + txPay.count + " row" + (txPay.count === 1 ? "" : "s") +
-        " written to rows " + this.TX_PAYROLL_FIRST_ROW + "-" + (this.TX_PAYROLL_FIRST_ROW + txPay.count - 1));
-    }
-    if (nPay) {
-      this._runData.ga_payroll_report = { files: txPay.files || [], issues: txPay.issues || [] };
-      this._fringeIssues = [...(this._fringeIssues || []), ...(txPay.issues || [])];
-      this._generatedParsers = [...(this._generatedParsers || []), ...(txPay.generatedParsers || [])];
-      if (txPay.grow) this.runLog("res", "  Crew Payroll grew by " + txPay.grow + " row(s) to fit everyone");
-      for (const iss of txPay.issues) this.runLog("warn", "  " + iss);
-      await this.logStep("Crew Payroll — " + (paySkip ? 0 : txPay.count) +
-        ((!paySkip && txPay.count === 1) ? " row" : " rows") + " written", true);
-    }
-
     // ── Talent Payroll. The Talent Invoice PDFs + PTIP/payroll report zones,
     //    routed to the TX endpoint. One call, all files together.
     const nTxTal = (this.files.talentPdfs || []).length + (this.files.talentPtip || []).length;
@@ -3794,7 +3736,7 @@ class Component extends DCLogic {
         // DTR matching, no new rows on this tab (see matchDtrToRoster) — the
         // orphan list is discarded. tp.issues is a real array reference, so
         // pushing into it here is picked up by the spreads just below.
-        await this.matchDtrToRoster(tpRows, "talent_name", tp.issues);
+        await this.matchDtrToRoster(tpRows, "talent_name", tp.issues, dtrMatchedElsewhere);
         for (const r of tpRows) if (r.talent_name) r.talent_name = this._properLastFirst(r.talent_name);
         for (const r of tpRows) {
           if (r.talent_name) castCrewEntries.push({
@@ -4245,7 +4187,7 @@ class Component extends DCLogic {
       // DTR matching applies to BOTH kinds (unlike call-sheet matching,
       // which is crew-only) — neither tab adds new rows for it though, so
       // the returned orphan list is discarded here.
-      await this.matchDtrToRoster(icRows, "worker_name", icIssues);
+      await this.matchDtrToRoster(icRows, "worker_name", icIssues, dtrMatchedElsewhere);
       for (const r of icRows) if (r.worker_name) r.worker_name = this._properLastFirst(r.worker_name);
       {
         const ownLabel = ic.kind === "crew" ? "Crew Freelance Invoice" : "Talent Freelance Invoice";
@@ -4319,6 +4261,73 @@ class Component extends DCLogic {
         (icWritten === 1 ? "" : "s") + " written to rows " + ic.first + "-" + (ic.first + icWritten - 1) +
         (insert ? " (grew by " + insert + ")" : ""));
       await this.logStep(ic.label + " — " + icWritten + (icWritten === 1 ? " row" : " rows") + " written", true);
+    }
+
+    // ── Crew Payroll. Same three sources Georgia uses (payroll PDFs,
+    //    Production Report, timecards) through the TX endpoints. Processed
+    //    LAST among the 4 TX tabs (not first, despite the name) so its DTR
+    //    orphan step can see dtrMatchedElsewhere already fully populated by
+    //    Talent Payroll and Crew/Talent IC above — see the comment at
+    //    dtrOrphans inside parseTxPayrollRows() for why that matters.
+    const nPay = (this.files.payroll || []).length + (this.files.prodReport || []).length +
+      (this.files.timecards || []).length;
+    if (nPay) await this.logStep("Extracting payroll — " + nPay + (nPay === 1 ? " file" : " files"),
+      false, this.beginProgress("payroll", "prodReport", "timecards"));
+    const txPay = nPay
+      ? await this.parseTxPayrollRows(dtrMatchedElsewhere)
+      : { rows: [], raw: [], issues: [], files: [], count: 0, overflow: 0, grow: 0, generatedParsers: [] };
+    for (const r of txPay.raw || []) {
+      if (r.worker) castCrewEntries.push({
+        kind: "Crew", name: r.worker, role: r.jobTitle, hasDtr: r.hasDtr,
+        fromDocs: this.txCastCrewTagList(r, "Crew Payroll"),
+      });
+    }
+
+    // Checked SOFTLY first: the bundled texas.xlsx predates the four inserted
+    // columns, so a hard precondition would abort the whole workbook for a
+    // first-time user who never published a template. A mismatch skips this one
+    // tab with a visible issue; the Overview fields still write.
+    let paySkip = null;
+    if (txPay.count) {
+      const found = await eng.inspectStructure(buf, [{ sheetName: this.TX_PAYROLL_SHEET, expect: this.TX_PAYROLL_EXPECT }]);
+      const problems = found[this.TX_PAYROLL_SHEET];
+      if (problems && problems.length) paySkip = problems.join("; ");
+    }
+    if (paySkip) {
+      const msg = "Crew Payroll tab was SKIPPED — the template in use does not match the expected Texas " +
+        "layout (" + paySkip + "). Publish the current TX template in Wizard 04, or upload it as a " +
+        "Replace, and re-run. The Overview fields in this workbook were written normally.";
+      txPay.issues = [...(txPay.issues || []), msg];
+      this.runLog("warn", msg);
+    }
+    if (txPay.count && !paySkip) {
+      // Insert BEFORE the rowWrite so the write lands on the grown table.
+      if (txPay.grow) inserts.push({
+        sheetName: this.TX_PAYROLL_SHEET,
+        at: this.TX_PAYROLL_FIRST_ROW + 1,
+        rows: Array.from({ length: txPay.grow }, () => this.txPayrollFormulaRow()),
+      });
+      rowWrites.push({
+        sheetName: this.TX_PAYROLL_SHEET,
+        startRow: this.TX_PAYROLL_FIRST_ROW,
+        rows: txPay.rows,
+        blankCols: this.TX_PAYROLL_BLANK,
+        skipCols: this.TX_PAYROLL_SKIP,
+      });
+      // Also asserted hard, so geometry can't shift between check and write.
+      preconditions.push({ sheetName: this.TX_PAYROLL_SHEET, expect: this.TX_PAYROLL_EXPECT });
+      this._gaPayrollCount = txPay.count;
+      this.runLog("res", "Crew Payroll · " + txPay.count + " row" + (txPay.count === 1 ? "" : "s") +
+        " written to rows " + this.TX_PAYROLL_FIRST_ROW + "-" + (this.TX_PAYROLL_FIRST_ROW + txPay.count - 1));
+    }
+    if (nPay) {
+      this._runData.ga_payroll_report = { files: txPay.files || [], issues: txPay.issues || [] };
+      this._fringeIssues = [...(this._fringeIssues || []), ...(txPay.issues || [])];
+      this._generatedParsers = [...(this._generatedParsers || []), ...(txPay.generatedParsers || [])];
+      if (txPay.grow) this.runLog("res", "  Crew Payroll grew by " + txPay.grow + " row(s) to fit everyone");
+      for (const iss of txPay.issues) this.runLog("warn", "  " + iss);
+      await this.logStep("Crew Payroll — " + (paySkip ? 0 : txPay.count) +
+        ((!paySkip && txPay.count === 1) ? " row" : " rows") + " written", true);
     }
 
     // ── Cast & Crew List — aggregated roster across all 4 tabs above, no new
@@ -6718,7 +6727,7 @@ class Component extends DCLogic {
 
   // Mirrors parseGaPayrollRows(), minus the GL (PRODCO) ledger side effect —
   // that tab is Georgia-only.
-  async parseTxPayrollRows() {
+  async parseTxPayrollRows(dtrMatchedElsewhere) {
     const pdfs = this.files.payroll || [];
     const reports = this.files.prodReport || [];
     const timecards = this.files.timecards || [];
@@ -6773,8 +6782,16 @@ class Component extends DCLogic {
     if (orphans.length) raw = raw.concat(orphans);
     // Same idea for unmatched DTR forms — Crew Payroll is the only tab that
     // adds new rows for these (Crew IC / Talent Payroll / Talent IC only
-    // ever flag existing rows).
-    const dtrOrphans = await this.matchDtrToRoster(raw, "worker", issues);
+    // ever flag existing rows). Crew Payroll runs LAST among the 4 tabs
+    // specifically so dtrMatchedElsewhere is already fully populated by the
+    // time we get here — a DTR name only becomes a new row if it matched
+    // nobody on ANY of the 4 tabs, not just this one. Without this, someone
+    // who's genuinely Talent (matched correctly on Talent Payroll) would
+    // also get a spurious blank orphan row here, since their DTR form
+    // naturally doesn't match anyone on Crew Payroll's own roster.
+    const dtrMatched = dtrMatchedElsewhere || new Set();
+    const dtrOrphans = (await this.matchDtrToRoster(raw, "worker", issues, dtrMatched))
+      .filter((o) => !dtrMatched.has(o.worker));
     for (const o of dtrOrphans) o._orphan = true;
     if (dtrOrphans.length) raw = raw.concat(dtrOrphans);
     // Every crew name, not just orphans, gets forced to Last, First proper
@@ -7257,8 +7274,11 @@ class Component extends DCLogic {
   // rows; the other three tabs call this and discard the return value. A
   // no-op (returns [] without touching rosterRows) when no DTR files were
   // uploaded, so hasDtr stays undefined and the caller's flag column stays
-  // completely untouched.
-  async matchDtrToRoster(rosterRows, nameField, issues) {
+  // completely untouched. `matchedOut`, when given, collects every DTR name
+  // (proper-cased) that matched on THIS roster, so a caller elsewhere (Crew
+  // Payroll) can tell a genuine orphan from one that already matched on a
+  // different tab.
+  async matchDtrToRoster(rosterRows, nameField, issues, matchedOut) {
     const { names } = await this.getDtrNames();
     if (!names.length) return [];
 
@@ -7295,6 +7315,7 @@ class Component extends DCLogic {
       const matched = mapping[n];
       if (matched && rosterNames.includes(matched) && !matchedRosterNames.has(matched)) {
         matchedRosterNames.add(matched);
+        if (matchedOut) matchedOut.add(this._properLastFirst(n));
       } else {
         if (matched && matchedRosterNames.has(matched))
           issues.push(n + " and another DTR form both matched \"" + matched +
