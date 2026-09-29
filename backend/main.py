@@ -2883,7 +2883,9 @@ async def extract_payroll(
 # text-only call, then applies that mapping to every row mechanically.
 
 _PRODUCTION_REPORT_TARGET_FIELDS = {
-    "worker":         "employee's full name, in any format (e.g. \"Last, First\" or \"First Last\")",
+    "worker":         "employee's full name, in any format (e.g. \"Last, First\" or \"First Last\"), when it's ONE column. If the report instead has the name split across two separate columns (e.g. \"Payee Last Name\" / \"Payee First Name\", \"Last Name\" / \"First Name\", \"Surname\" / \"Given Name\"), leave THIS field null and map those two columns to \"workerLastName\" and \"workerFirstName\" instead -- they get combined into one name automatically. Never map only one half of a split name pair to \"worker\" itself.",
+    "workerLastName": "the employee's LAST NAME ONLY -- use ONLY when the report has no single combined name column (see \"worker\"). Paired with \"workerFirstName\"; combined automatically into one Last, First name.",
+    "workerFirstName": "the employee's FIRST NAME ONLY -- use ONLY when the report has no single combined name column (see \"worker\"). Paired with \"workerLastName\"; combined automatically into one Last, First name.",
     "ssn":            "Social Security Number, in any masked/partial format",
     "weStart":        "the PAY PERIOD / WEEK-ENDING start date for this row (labeled e.g. First W/E, FirstWE, Week Ending Start) -- NOT the actual day work began",
     "weEnd":          "the PAY PERIOD / WEEK-ENDING end date for this row (labeled e.g. Last W/E, LastWE, Week Ending End) -- NOT the actual day work ended",
@@ -2966,9 +2968,9 @@ _NUMERIC_REPORT_FIELDS = {
 # Fields where only one header should ever match (as opposed to wages-style
 # fields where multiple headers legitimately sum together).
 _IDENTITY_REPORT_FIELDS = [
-    "worker", "ssn", "jobTitle", "street", "city", "zip", "invoiceNo",
-    "invoiceDate", "weStart", "weEnd", "startDate", "endDate", "workDatesRange",
-    "workState", "resState", "union", "loanOutCompany",
+    "worker", "workerLastName", "workerFirstName", "ssn", "jobTitle", "street",
+    "city", "zip", "invoiceNo", "invoiceDate", "weStart", "weEnd", "startDate",
+    "endDate", "workDatesRange", "workState", "resState", "union", "loanOutCompany",
 ]
 
 
@@ -3144,6 +3146,7 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
     row["sourceFile"] = filename
 
     we_start = we_end = start_date = end_date = ""
+    worker_last_name = worker_first_name = ""
     loan_out_indicator_sum = 0.0
     worker_type_is_loan_out = None  # None = report has no such column; True/False = it said so directly
     for original_header, raw_value in raw_row.items():
@@ -3185,6 +3188,10 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             # like "Kevin DeMunn" would corrupt it to "Kevin Demunn".
             name = clean_fringe_name(raw_name, from_caps=raw_name.isupper())
             row["worker"] = re.sub(r",(?!\s)", ", ", name)
+        elif field == "workerLastName":
+            worker_last_name = str(value)
+        elif field == "workerFirstName":
+            worker_first_name = str(value)
         elif field == "street":
             split = _split_combined_address(value)
             if split:
@@ -3198,6 +3205,17 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             row[field] = round((row.get(field) or 0) + value, 2)
         else:
             row[field] = value
+
+    # Some reports split the name across two columns (e.g. "Payee Last Name"
+    # / "Payee First Name") instead of one combined column -- neither half
+    # alone is a usable name, so "worker" stays unset above and the person
+    # would otherwise land in the workbook with a blank name. Synthesize it
+    # here, same all-caps handling as the single-column "worker" case.
+    if not row.get("worker") and (worker_last_name or worker_first_name):
+        combined = f"{worker_last_name}, {worker_first_name}".strip(", ").strip()
+        if combined:
+            name = clean_fringe_name(combined, from_caps=combined.isupper())
+            row["worker"] = re.sub(r",(?!\s)", ", ", name)
 
     # Loan-out determination. Worker Type (or equivalent) is authoritative
     # when the report states it directly -- it's a direct classification,
