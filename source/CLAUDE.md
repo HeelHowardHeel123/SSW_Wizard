@@ -478,7 +478,16 @@
   "From Documents" tags (fixed order), ORs `hasDtr`, keeps first non-empty role.
   Safe because `_properLastFirst()` now forces "Last, First" on every name on
   all 4 source tabs (`r.worker`, `r.talent_name`, `r.worker_name`), mutated in
-  place. `callSheetName` stays verbatim.
+  place. `callSheetName` stays verbatim. Personal suffixes (Jr/Sr/II/III/IV)
+  stay with the surname ("Burns Jr, Robert D"); entity words
+  (`TX_ENTITY_SUFFIX_RE`: Inc/LLC/Corp/Co/Ltd/LP/LLP/PLLC/PC) are never
+  reordered, only title-cased ("Afed Films Inc").
+- **DTR orphans are global, not per-tab.** `matchDtrToRoster()` records every
+  hit into a shared `dtrMatchedElsewhere` Set. Crew Payroll — the only tab that
+  turns unmatched DTR names into new rows — runs **LAST** of the 4 TX roster
+  tabs so the Set is complete; a DTR name becomes a Crew row only if it matched
+  nobody on any tab. (Run log therefore shows Crew Payroll extraction after the
+  Talent/IC steps — cosmetic.)
 - **Direct cell patches with `ensureRow`, never insertion**: the K/L summary
   (K4:L9) shares rows with the data. Rows past 89 borrow row 89's style.
 - **F is `Y`/`N`, not YES/NO** like the other TX tabs — L7 is
