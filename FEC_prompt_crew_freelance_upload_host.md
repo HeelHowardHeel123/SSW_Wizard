@@ -33,8 +33,24 @@ function family (`extractFringe()`, `extract-prodco-subvendors`):
    - `__OM_EMBEDDED_WORKBOOKS__` — 4 keys present
    - `__OM_EMBEDDED_MODULE_SOURCE__` — 1 key present
 
+## Answering your question from the last build (index013)
+
+You asked whether MAIN's `assets/workbooks/` and `workbook-engine.js`
+match DEV's — checked directly: `georgia.xlsx`, `illinois-local.xlsx`,
+`illinois-oos.xlsx`, `support.js`, and `wrapbook-fringe.js` are
+identical between the two branches, but **`texas.xlsx` and
+`workbook-engine.js` are genuinely different** — MAIN never got this
+session's Texas-side work (Cast & Crew List, call-sheet Talent, and
+several other TX fixes), so MAIN's own `texas.xlsx` layout and
+`workbook-engine.js` are older than DEV's. Please rebuild using MAIN's
+own copies of both files (attached alongside this prompt and the
+dc.html — same `source/assets/workbooks/texas.xlsx` and
+`source/workbook-engine.js` paths as before), not DEV's, to avoid
+embedding a template/engine mismatch into MAIN's build.
+
 ## Not asking you to change anything else
 
 No new dc.html edits needed — the fix is already written and pushed.
-This is purely: rebuild the compiled artifact from current source and
+This is purely: rebuild the compiled artifact from current source
+(using MAIN's own texas.xlsx and workbook-engine.js per above) and
 confirm the two markers.
