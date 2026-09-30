@@ -1,67 +1,44 @@
-# Frontend source handoff — bundle rebuild (Sep 18, 2026)
+# Frontend source handoff — MAIN post-TX-merge rebuild (Sep 30, 2026)
 
 ## Why this package exists
 
-The previous Wizard023 export shipped a current `source/Production Binder Wizard.dc.html`
-but carried the OLD compiled `backend/frontend/index.html` forward unrebuilt, so none
-of the reliability work or the TX Talent Payroll tab actually deployed. This package is
-that rebuild. **No dc.html behaviour changed in this pass** beyond what was already in
-source — it is purely a recompile, plus the corrected TX template.
+MAIN received the full DEV → MAIN Texas merge (`4473d91`). This is the compiled
+frontend rebuilt from that merged source. **No dc.html edits in this pass** — pure
+recompile using MAIN's own current engine and templates.
 
 ## What changed in this tree
 
 | Path | What it is |
 |---|---|
-| `backend/frontend/index.html` | **Freshly rebuilt production bundle**, 3.33 MB. Self-contained. **Compiled output — never hand-edit.** |
-| `assets/workbooks/texas.xlsx` | **Replaced** with *Template TX - State Submission Workbook - MAY 2026 2.1* (118,800 bytes) — the corrected Talent Payroll layout with On PTIP / On PDF at C/D. Also published via Wizard 04. |
-| `source/Production Binder Wizard.dc.html` | Canonical source. Unchanged from the Wizard023 export except the TX Talent Payroll wiring noted below. |
-| `source/workbook-engine.js`, `support.js`, `wrapbook-fringe.js` | Synced from sandbox, unchanged. |
+| `backend/frontend/index.html` | **Freshly rebuilt production bundle**, 3.56 MB. Self-contained. **Compiled output — never hand-edit.** |
+| `source/Production Binder Wizard.dc.html` | Canonical source as pushed in `4473d91` (~9,600 lines). |
+| `source/workbook-engine.js` | MAIN's current engine (44,572 chars; exports `generateWorkbook`, `inspectStructure`). Embedded verbatim. |
+| `source/assets/workbooks/texas.xlsx` | MAIN's current TX template (118,365 bytes). Embedded verbatim. |
 
-## Post-rebuild injection — verified in-browser on THIS build
+`georgia.xlsx`, `illinois-local.xlsx`, `illinois-oos.xlsx` are byte-identical to the
+previous bundle and were carried over unchanged.
 
-- `__OM_EMBEDDED_WORKBOOKS__` — **4 keys** (georgia 302,169 · illinois-local 799,338 ·
-  illinois-oos 807,273 · texas 118,800 bytes). The fetch shim resolves any `*.xlsx` URL
-  by basename; a deliberately bogus host still returned the embedded 302,169-byte GA file.
-- `__OM_EMBEDDED_MODULE_SOURCE__` — **1 key** (`./workbook-engine.js`). Blob import
-  resolves and exports `generateWorkbook` + `inspectStructure`.
-- App boots to Step 1 with no console errors.
+## Post-rebuild injection — verified on THIS build
 
-## New in this bundle vs. the Aug 23 one
+- `__OM_EMBEDDED_WORKBOOKS__` — **4 keys**: georgia 302,169 · illinois-local 799,338 ·
+  illinois-oos 807,273 · texas 118,365 bytes.
+- `__OM_EMBEDDED_MODULE_SOURCE__` — **1 key**: `./workbook-engine.js`.
+- Build check: re-running the same compile over the previous MAIN source reproduces the
+  previous bundle's page template byte-for-byte, so the only differences in this bundle
+  are the new source, engine and `texas.xlsx`.
 
-- **`postExtract` retries raw network failures** — 3 attempts, 1s/2s backoff, fresh
-  AbortController per attempt; only the final exhausted failure counts toward `_runFails`.
-- **`txFallbackRow` / `txFallbackReason`** — any TX submission that yields zero rows
-  writes a visible placeholder row (name = filename, amount 0, reason in Notes) instead
-  of vanishing.
-- **Five TX vendor-packet tabs** — AP, Agency Vendor Exps, Post Production,
-  Crew - Indepen. Contractors, Talent - Indep. Contract.
-- **TX Talent Payroll tab** — `POST /extract-tx-talent-payroll`, one call carrying all
-  invoice PDFs + all PTIP/report files (PDFs-only, report-only and both all valid).
-  Column map B–AI; U/V/W and AK/AL/AM (+AN/AP/AQ) left as live formulas; J/K/L/X/Z/AD
-  blank by design (manual reviewer fields); O/P zeroed. Growth inserts at row 10 so the
-  row-40 SUBTOTAL band, the row-43 SUM band and the 45–68 roll-up SUMIFs all extend.
-- **Four payroll companies, scoped per workbook family** — `TALENT_COMPANIES` entries now
-  carry `on: ["il"|"ga"|"tx"]`. Extreme Reach and Teams everywhere; Highland GA + TX;
-  **CMS Productions TX-only**. Adding either to IL later is a one-word array edit.
-  `effectiveTalentCo()` falls back to Extreme Reach if the workbook type changes after a
-  company was picked.
-- **`downloadIssuesTxt`** object-unwrap fix.
+## What's in this bundle (from the merge)
 
-## Notes for the merge
-
-1. The TX Talent Payroll tab is checked **softly** (`inspectStructure`) then hard as a
-   precondition — same pattern as GA Talent. With the corrected `texas.xlsx` now bundled
-   AND published, it writes normally; an out-of-date published template skips just that
-   tab with a named-cell message rather than aborting the workbook.
-2. TX `check_number` is written to both G (Ref Number) and Y (Pymt #) per the template.
-   Every one of the four companies leaves it blank today, so both read empty.
-3. `ptip_excel_b64` is always `null` on TX — no Sorted PTIP deliverable on this tab, and
-   the success screen's PTIP download panel stays hidden.
-4. Everything in the Aug 23 "known-open" list still stands unchanged (GA Talent soft
-   geometry, Loan Out col A blank, 15-invoice roll-up cap, the four GA side-tabs awaiting
-   backend arrays).
+- TX Cast & Crew List (aggregated Crew + Talent, one row per person, Y/N DTR column).
+- Call-sheet Talent extraction + matching; DTR cross-tab orphan fix.
+- "Last, First" everywhere on the TX rosters; personal suffixes stay with the surname,
+  entity names never reordered.
+- AP extraction fixes, TX Locations, Petty Cash / ProdCC, Talent Payroll.
+- Crew freelance uploads in 5-file batches via `UPLOAD_BACKEND_URL` (Cloudflare bypass).
+- Start over resets `this.files` and `this._downloaded`.
+- Various GA/IL fixes and new payroll parsers already in source.
 
 ## Backend targeting — unchanged
 
-Same `BACKEND_URL` resolution and `X-App-Secret` as every prior build. Sandbox runs never
-touch prod.
+Same `BACKEND_URL` / `UPLOAD_BACKEND_URL` resolution and `X-App-Secret` as every prior
+build.
