@@ -4273,8 +4273,15 @@ class Component extends DCLogic {
     // runs, heads that off at the source; see markDtrMatchedCallSheetTalent
     // for why this can't just be folded into matchCallSheetTalentIntoCastCrew
     // itself (that step runs too late — after Crew Payroll's own decision).
+    // dtrMatchedCallSheetTalentNames (keyed by the call sheet's OWN spelling,
+    // not dtrMatchedElsewhere's DTR-name spelling) carries the match forward
+    // to matchCallSheetTalentIntoCastCrew below, so that step can set hasDtr
+    // and add the "DTR" tag on the row it builds for this same person —
+    // otherwise their Cast & Crew row would show no DTR at all despite
+    // actually having one.
+    const dtrMatchedCallSheetTalentNames = new Set();
     const ccPreIssues = [];
-    await this.markDtrMatchedCallSheetTalent(dtrMatchedElsewhere, ccPreIssues);
+    await this.markDtrMatchedCallSheetTalent(dtrMatchedElsewhere, dtrMatchedCallSheetTalentNames, ccPreIssues);
     if (ccPreIssues.length) {
       this._fringeIssues = [...(this._fringeIssues || []), ...ccPreIssues];
       for (const iss of ccPreIssues) this.runLog("warn", "  " + iss);
@@ -4353,7 +4360,7 @@ class Component extends DCLogic {
     //    matchCallSheetTalentIntoCastCrew for why this needs its own pass
     //    rather than reusing matchCallSheetToRoster.
     const ccTalentIssues = [];
-    await this.matchCallSheetTalentIntoCastCrew(castCrewEntries, ccTalentIssues);
+    await this.matchCallSheetTalentIntoCastCrew(castCrewEntries, ccTalentIssues, dtrMatchedCallSheetTalentNames);
     if (ccTalentIssues.length) {
       this._fringeIssues = [...(this._fringeIssues || []), ...ccTalentIssues];
       for (const iss of ccTalentIssues) this.runLog("warn", "  " + iss);
@@ -7251,17 +7258,35 @@ class Component extends DCLogic {
   // sheet who matches nobody becomes a brand-new orphan entry — same idea as
   // a call-sheet-only Crew person becoming an orphan on Crew Payroll today,
   // just landing directly in Cast & Crew List instead of on a payroll tab.
-  // Deliberately does NOT run DTR matching on these new entries, and does
-  // NOT write anything to Talent Payroll or Talent IC themselves — this only
-  // affects the Cast & Crew List tab.
-  async matchCallSheetTalentIntoCastCrew(castCrewEntries, issues) {
+  // Does NOT write anything to Talent Payroll or Talent IC themselves — this
+  // only affects the Cast & Crew List tab. `dtrMatchedCallSheetTalentNames`
+  // (populated earlier by markDtrMatchedCallSheetTalent, keyed by the call
+  // sheet's own name spelling) carries forward which of these call-sheet
+  // Talent people also had a DTR form, so hasDtr and the "DTR" tag land on
+  // the row built here even for someone who has no Talent Payroll/IC row of
+  // their own for the normal DTR match to ever touch.
+  async matchCallSheetTalentIntoCastCrew(castCrewEntries, issues, dtrMatchedCallSheetTalentNames) {
     const { talent } = await this.getCallSheetCrew();
     if (!talent.length) return;
+
+    // Only write hasDtr at all when DTR forms were actually uploaded this
+    // run — same "leave the column untouched, not a false NO" convention
+    // every other source of a Cast & Crew row already follows.
+    const { names: dtrNames } = await this.getDtrNames();
+    const dtrChecked = dtrNames.length > 0;
+    const dtrSet = dtrMatchedCallSheetTalentNames || new Set();
+    const entryFor = (name, role) => {
+      const hasDtr = dtrChecked ? dtrSet.has(name) : null;
+      const entry = { kind: "Talent", fromDocs: "Call Sheet" + (hasDtr ? ", DTR" : "") };
+      if (hasDtr != null) entry.hasDtr = hasDtr;
+      if (role !== undefined) entry.role = role;
+      return entry;
+    };
 
     const existingNames = castCrewEntries.filter((e) => e.kind === "Talent").map((e) => e.name);
     if (!existingNames.length) {
       for (const t of talent) {
-        castCrewEntries.push({ kind: "Talent", name: this._properLastFirst(t.name), role: t.title, fromDocs: "Call Sheet" });
+        castCrewEntries.push({ ...entryFor(t.name, t.title), name: this._properLastFirst(t.name) });
       }
       return;
     }
@@ -7293,12 +7318,12 @@ class Component extends DCLogic {
       const matched = mapping[t.name];
       if (matched && existingNames.includes(matched) && !matchedNames.has(matched)) {
         matchedNames.add(matched);
-        castCrewEntries.push({ kind: "Talent", name: matched, fromDocs: "Call Sheet" });
+        castCrewEntries.push({ ...entryFor(t.name, undefined), name: matched });
       } else {
         if (matched && matchedNames.has(matched))
           issues.push(t.name + " and another call-sheet Talent name both matched \"" + matched +
             "\" — only the first was kept; the rest was added as a new Cast & Crew List row instead.");
-        castCrewEntries.push({ kind: "Talent", name: this._properLastFirst(t.name), role: t.title, fromDocs: "Call Sheet" });
+        castCrewEntries.push({ ...entryFor(t.name, t.title), name: this._properLastFirst(t.name) });
       }
     }
   }
@@ -7312,8 +7337,13 @@ class Component extends DCLogic {
   // would wrongly add them as a new Crew row, on top of the correct new
   // Talent row matchCallSheetTalentIntoCastCrew adds later. This only marks
   // the DTR name as spoken for; it does NOT add anything to castCrewEntries
-  // itself — that still happens later, once via matchCallSheetTalentIntoCastCrew.
-  async markDtrMatchedCallSheetTalent(dtrMatchedElsewhere, issues) {
+  // itself — that still happens later, once via matchCallSheetTalentIntoCastCrew,
+  // which is also why a second match is remembered here: `matched` is a
+  // call-sheet Talent name (not a DTR name), and matchCallSheetTalentIntoCastCrew
+  // needs exactly that spelling later to know which of ITS rows to flag
+  // hasDtr on — dtrMatchedElsewhere alone (keyed by DTR-name spelling) can't
+  // answer that question for a row keyed by call-sheet spelling instead.
+  async markDtrMatchedCallSheetTalent(dtrMatchedElsewhere, dtrMatchedCallSheetTalentNames, issues) {
     const { names } = await this.getDtrNames();
     const { talent } = await this.getCallSheetCrew();
     if (!names.length || !talent.length) return;
@@ -7343,7 +7373,10 @@ class Component extends DCLogic {
 
     for (const n of names) {
       const matched = mapping[n];
-      if (matched && talentNames.includes(matched)) dtrMatchedElsewhere.add(this._properLastFirst(n));
+      if (matched && talentNames.includes(matched)) {
+        dtrMatchedElsewhere.add(this._properLastFirst(n));
+        dtrMatchedCallSheetTalentNames.add(matched);
+      }
     }
   }
 
