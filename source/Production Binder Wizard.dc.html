@@ -1140,6 +1140,7 @@ class Component extends DCLogic {
       this.runLog("res", "HTTP " + res.status + " in " + (Date.now() - t0) + "ms · " + url +
         (Array.isArray(j.rows) ? " · " + j.rows.length + " row(s)" : "") +
         (Array.isArray(j.crew) ? " · " + j.crew.length + " crew" : "") +
+        (Array.isArray(j.talent) ? " · " + j.talent.length + " talent" : "") +
         (Array.isArray(j.shoot_dates) ? " · " + j.shoot_dates.length + " shoot date(s)" : "") +
         ((j.issues || []).length ? " · " + j.issues.length + " issue(s)" : ""));
       // Endpoints that don't answer with `rows` get their payload spelled out,
@@ -1157,6 +1158,11 @@ class Component extends DCLogic {
           this.runLog("detail", "  crew: " + (c.name || "(no name)") +
             " · " + position +
             ((c.dates || []).length ? " · " + c.dates.join(", ") : ""));
+        }
+      }
+      if (Array.isArray(j.talent)) {
+        for (const t of j.talent) {
+          this.runLog("detail", "  talent: " + (t.name || "(no name)") + " · " + (t.title || "(no role)"));
         }
       }
       for (const iss of (j.issues || [])) this.runLog("issue", url + " — " + (typeof iss === "string" ? iss : JSON.stringify(iss)));
