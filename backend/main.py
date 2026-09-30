@@ -5741,15 +5741,17 @@ def _extract_tx_crew_roster_from_file(filename, data, system_prompt, client, use
     # 1.5-scale render is below Claude's effective resolution ceiling and
     # caused misreads on this same real call sheet.
     images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_pages=40)
-    raw_rows = []
+    raw_crew_rows, raw_talent_rows = [], []
     for page_img in images:
         try:
             raw = _call_claude_json_object([page_img], system_prompt, client, user_text, max_tokens=16000)
         except Exception:
             continue
         crew = (raw or {}).get("crew") or []
-        raw_rows.extend(c for c in crew if isinstance(c, dict))
-    return raw_rows
+        talent = (raw or {}).get("talent") or []
+        raw_crew_rows.extend(c for c in crew if isinstance(c, dict))
+        raw_talent_rows.extend(t for t in talent if isinstance(t, dict))
+    return raw_crew_rows, raw_talent_rows
 
 
 async def _extract_tx_crew_roster(files, x_app_secret):
@@ -5775,35 +5777,37 @@ async def _extract_tx_crew_roster(files, x_app_secret):
     async def _extract_one(filename, data):
         data, size_err = _check_and_compress_pdf_size(filename, data)
         if size_err:
-            return filename, [], size_err
+            return filename, [], [], size_err
 
         async with sem:
             try:
-                raw_rows = await loop.run_in_executor(
+                raw_crew_rows, raw_talent_rows = await loop.run_in_executor(
                     None,
                     functools.partial(_extract_tx_crew_roster_from_file, filename, data, system_prompt, client, user_text=user_text),
                 )
-                return filename, raw_rows, None
+                return filename, raw_crew_rows, raw_talent_rows, None
             except Exception as e:
-                return filename, [], str(e)
+                return filename, [], [], str(e)
 
     extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
 
-    all_raw_rows, issues, file_summaries = [], [], []
-    for filename, raw_rows, err in extraction_results:
+    all_raw_crew_rows, all_raw_talent_rows, issues, file_summaries = [], [], [], []
+    for filename, raw_crew_rows, raw_talent_rows, err in extraction_results:
         if err:
             issues.append(f"{filename}: {err}")
             file_summaries.append({"filename": filename, "rows": 0, "issues": [err]})
             continue
-        if not raw_rows:
+        if not raw_crew_rows and not raw_talent_rows:
             issues.append(f"{filename}: no crew data extracted")
             file_summaries.append({"filename": filename, "rows": 0, "issues": ["no crew data extracted"]})
             continue
-        all_raw_rows.extend(raw_rows)
-        file_summaries.append({"filename": filename, "rows": len(raw_rows), "issues": []})
+        all_raw_crew_rows.extend(raw_crew_rows)
+        all_raw_talent_rows.extend(raw_talent_rows)
+        file_summaries.append({"filename": filename, "rows": len(raw_crew_rows) + len(raw_talent_rows), "issues": []})
 
-    crew = dedupe_crew(all_raw_rows)
-    return {"crew": crew, "issues": issues, "files": file_summaries}
+    crew = dedupe_crew(all_raw_crew_rows)
+    talent = dedupe_crew(all_raw_talent_rows)
+    return {"crew": crew, "talent": talent, "issues": issues, "files": file_summaries}
 
 
 @app.post("/extract-tx-crew-roster")

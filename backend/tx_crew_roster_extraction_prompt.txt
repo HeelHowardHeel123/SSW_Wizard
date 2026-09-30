@@ -1,19 +1,24 @@
-You extract crew member names and job titles from production call sheets.
+You extract crew member AND talent names from production call sheets.
 
 DOCUMENT STRUCTURE:
-Each PDF is a call sheet, usually with one page per production day. Crew members are listed in dense columns by department (e.g. CAMERA, GRIP, ELECTRIC, ART DEPARTMENT, WARDROBE/BEAUTY, PRODUCTION/ON-SET, LOCATIONS, CONTINUITY & SOUND, and similar), each row typically showing a Title, then a Name, then contact info and call/wrap times.
+Each PDF is a call sheet, usually with one page per production day. Crew members are listed in dense columns by department (e.g. CAMERA, GRIP, ELECTRIC, ART DEPARTMENT, WARDROBE/BEAUTY, PRODUCTION/ON-SET, LOCATIONS, CONTINUITY & SOUND, and similar), each row typically showing a Title, then a Name, then contact info and call/wrap times. Separately, a TALENT (or "TALENT - ROLE") section, and sometimes also a separate BACKGROUND section, lists on-camera performers the same way -- a role/character descriptor first, then the person's name, then contact info and call time.
 
 YOUR PROCESS:
-Go through EVERY page of this PDF and list EVERY crew member row you find, on every page. A person working only one day out of several still needs to be reported from whichever page they actually appear on -- do not skip a name just because you think you may have already seen them on an earlier page. Report every crew member row you see on every page; do not deduplicate yourself, a later step combines the pages.
+Go through EVERY page of this PDF and list EVERY crew row AND every talent row you find, on every page. A person working only one day out of several still needs to be reported from whichever page they actually appear on -- do not skip a name just because you think you may have already seen them on an earlier page. Report every row you see on every page; do not deduplicate yourself, a later step combines the pages.
 
-For each crew member row, report:
+CREW -- for each crew member row (everything NOT under a TALENT, BACKGROUND, CLIENT, or AGENCY heading), report:
 - title: their job title/role exactly as printed (e.g. "Key Grip", "1st A.D.", "Gaffer", "PROD ASSISTANT")
 - name: their name exactly as printed
 
+TALENT -- for each row under a TALENT heading (however labeled, e.g. "TALENT", "TALENT - ROLE") AND each row under a separate BACKGROUND heading when one exists, report:
+- title: the role/character descriptor exactly as printed (e.g. "Auto Zone Employee - Basketball - OCP", "Self", "Player", "Autozoner Background", "Cheerleader")
+- name: the person's name exactly as printed, however it's printed -- a full name, a first name only, an initial-based code name, a nickname in quotes, whatever the sheet actually shows.
+
+Skip a talent/background row that names no individual person at all -- a bare group headcount with no name ("5 Adults Per MD", "Extras Kids (4)", "Background x16 Cheerleaders"), or a line where the "name" slot actually holds a casting vendor/agency reference instead of a person ("per Environment Casting"). A row IS still a person and must be reported even if the "name" shown is just initials, a first name, or a stand-in/code name -- only skip it when no individual is named at all.
+
 Do NOT include:
-- Rows under a CLIENT or AGENCY heading (marketing, creative, account-management contacts) -- these are not production crew.
-- Rows under a TALENT heading (actors/performers/background) -- these are handled separately.
+- Rows under a CLIENT or AGENCY heading (marketing, creative, account-management contacts) -- these are not production crew or talent.
 - Vendor/company-only rows (e.g. "CATERER: RTS", "CAR RENTAL: Enterprise") where no individual person's name is given.
 
-Return ONLY a JSON object with one key: {"crew": [{"title": "...", "name": "..."}, ...]}
+Return ONLY a JSON object with two keys: {"crew": [{"title": "...", "name": "..."}, ...], "talent": [{"title": "...", "name": "..."}, ...]}
 No explanation. No markdown. No code fences. JSON object only.

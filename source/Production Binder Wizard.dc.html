@@ -4330,8 +4330,21 @@ class Component extends DCLogic {
         ((!paySkip && txPay.count === 1) ? " row" : " rows") + " written", true);
     }
 
-    // ── Cast & Crew List — aggregated roster across all 4 tabs above, no new
-    //    extraction/matching, just reusing hasDtr/onCallSheet already computed.
+    // ── Call-sheet Talent — matched into castCrewEntries directly (not onto
+    //    Talent Payroll or Talent IC themselves) now that every Talent entry
+    //    from both of those tabs already exists. See
+    //    matchCallSheetTalentIntoCastCrew for why this needs its own pass
+    //    rather than reusing matchCallSheetToRoster.
+    const ccTalentIssues = [];
+    await this.matchCallSheetTalentIntoCastCrew(castCrewEntries, ccTalentIssues);
+    if (ccTalentIssues.length) {
+      this._fringeIssues = [...(this._fringeIssues || []), ...ccTalentIssues];
+      for (const iss of ccTalentIssues) this.runLog("warn", "  " + iss);
+    }
+
+    // ── Cast & Crew List — aggregated roster across all 4 tabs above (plus
+    //    call-sheet Talent, matched in directly above), reusing hasDtr/
+    //    onCallSheet already computed on the crew side with no re-matching.
     //    Written by direct cell patches from row 5, never by row insertion:
     //    the K/L summary block (1st Shoot date, TX-only totals) shares rows
     //    4-9 with the top of this same data band, so inserting rows would
@@ -7098,29 +7111,30 @@ class Component extends DCLogic {
   // re-implementing the same merge-by-name logic here just to recombine them.
   async extractTxCrewRoster(fileList) {
     const files = Array.from(fileList || []);
-    if (!files.length) return { crew: [], issues: [], files: [] };
+    if (!files.length) return { crew: [], talent: [], issues: [], files: [] };
     const sorted = [...files].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     await this.progressFile(sorted[sorted.length - 1].name, sorted.length);
     try {
       const fd = new FormData();
       sorted.forEach((f) => fd.append("files", f));
       const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-crew-roster", fd);
-      return { crew: j.crew || [], issues: j.issues || [], files: j.files || [] };
+      return { crew: j.crew || [], talent: j.talent || [], issues: j.issues || [], files: j.files || [] };
     } catch (e) {
       const why = "TX Crew Roster extraction failed — " + (e.message || e);
-      return { crew: [], issues: [why], files: [] };
+      return { crew: [], talent: [], issues: [why], files: [] };
     }
   }
 
-  // Cached per build: both Crew Payroll and Crew - Indepen. Contractors match
-  // against the same call-sheet roster, so this pays the extraction cost —
-  // and surfaces any extraction issues — exactly once, not once per tab.
+  // Cached per build: Crew Payroll, Crew - Indepen. Contractors (crew list)
+  // AND the Cast & Crew List's own call-sheet Talent match (talent list) all
+  // read from the same one extraction, so this pays the cost — and surfaces
+  // any extraction issues — exactly once, not once per tab.
   async getCallSheetCrew() {
     if (this._callSheetCrew) return this._callSheetCrew;
     const files = this.files.txCallSheet || [];
     this._callSheetCrew = files.length
       ? await this.extractTxCrewRoster(files)
-      : { crew: [], issues: [], files: [] };
+      : { crew: [], talent: [], issues: [], files: [] };
     if (this._callSheetCrew.issues.length)
       this._fringeIssues = [...(this._fringeIssues || []), ...this._callSheetCrew.issues];
     return this._callSheetCrew;
@@ -7206,6 +7220,70 @@ class Component extends DCLogic {
       r.callSheetName = callSheetName || "";
     }
     return orphans;
+  }
+
+  // Matches the call sheet's own TALENT (and BACKGROUND) section against the
+  // Talent people already collected into castCrewEntries from Talent Payroll
+  // and Talent - Indep. Contract. Same fuzzy /match-names mechanism as
+  // matchCallSheetToRoster above, but rebuilt against castCrewEntries' flat
+  // {kind, name, role, fromDocs} shape rather than a single tab's own
+  // rosterRows — Talent has no one "roster" the way each Crew tab does; it's
+  // spread across two source tabs by the time this runs. A match pushes a
+  // tag-only entry (name only, no role) so txCastCrewDedupe merges it into
+  // the real entry's tags without touching its role; someone on the call
+  // sheet who matches nobody becomes a brand-new orphan entry — same idea as
+  // a call-sheet-only Crew person becoming an orphan on Crew Payroll today,
+  // just landing directly in Cast & Crew List instead of on a payroll tab.
+  // Deliberately does NOT run DTR matching on these new entries, and does
+  // NOT write anything to Talent Payroll or Talent IC themselves — this only
+  // affects the Cast & Crew List tab.
+  async matchCallSheetTalentIntoCastCrew(castCrewEntries, issues) {
+    const { talent } = await this.getCallSheetCrew();
+    if (!talent.length) return;
+
+    const existingNames = castCrewEntries.filter((e) => e.kind === "Talent").map((e) => e.name);
+    if (!existingNames.length) {
+      for (const t of talent) {
+        castCrewEntries.push({ kind: "Talent", name: this._properLastFirst(t.name), role: t.title, fromDocs: "Call Sheet" });
+      }
+      return;
+    }
+
+    let mapping = {};
+    try {
+      const res = await fetch(this.BACKEND_URL + "/match-names", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Secret": this.BACKEND_SECRET },
+        body: JSON.stringify({ residency_names: talent.map((t) => t.name), diversity_names: existingNames }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        mapping = (j && j.mapping) || {};
+        if (!Object.keys(mapping).length && j && j.error)
+          issues.push("Call-sheet Talent name matching failed (" + j.error + ") — every call-sheet " +
+            "Talent person was added as a new Cast & Crew List row instead of being matched to an existing one; re-run to retry.");
+      } else {
+        issues.push("Call-sheet Talent name matching request failed (HTTP " + res.status + ") — every " +
+          "call-sheet Talent person was added as a new Cast & Crew List row instead of being matched to an existing one.");
+      }
+    } catch (e) {
+      issues.push("Call-sheet Talent name matching failed (" + (e.message || e) + ") — every call-sheet " +
+        "Talent person was added as a new Cast & Crew List row instead of being matched to an existing one.");
+    }
+
+    const matchedNames = new Set();
+    for (const t of talent) {
+      const matched = mapping[t.name];
+      if (matched && existingNames.includes(matched) && !matchedNames.has(matched)) {
+        matchedNames.add(matched);
+        castCrewEntries.push({ kind: "Talent", name: matched, fromDocs: "Call Sheet" });
+      } else {
+        if (matched && matchedNames.has(matched))
+          issues.push(t.name + " and another call-sheet Talent name both matched \"" + matched +
+            "\" — only the first was kept; the rest was added as a new Cast & Crew List row instead.");
+        castCrewEntries.push({ kind: "Talent", name: this._properLastFirst(t.name), role: t.title, fromDocs: "Call Sheet" });
+      }
+    }
   }
 
   // Batched at 5 files per POST — same CHUNK as extractFringe, matching the
