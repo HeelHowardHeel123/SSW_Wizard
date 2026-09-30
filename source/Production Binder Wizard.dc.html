@@ -5910,9 +5910,18 @@ class Component extends DCLogic {
   // destroy a 30-minute job plus the only two copies of its id (hash +
   // localStorage). Cached lookups that aren't the user's work — conventions,
   // template metadata — are deliberately kept.
+  // `this.files` (the actual uploaded File objects per zone, e.g. Crew
+  // Payroll PDFs) lives on the instance, not in state — `uploads: {}` below
+  // only resets the UI's displayed list. Confirmed via real test data: this
+  // was missing here (restart(), the smaller per-wizard reset button,
+  // already clears it correctly) and a prior production's Crew Payroll
+  // invoices + Production Report silently survived a "Start over" click
+  // into the next production's run, scrambling its Crew Payroll totals.
   resetEverything() {
     this.stopNamerPoll();
     this.clearNamerJob();
+    this.files = {};
+    this._downloaded = false;
     this.setState({
       view: "landing",
       resetConfirm: false,
