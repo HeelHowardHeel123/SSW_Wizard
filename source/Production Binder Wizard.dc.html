@@ -4263,6 +4263,23 @@ class Component extends DCLogic {
       await this.logStep(ic.label + " — " + icWritten + (icWritten === 1 ? " row" : " rows") + " written", true);
     }
 
+    // A DTR name that matches nobody on Talent Payroll or Talent IC — but DOES
+    // match a call-sheet Talent person — is still genuinely Talent, not a
+    // Crew Payroll orphan waiting to happen. Without this, Crew Payroll's own
+    // orphan step below (which only knows about dtrMatchedElsewhere) would
+    // create a spurious Crew row for them, and matchCallSheetTalentIntoCastCrew
+    // further down would ALSO add them as a new Talent row — the same person
+    // twice on Cast & Crew List. Marking the match here, before Crew Payroll
+    // runs, heads that off at the source; see markDtrMatchedCallSheetTalent
+    // for why this can't just be folded into matchCallSheetTalentIntoCastCrew
+    // itself (that step runs too late — after Crew Payroll's own decision).
+    const ccPreIssues = [];
+    await this.markDtrMatchedCallSheetTalent(dtrMatchedElsewhere, ccPreIssues);
+    if (ccPreIssues.length) {
+      this._fringeIssues = [...(this._fringeIssues || []), ...ccPreIssues];
+      for (const iss of ccPreIssues) this.runLog("warn", "  " + iss);
+    }
+
     // ── Crew Payroll. Same three sources Georgia uses (payroll PDFs,
     //    Production Report, timecards) through the TX endpoints. Processed
     //    LAST among the 4 TX tabs (not first, despite the name) so its DTR
@@ -7283,6 +7300,50 @@ class Component extends DCLogic {
             "\" — only the first was kept; the rest was added as a new Cast & Crew List row instead.");
         castCrewEntries.push({ kind: "Talent", name: this._properLastFirst(t.name), role: t.title, fromDocs: "Call Sheet" });
       }
+    }
+  }
+
+  // Prevents a false-positive Crew Payroll orphan for someone who is
+  // genuinely Talent per the call sheet but has no Talent Payroll/IC row of
+  // their own (e.g. a background actor with no payroll record at all). Their
+  // DTR form matches nobody on Talent Payroll or Talent IC — the only rosters
+  // matchDtrToRoster checks before Crew Payroll runs — so without this, Crew
+  // Payroll's own DTR-orphan step (which only trusts dtrMatchedElsewhere)
+  // would wrongly add them as a new Crew row, on top of the correct new
+  // Talent row matchCallSheetTalentIntoCastCrew adds later. This only marks
+  // the DTR name as spoken for; it does NOT add anything to castCrewEntries
+  // itself — that still happens later, once via matchCallSheetTalentIntoCastCrew.
+  async markDtrMatchedCallSheetTalent(dtrMatchedElsewhere, issues) {
+    const { names } = await this.getDtrNames();
+    const { talent } = await this.getCallSheetCrew();
+    if (!names.length || !talent.length) return;
+
+    const talentNames = talent.map((t) => t.name);
+    let mapping = {};
+    try {
+      const res = await fetch(this.BACKEND_URL + "/match-names", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Secret": this.BACKEND_SECRET },
+        body: JSON.stringify({ residency_names: names, diversity_names: talentNames }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        mapping = (j && j.mapping) || {};
+        if (!Object.keys(mapping).length && j && j.error)
+          issues.push("DTR-to-call-sheet-Talent name matching failed (" + j.error + ") — a DTR form " +
+            "for someone who's genuinely Talent may show up as a spurious Crew Payroll row too; re-run to retry.");
+      } else {
+        issues.push("DTR-to-call-sheet-Talent name matching request failed (HTTP " + res.status +
+          ") — a DTR form for someone who's genuinely Talent may show up as a spurious Crew Payroll row too.");
+      }
+    } catch (e) {
+      issues.push("DTR-to-call-sheet-Talent name matching failed (" + (e.message || e) +
+        ") — a DTR form for someone who's genuinely Talent may show up as a spurious Crew Payroll row too.");
+    }
+
+    for (const n of names) {
+      const matched = mapping[n];
+      if (matched && talentNames.includes(matched)) dtrMatchedElsewhere.add(this._properLastFirst(n));
     }
   }
 
