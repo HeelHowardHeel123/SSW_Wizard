@@ -6363,7 +6363,12 @@ class Component extends DCLogic {
   // matches fringe ({rows, issues, files}) minus the columns key.
   async extractCrewFreelance(fileList) {
     const files = Array.from(fileList || []);
-    const CHUNK = 10;
+    // 10 was too many -- confirmed via a real production failure (Wrigley
+    // Respawn x Rivals, WLM 017): 10 invoice PDFs batched into one request
+    // hit Cloudflare's payload-size limit (413), and a retry with an even
+    // bigger/duplicated batch failed the connection outright ("Failed to
+    // fetch"). Same reasoning as AP/DTR/Residency already using CHUNK=5.
+    const CHUNK = 5;
     const merged = { rows: [], issues: [], files: [] };
     // Sort by filename before chunking so batch order matches the backend's
     // per-request alphabetical sort (keeps global row order across batches).
