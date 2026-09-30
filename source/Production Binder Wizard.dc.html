@@ -5056,7 +5056,19 @@ class Component extends DCLogic {
   // matches fringe ({rows, issues, files}) minus the columns key.
   async extractCrewFreelance(fileList) {
     const files = Array.from(fileList || []);
-    const CHUNK = 10;
+    // 10 was too many -- confirmed via a real production failure (Wrigley
+    // Respawn x Rivals, WLM 017): 10 invoice PDFs batched into one request
+    // hit Cloudflare's payload-size limit (413) on the Cloudflare-proxied
+    // host, and a retry with an even bigger/duplicated batch failed the
+    // connection outright ("Failed to fetch"). Two fixes, matching the
+    // established pattern already used for extractFringe/ProdCo Sub-Vendors:
+    // CHUNK=5 matches this endpoint's own 5-concurrent backend Semaphore
+    // (same reasoning as extractFringe -- a bigger chunk means multiple
+    // sequential AI-extraction rounds piling up inside one held-open
+    // request), and UPLOAD_BACKEND_URL bypasses Cloudflare's proxy (and its
+    // payload-size/gateway-timeout limits) entirely -- it's what actually
+    // fixes the reported 413, which CHUNK alone would not have.
+    const CHUNK = 5;
     const merged = { rows: [], issues: [], files: [] };
     // Sort by filename before chunking so batch order matches the backend's
     // per-request alphabetical sort (keeps global row order across batches).
@@ -5067,7 +5079,7 @@ class Component extends DCLogic {
       const fd = new FormData();
       batch.forEach((f) => fd.append("files", f));
       fd.append("prodco_names", this.prodcoNames().join(", "));
-      const j = await this.postExtract(this.BACKEND_URL + "/extract-crew-freelance", fd);
+      const j = await this.postExtract(this.UPLOAD_BACKEND_URL + "/extract-crew-freelance", fd);
       merged.rows.push(...(j.rows || []));
       merged.issues.push(...(j.issues || []));
       merged.files.push(...(j.files || []));
