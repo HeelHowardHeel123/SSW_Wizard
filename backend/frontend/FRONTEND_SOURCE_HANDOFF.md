@@ -1,107 +1,67 @@
-# Frontend source handoff — rebuild for the main push (Sep 1, 2026)
+# Frontend source handoff — bundle rebuild (Sep 18, 2026)
 
-## Short answer
+## Why this package exists
 
-Still **no git on my side.** Everything you need is in this package — commit it
-yourself. `source/` is the canonical frontend source; `backend/frontend/index.html`
-is the build artifact committed alongside it. Both are current as of today.
+The previous Wizard023 export shipped a current `source/Production Binder Wizard.dc.html`
+but carried the OLD compiled `backend/frontend/index.html` forward unrebuilt, so none
+of the reliability work or the TX Talent Payroll tab actually deployed. This package is
+that rebuild. **No dc.html behaviour changed in this pass** beyond what was already in
+source — it is purely a recompile, plus the corrected TX template.
 
-Since the Aug 23 note: **Wizard 01 (Name PDFs)** plus one Wizard 02 success-screen change (auto-generated parsers are now an in-app download, matching the dev-branch backend). Wizard 02/03/04,
-the workbook engine, the bundled templates, and every GA/IL tab mapping are
-byte-identical to what you already merged.
-
-## Files in this package
+## What changed in this tree
 
 | Path | What it is |
 |---|---|
-| `backend/frontend/index.html` | **Freshly rebuilt production bundle**, 3.27 MB. Self-contained: the four workbook templates are embedded as base64 via `window.__OM_EMBEDDED_WORKBOOKS__` + a `fetch` shim, and `workbook-engine.js` is embedded as module source handed to the app as a blob URL. **Compiled output — never hand-edit.** |
-| `source/Production Binder Wizard.dc.html` | The real editable source. All UI, upload zones, column mapping, extraction calls. |
-| `source/workbook-engine.js` | xlsx read/patch/insert engine. **Unchanged** since Aug 23. |
-| `source/wrapbook-fringe.js` | Wrapbook fringe parsing helper. **Unchanged.** |
-| `source/support.js` | Runtime the `.dc.html` loads. Generated — don't edit. |
-| `source/CLAUDE.md` | Template versions + column mappings for every tab, plus the Wizard 01 contract notes. **Read this before touching geometry.** |
+| `backend/frontend/index.html` | **Freshly rebuilt production bundle**, 3.33 MB. Self-contained. **Compiled output — never hand-edit.** |
+| `assets/workbooks/texas.xlsx` | **Replaced** with *Template TX - State Submission Workbook - MAY 2026 2.1* (118,800 bytes) — the corrected Talent Payroll layout with On PTIP / On PDF at C/D. Also published via Wizard 04. |
+| `source/Production Binder Wizard.dc.html` | Canonical source. Unchanged from the Wizard023 export except the TX Talent Payroll wiring noted below. |
+| `source/workbook-engine.js`, `support.js`, `wrapbook-fringe.js` | Synced from sandbox, unchanged. |
 
-Not included because they didn't change: `source/assets/workbooks/*.xlsx` (the
-four bundled defaults, already in the repo and already embedded in the bundle
-above), `backend/main.py`, `requirements.txt`.
+## Post-rebuild injection — verified in-browser on THIS build
 
-## What's new in this bundle
+- `__OM_EMBEDDED_WORKBOOKS__` — **4 keys** (georgia 302,169 · illinois-local 799,338 ·
+  illinois-oos 807,273 · texas 118,800 bytes). The fetch shim resolves any `*.xlsx` URL
+  by basename; a deliberately bogus host still returned the embedded 302,169-byte GA file.
+- `__OM_EMBEDDED_MODULE_SOURCE__` — **1 key** (`./workbook-engine.js`). Blob import
+  resolves and exports `generateWorkbook` + `inspectStructure`.
+- App boots to Step 1 with no console errors.
 
-1. **Vendor invoice naming toggle** on the Wizard 01 intake screen. Posts
-   `vendor_naming` = `"invoice_number"` (default) or `"po_number"` on
-   `POST /wizard01/jobs`. Label, note, choices and default are read from
-   `GET /wizard01/conventions` (`types[].options[]` where
-   `key === "vendor_naming"`); only the two values are built in, so it works
-   before that endpoint deploys. Not part of the intake gate — always has a
-   default.
-2. **Intake screen simplified.**
-   - **All address fields removed** — they never affected a filename. The POST
-     no longer sends `client_address` / `agency_address` / `prodco_address`.
-   - **Client removed as a batch source.** "Who is this batch from?" is now
-     Production Co. or Agency only (a client never bills a production).
-   - **Only the sender's name is required.** The other entity's name is still
-     collected and posted, optional — the backend's Bill-To cross-check is what
-     catches a mis-declared batch, so more names is still better.
-   - On an **Agency** batch an optional **Client Name** card appears and posts as
-     `client_name`; on a ProdCo batch that field is hidden and `client_name`
-     posts empty.
-3. **The Wizard 01 upload POST moves off Cloudflare.** New `UPLOAD_BACKEND_URL`
-   getter + `UPLOAD_HOSTS_MAP`: on `tealdocwizard.com` / `www.` the single
-   multipart `POST /wizard01/jobs` goes to `https://upload.tealdocwizard.com`
-   (DNS-only, unproxied, same Railway service) so a multi-GB batch isn't 413'd
-   at the edge by Cloudflare's body-size cap. Everywhere else it resolves to
-   `BACKEND_URL` unchanged. Status polling, download and delete all stay on
-   `BACKEND_URL`. **No backend code change — the FastAPI app just needs to
-   answer that second hostname, and the DNS record has to exist.**
-4. **`extractFringe` chunk size 15 → 5**, matching the backend's own
-   5-concurrent cap so one request's worst case is a single ~40s round instead
-   of three sequential ones. The old value tripped Cloudflare's ~100s proxy
-   timeout (**524**) on a real 13-file ADQ 005 run. Don't raise it again without
-   moving that call off the Cloudflare proxy.
-5. **Wizard 01's landing card pill is back to "Active"** (aquamarine) now that
-   the wizard is going live.
-6. **Auto-generated parsers are an in-app download, not an email.** Consumes the
-   new `generated_parsers[]` field on `/extract-fringe` and `/extract-payroll`
-   (`company_name`, `filename`, `code`, `is_update`, `file_count`, `row_count`).
-   Merged across `extractFringe`'s chunked batches, threaded through
-   `parsePayrollRows` (IL) and `parseGaPayrollRows` (GA — payroll-PDF branch
-   only), reset per run, surfaced as `genGeneratedParsers`. The amber success-screen
-   notice is now driven by that structured payload rather than by regex-matching
-   issue strings, and each parser gets its own "Download New/Updated: {company} —
-   {filename}" button saving `code` as a `.py`. The old hardcoded (and often
-   false) "emailed to sward@tpc.us for review" claim is gone. Verified in the
-   sandbox: notice renders only when a run returns parsers, and the buttons emit
-   a `text/x-python` blob download.
+## New in this bundle vs. the Aug 23 one
 
-## Post-rebuild injection — re-verify on any future rebuild
+- **`postExtract` retries raw network failures** — 3 attempts, 1s/2s backoff, fresh
+  AbortController per attempt; only the final exhausted failure counts toward `_runFails`.
+- **`txFallbackRow` / `txFallbackReason`** — any TX submission that yields zero rows
+  writes a visible placeholder row (name = filename, amount 0, reason in Notes) instead
+  of vanishing.
+- **Five TX vendor-packet tabs** — AP, Agency Vendor Exps, Post Production,
+  Crew - Indepen. Contractors, Talent - Indep. Contract.
+- **TX Talent Payroll tab** — `POST /extract-tx-talent-payroll`, one call carrying all
+  invoice PDFs + all PTIP/report files (PDFs-only, report-only and both all valid).
+  Column map B–AI; U/V/W and AK/AL/AM (+AN/AP/AQ) left as live formulas; J/K/L/X/Z/AD
+  blank by design (manual reviewer fields); O/P zeroed. Growth inserts at row 10 so the
+  row-40 SUBTOTAL band, the row-43 SUM band and the 45–68 roll-up SUMIFs all extend.
+- **Four payroll companies, scoped per workbook family** — `TALENT_COMPANIES` entries now
+  carry `on: ["il"|"ga"|"tx"]`. Extreme Reach and Teams everywhere; Highland GA + TX;
+  **CMS Productions TX-only**. Adding either to IL later is a one-word array edit.
+  `effectiveTalentCo()` falls back to Extreme Reach if the workbook type changes after a
+  company was picked.
+- **`downloadIssuesTxt`** object-unwrap fix.
 
-- `__OM_EMBEDDED_WORKBOOKS__` — 4 keys, present in this build.
-- `__OM_EMBEDDED_MODULE_SOURCE__` — 1 key, present in this build.
+## Notes for the merge
 
-Absent → every template load 404s and Generate Workbook dies on
-*"Failed to resolve module specifier"*.
+1. The TX Talent Payroll tab is checked **softly** (`inspectStructure`) then hard as a
+   precondition — same pattern as GA Talent. With the corrected `texas.xlsx` now bundled
+   AND published, it writes normally; an out-of-date published template skips just that
+   tab with a named-cell message rather than aborting the workbook.
+2. TX `check_number` is written to both G (Ref Number) and Y (Pymt #) per the template.
+   Every one of the four companies leaves it blank today, so both read empty.
+3. `ptip_excel_b64` is always `null` on TX — no Sorted PTIP deliverable on this tab, and
+   the success screen's PTIP download panel stays hidden.
+4. Everything in the Aug 23 "known-open" list still stands unchanged (GA Talent soft
+   geometry, Loan Out col A blank, 15-invoice roll-up cap, the four GA side-tabs awaiting
+   backend arrays).
 
 ## Backend targeting — unchanged
 
-`BACKEND_URL` resolution, the `BACKEND_FALLBACK` dev host, and
-`X-App-Secret` (`tpcSSW201005`) are all as documented Aug 6. Nothing to change
-for this sync.
-
-## Known-open, non-blocking
-
-Everything on the Aug 23 list still stands unchanged (Loan Out col A blank, GA
-Talent soft geometry check, Talent invoice roll-up capped at 15, four tabs
-awaiting backend arrays, GL tabs never live-tested). Plus, for Wizard 01:
-
-- **The whole `/wizard01/*` surface is still stubbed on the frontend's side of
-  the contract** — jobs, status polling, download, delete, conventions. The UI is
-  complete and tested against hand-written payloads; nothing has run against a
-  real backend. Hence the "In Development" pill.
-- **`GET /wizard01/conventions` 404 is expected** — the conventions panel says
-  the endpoint is unreachable rather than showing invented patterns, and the
-  naming toggle falls back to two built-in labels. Never inline the patterns.
-
-## Merge
-
-No blockers. Nothing mid-flight. One merge lands both halves in sync since the
-frontend ships inside this repo as `backend/frontend/index.html`.
+Same `BACKEND_URL` resolution and `X-App-Secret` as every prior build. Sandbox runs never
+touch prod.

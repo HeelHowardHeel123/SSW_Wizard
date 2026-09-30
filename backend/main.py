@@ -105,6 +105,40 @@ Endpoints
                                      (crew comes from /extract-call-sheet). GPT matches each
                                      ap_name against the crew list and returns its position.
                                      returns {"mapping": {"First Last": "(Gaffer)"}, "issues": [...]}
+  POST /extract-tx-ap              → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "AP (POs + Reimbursement)" tab -- straight PDF-to-rows
+                                     dump, no Production Report reconciliation, no FF1/FF2/AICP
+                                     (GA-only concepts), no payer-entity matching (Payment Entity
+                                     and Type stay blank for manual entry). Invoice is the source
+                                     of truth; falls back to the PO when no invoice is present in
+                                     the packet. Proof of payment is "NO" whenever the packet
+                                     doesn't include one.
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-tx-agency-vendor-exps → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "Agency Vendor Exps" tab -- identical shape to
+                                     /extract-tx-ap plus one extra field, job_number (an
+                                     internal production job/project code, when printed on
+                                     the invoice or PO).
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-tx-post-production → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "Post Production" tab -- identical shape to
+                                     /extract-tx-agency-vendor-exps (same fields including
+                                     job_number).
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-tx-crew-ic         → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "Crew - Indep. Contractors" tab -- 1099 crew
+                                     invoices, the "labor" prompt family (vs. AP/Agency/
+                                     Post Production's "non-labor" vendor family). Splits
+                                     wages into gross_wages/mileage/kit_rental/other only
+                                     when the invoice itemizes them; includes check_number
+                                     (LLM-extracted, per user decision) alongside the usual
+                                     payment_number.
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
+  POST /extract-tx-talent-ic       → multipart: files[]=<pdf>, prodco_name, work_state
+                                     TX "Talent - Indep. Contract" tab -- same labor-
+                                     invoice shape as /extract-tx-crew-ic, minus
+                                     check_number (that tab has no such column).
+                                     returns {"rows": [...], "issues": [...], "files": [...]}
   POST /build-ga-workbook          → multipart: files[]=<pdf>, template=<xlsx>, prodco_name,
                                      prodco_address, agency_name, work_state, payer_entities,
                                      project_title
@@ -193,7 +227,7 @@ from parsers.wrapbook.fringe_001 import enrich_from_register
 from parsers.ai_fringe import extract_unknown, make_exec_parser
 from parsers import registry
 from notify import send_run_summary
-from talent_extractor import extract_talent, extract_teams_talent, extract_highland_talent
+from talent_extractor import extract_talent, extract_teams_talent, extract_highland_talent, extract_cms_talent
 import shutil
 import uuid as _uuid
 import pdf_namer
@@ -223,6 +257,12 @@ _GA_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(_
 _GA_PETTY_CASH_PROMPT_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_petty_cash_extraction_prompt.txt")
 _GA_PRODCC_PROMPT_PATH          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_prodcc_extraction_prompt.txt")
 _GA_HOTEL_PROMPT_PATH           = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_hotel_extraction_prompt.txt")
+_TX_AP_PROMPT_PATH              = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_ap_extraction_prompt.txt")
+_TX_AGENCY_VENDOR_EXPS_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_agency_vendor_exps_extraction_prompt.txt")
+_TX_POST_PRODUCTION_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_post_production_extraction_prompt.txt")
+_TX_CREW_IC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_crew_indep_contractors_extraction_prompt.txt")
+_TX_TALENT_IC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_talent_indep_contract_extraction_prompt.txt")
+_TX_PETTY_CASH_PRODCC_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_petty_cash_prodcc_extraction_prompt.txt")
 
 app = FastAPI(title="TPC Extraction Service")
 app.add_middleware(
@@ -418,6 +458,66 @@ def _load_ga_ap_prompt(payer_entities: list, work_state: str = "GA") -> str:
         lines.append(line)
     entities_block = "\n".join(lines) if lines else "  (none provided)"
     return template.replace("{payer_entities_block}", entities_block)
+
+
+def _load_tx_ap_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_AP_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_tx_agency_vendor_exps_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_AGENCY_VENDOR_EXPS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_tx_post_production_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_POST_PRODUCTION_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_tx_crew_ic_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_CREW_IC_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
+
+
+def _load_tx_talent_ic_prompt(prodco_name: str, work_state: str = "TX") -> str:
+    with open(_TX_TALENT_IC_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    name_label  = prodco_name.strip() or "the production company"
+    state_label = work_state.strip().upper() or "TX"
+    return (
+        template
+        .replace("{prodco_name}", name_label)
+        .replace("{work_state}", state_label)
+    )
 
 
 # ── PDF / image → page images (base64 PNG) ────────────────────────────────────
@@ -874,6 +974,409 @@ def _petty_cash_unreadable_file_row(filename: str) -> dict:
     }
 
 
+# ── TX Petty Cash / ProdCC extractor ─────────────────────────────────────────
+# TX's own template only wants ONE row per document -- the envelope's stated
+# total (Petty Cash) or the PO's stated total (ProdCC) -- unlike GA/IL's
+# line-item-per-receipt model above. When a document has no cover/PO page
+# stating a total at all, a single receipt gets filled in directly and
+# multiple receipts get summed into a live Excel formula (so a reviewer can
+# see the math without leaving the cell) with a "show your work" vendor/
+# amount breakdown in Notes. Each uploaded PDF is processed independently --
+# no cross-file envelope grouping -- since a split "(1 of 2)/(2 of 2)" pair
+# is not necessarily the same envelope (confirmed against real TX examples:
+# a second part with no cover sheet of its own is its own envelope).
+
+def _call_gpt_json_object(images_b64, system_prompt, client, user_text="", max_tokens=8000, max_retries=5):
+    """Same as _call_gpt but expects a single JSON object back, not an array
+    -- the malformed-JSON fallback regex has to look for {...} rather than
+    [...] to match."""
+    content = [{"type": "text", "text": user_text}]
+    for img in images_b64:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{img}", "detail": "high"},
+        })
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0,
+                max_tokens=max_tokens,
+            )
+            break
+        except RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
+    raw = resp.choices[0].message.content.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        print(f"[_call_gpt_json_object] JSON parse failed. Raw response (first 500 chars): {raw[:500]!r}", flush=True)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                return {}
+    return {}
+
+
+def _call_claude_json_object(images_b64, system_prompt, client, user_text, max_tokens=8000, max_retries=5):
+    """Claude fallback mirror of _call_gpt_json_object, for the same reason
+    the older petty cash engine has one: GPT-4o occasionally declines a file
+    for reasons that don't correspond to any real content problem."""
+    import anthropic
+
+    content = []
+    for img in images_b64:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": img},
+        })
+    content.append({"type": "text", "text": user_text})
+
+    for attempt in range(max_retries + 1):
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-5",
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": content}],
+            ) as stream:
+                for _ in stream.text_stream:
+                    pass
+                resp = stream.get_final_message()
+            break
+        except anthropic.RateLimitError as e:
+            if attempt == max_retries:
+                raise
+            time.sleep(_rate_limit_wait_seconds(e, attempt))
+
+    text_block = next((b for b in resp.content if b.type == "text"), None)
+    raw = text_block.text.strip() if text_block else ""
+    try:
+        return json.loads(raw)
+    except Exception:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except Exception:
+                pass
+        return {}
+
+
+def _extract_tx_petty_cash_prodcc_from_file(filename, data, system_prompt, client, user_text=""):
+    images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
+    if not images:
+        return {}
+    return _call_gpt_json_object(images, system_prompt, client, user_text=user_text, max_tokens=8000)
+
+
+_TX_NAME_FROM_FILENAME_RE = re.compile(r"([A-Za-z][A-Za-z'\-]+,\s*[A-Za-z][A-Za-z'\-]+)")
+_TX_ENV_FROM_FILENAME_RE  = re.compile(r"\((\d+)\s+of\s+(\d+)\)", re.IGNORECASE)
+
+
+def _tx_name_from_filename(filename: str) -> str:
+    """Fallback when the document itself has no readable name: parse a
+    "Lastname, Firstname" pattern out of the filename. If the filename
+    doesn't fit that pattern either, use the raw filename verbatim (per
+    explicit instruction: never leave Name silently blank)."""
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    m = _TX_NAME_FROM_FILENAME_RE.search(stem)
+    if m:
+        return clean_name(m.group(1))
+    return stem.strip()
+
+
+def _tx_env_number_from_filename(filename: str) -> str:
+    """Fallback envelope number when the document has none of its own: the
+    "(N of M)" position in the filename. Empty string if absent. Envelope-
+    only -- a PO number has no comparable filename convention to fall back
+    to, and isn't guessable from a "(N of M)" pattern."""
+    m = _TX_ENV_FROM_FILENAME_RE.search(filename)
+    return m.group(1) if m else ""
+
+
+_TX_LEADING_NUM_RE = re.compile(r"\d+")
+
+
+def _tx_format_envelope_number(raw: str) -> str:
+    """Bare number(s) only -- "1", or "1, 2 & 3" for a PDF bundling several
+    cover pages. The model is only asked for the raw digits (comma-separated
+    when there's more than one); this does the actual formatting/joining
+    deterministically in Python rather than trusting the model with it --
+    confirmed today that a mechanical formatting task like this is safer
+    done here than asked of the model repeatedly across a prompt rewrite."""
+    if not raw:
+        return ""
+    parts = [_TX_LEADING_NUM_RE.search(p) for p in raw.split(",")]
+    numbers = [m.group() for m in parts if m]
+    if not numbers:
+        return ""
+    if len(numbers) == 1:
+        return numbers[0]
+    return ", ".join(numbers[:-1]) + f" & {numbers[-1]}"
+
+
+def _tx_sum_formula(amounts: list[float]) -> str:
+    """Builds a live Excel formula string (e.g. "=36.69+45.89-13.73") summing
+    every receipt amount -- written into the cell instead of a pre-computed
+    number so a reviewer can see and verify the math without leaving Excel."""
+    parts = []
+    for i, amt in enumerate(amounts):
+        amt = round(float(amt), 2)
+        if i == 0:
+            parts.append(f"{amt}")
+        elif amt >= 0:
+            parts.append(f"+{amt}")
+        else:
+            parts.append(f"{amt}")
+    return "=" + "".join(parts) if parts else "=0"
+
+
+def _tx_receipt_breakdown_notes(receipts: list[dict]) -> str:
+    """"Show your work" Notes text for a no-stated-total, multi-receipt
+    document -- e.g. "Jalisco's $36.69, Trader Joe's $45.89, ... Central
+    Market -$13.73" -- pairs with the formula from _tx_sum_formula so a
+    reviewer can tell which number is which without opening the source PDF."""
+    parts = []
+    for r in receipts:
+        vendor = clean_name(r.get("vendor", "")) or "Unknown vendor"
+        amt = normalize_amount(r.get("amount", 0))
+        if amt < 0:
+            parts.append(f"{vendor} -${abs(amt):,.2f}")
+        else:
+            parts.append(f"{vendor} ${amt:,.2f}")
+    return ", ".join(parts)
+
+
+def _normalize_tx_petty_prodcc_row(raw: dict, prodco_name: str, filename: str, pymt_method: str) -> dict:
+    receipts = raw.get("receipts") or []
+    if not isinstance(receipts, list):
+        receipts = []
+    valid_receipts = [r for r in receipts if isinstance(r, dict)]
+
+    has_total    = bool(raw.get("has_stated_total"))
+    stated_total = normalize_amount(raw.get("stated_total", 0)) if has_total else 0
+
+    # The prompt itself already returns a person's name as "Last, First" and
+    # leaves anything else (a department, company, card/account name) exactly
+    # as printed -- distinguishing "Bonnie Cook" from "Art Department" needs
+    # the document's own context, which only the extraction step has.
+    name = clean_name(str(raw.get("name", "")).strip())
+    if not name:
+        name = _tx_name_from_filename(filename)
+
+    # Envelope number and PO number are two independent, mutually-exclusive
+    # fields -- a real document only ever has one of them (confirmed on SONI
+    # 005's "PO 21917 - Petty Cash.pdf": a Purchase Order used to authorize a
+    # petty cash advance still carries a real "PO # 21917", not an envelope
+    # number, even though the file landed in the Petty Cash zone). Each maps
+    # to its own fixed column on the frontend regardless of which zone/
+    # endpoint the file came through.
+    env_number = _tx_format_envelope_number(str(raw.get("envelope_number", "")).strip())
+    po_number = str(raw.get("po_number", "")).strip()
+    if env_number and po_number:
+        # Confirmed real on SONI 005: the model can still return both when a
+        # genuine Purchase Order also happens to carry an unrelated generic
+        # "Page 1 of 1" boilerplate footer. A document with a real PO # is
+        # definitively a Purchase Order, not a petty cash envelope, so PO #
+        # wins and the false-positive envelope reading is dropped.
+        env_number = ""
+    if not env_number and not po_number:
+        env_number = _tx_env_number_from_filename(filename)
+
+    # Normally one PDF = one envelope, but occasionally a production submits
+    # two full "PETTY CASH SUMMARY" cover pages for the same person in a
+    # single file instead of splitting them out (confirmed real on SONI 005's
+    # "Esposito, Luca - CC Reimb.pdf": Envelope 1 and Envelope 2, each with
+    # its own total, in one PDF). The prompt joins that case's envelope
+    # numbers as "1 & 2" -- flag it here so it's never silently missed.
+    envelope_count = env_number.count(" & ") + 1 if env_number else 0
+    multi_envelope_note = (
+        f"{envelope_count} Petty Cash envelopes in PDF" if envelope_count > 1 else ""
+    )
+
+    row = {
+        "name":           name,
+        "env_number":     env_number,
+        "po_number":      po_number,
+        "line_number":    "",
+        "pymt_method":    pymt_method,
+        "payment_entity": prodco_name,
+        "amount":         0,
+        "vendor":         "",
+        "receipt_date":   "",
+        "description":    "",
+        "address":        "",
+        "city":           "",
+        "state":          "",
+        "zip":            "",
+        "notes":          multi_envelope_note,
+        "sourceFile":     filename,
+    }
+
+    # A stated total is always trusted for the dollar amount, whether or not
+    # receipts were also itemized. What the receipt count changes is only
+    # Line#/Vendor/Date/Description/Address/City/State/Zip: a single receipt
+    # gets its own real values, more than one gets "Various" in all of them
+    # (nothing to show your work for here -- the stated total is already
+    # trusted, unlike the no-total multi-receipt formula case below).
+    amount_from_total = stated_total if (has_total and stated_total) else None
+
+    if len(valid_receipts) == 1:
+        r = valid_receipts[0]
+        addr = _parse_vendor_address(str(r.get("address", "")).strip())
+        row["line_number"]  = "1"
+        row["vendor"]       = clean_name(r.get("vendor", ""))
+        row["receipt_date"] = normalize_date(str(r.get("date", "")).strip())
+        row["description"]  = str(r.get("description", "")).strip()
+        row["address"]      = addr["address"]
+        row["city"]         = addr["city"]
+        row["state"]        = addr["state"]
+        row["zip"]          = addr["zip"]
+        row["amount"] = amount_from_total if amount_from_total is not None else normalize_amount(r.get("amount", 0))
+        return row
+
+    if len(valid_receipts) > 1:
+        row["line_number"]  = "Various"
+        row["vendor"]       = "Various"
+        row["receipt_date"] = "Various"
+        row["description"]  = "Various"
+        row["address"]      = "Various"
+        row["city"]         = "Various"
+        row["state"]        = "Various"
+        row["zip"]          = "Various"
+        if amount_from_total is not None:
+            row["amount"] = amount_from_total
+        else:
+            amounts = [normalize_amount(r.get("amount", 0)) for r in valid_receipts]
+            row["amount"] = _tx_sum_formula(amounts)
+            breakdown = _tx_receipt_breakdown_notes(valid_receipts)
+            row["notes"] = f"{multi_envelope_note}; {breakdown}" if multi_envelope_note else breakdown
+        return row
+
+    if amount_from_total is not None:
+        row["amount"] = amount_from_total
+        return row
+
+    fallback = f"Could not find a stated total or any receipts in {filename} -- review manually"
+    row["notes"] = f"{multi_envelope_note}; {fallback}" if multi_envelope_note else fallback
+    return row
+
+
+def _load_tx_petty_cash_prodcc_prompt(prodco_name: str, doc_kind: str) -> str:
+    with open(_TX_PETTY_CASH_PRODCC_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    return template.format(prodco_name=prodco_name or "the production", doc_kind=doc_kind)
+
+
+async def _extract_tx_petty_cash_prodcc(files, prodco_name, doc_kind, pymt_method, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _client()
+    system_prompt = _load_tx_petty_cash_prodcc_prompt(prodco_name, doc_kind)
+    user_text = (
+        f"Extract this {doc_kind} document. Start by itemizing every individual receipt or PO line "
+        "item into the receipts array -- do this first and always, regardless of whether the document "
+        "also has a stated total. Then find the stated total (if any), name, and envelope/PO number."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, {}, size_err
+
+        async with sem:
+            try:
+                raw = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_petty_cash_prodcc_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                if not raw:
+                    print(f"[_extract_tx_petty_cash_prodcc] {filename}: GPT-4o returned nothing, retrying with Claude", flush=True)
+                    try:
+                        anthropic_client = _anthropic_client()
+                        images = _file_to_images_b64(filename, data, dpi_scale=1.5, max_pages=40)
+                        raw = _call_claude_json_object(images, system_prompt, anthropic_client, user_text, max_tokens=8000)
+                        if raw:
+                            existing = str(raw.get("notes", "") or "")
+                            flag = "Extracted by Claude (GPT declined)"
+                            raw["notes"] = f"{existing}; {flag}" if existing else flag
+                    except Exception as e:
+                        print(f"[_extract_tx_petty_cash_prodcc] {filename}: Claude fallback also failed: {e}", flush=True)
+                # GPT-4o has been observed to skip itemizing receipts on some
+                # calls and not others for the identical cover-sheet template
+                # (confirmed live: two files using the exact same "PETTY CASH
+                # ENVELOPE" form, one itemized correctly, one came back with an
+                # empty receipts array) -- not a prompt-following gap, plain
+                # run-to-run variance. A stated-total petty cash/PO document
+                # essentially always has real receipts behind it, so an empty
+                # array alongside a found total is treated as a likely miss
+                # worth one retry, rather than trusted at face value.
+                elif raw.get("has_stated_total") and not raw.get("receipts"):
+                    print(f"[_extract_tx_petty_cash_prodcc] {filename}: has a stated total but no itemized receipts, retrying once", flush=True)
+                    try:
+                        retry_text = user_text + (
+                            " REMINDER: the receipts array must not be empty when this document has a "
+                            "stated total and real receipts/line items behind its cover page -- go back "
+                            "through every page and list them."
+                        )
+                        retry_raw = await loop.run_in_executor(
+                            None,
+                            functools.partial(_extract_tx_petty_cash_prodcc_from_file, filename, data, system_prompt, client, user_text=retry_text),
+                        )
+                        if retry_raw and retry_raw.get("receipts"):
+                            raw = retry_raw
+                    except Exception as e:
+                        print(f"[_extract_tx_petty_cash_prodcc] {filename}: retry for empty receipts failed: {e}", flush=True)
+                return filename, raw, None
+            except Exception as e:
+                return filename, {}, str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+    for filename, raw, err in extraction_results:
+        errs = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "company": "unknown", "rows": 0, "issues": errs})
+            continue
+
+        try:
+            row = _normalize_tx_petty_prodcc_row(raw or {}, prodco_name, filename, pymt_method)
+        except Exception as e:
+            errs.append(f"row normalization error: {e}")
+            issues.append(f"{filename}: row normalization error: {e}")
+            row = _normalize_tx_petty_prodcc_row({}, prodco_name, filename, pymt_method)
+            row["notes"] = "Could not extract any data -- review manually"
+
+        rows.append(row)
+        file_summaries.append({"filename": filename, "company": row["name"] or "unknown", "rows": 1, "issues": errs})
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
 # ── Claude vision call ───────────────────────────────────────────────────────
 
 def _call_claude(images_b64, system_prompt, client, user_text="Extract data from these document pages.", max_retries=5):
@@ -922,7 +1425,12 @@ def _extract_from_file_claude(filename, data, system_prompt, client, user_text="
     MAX_BYTES = 40 * 1024 * 1024
     batches, cur, cur_size = [], [], 0
     for img in images:
-        approx = len(img) * 3 // 4
+        # img is the base64 STRING actually embedded in the request body (see
+        # _call_claude's "data": img below) -- that string's length IS the
+        # transmitted/limit-relevant size. Do not shrink it toward the decoded
+        # byte count; a batch this undercounts can still blow the provider's
+        # real payload cap even though our own running total looked fine.
+        approx = len(img)
         if cur and cur_size + approx > MAX_BYTES:
             batches.append(cur); cur, cur_size = [img], approx
         else:
@@ -964,7 +1472,14 @@ def _extract_from_file(filename, data, system_prompt, client, user_text="Extract
     MAX_BYTES = 45 * 1024 * 1024
     batches, cur, cur_size = [], [], 0
     for img in images:
-        approx = len(img) * 3 // 4
+        # img is the base64 STRING embedded verbatim in the data: URI _call_gpt
+        # sends -- that string's length IS what OpenAI evaluates against its
+        # request-size limit. Confirmed real: ABBVIE 022's Mattison Becker.pdf
+        # hit "Total image size is 66.76MB, which exceeds the allowed limit of
+        # 50MB" from a single batch this code had scored as safely under 45MB,
+        # because *3//4 was shrinking the estimate toward the DECODED byte
+        # count instead of the transmitted base64 length.
+        approx = len(img)
         if cur and cur_size + approx > MAX_BYTES:
             batches.append(cur); cur, cur_size = [img], approx
         else:
@@ -996,6 +1511,40 @@ _STATE_ABBR = {
 
 _STATE_SET = frozenset(_STATE_ABBR.values())
 
+# ── TX ZIP -> County lookup (for the Locations tab) ──────────────────────────
+# Sourced from a public ZIP/city/county reference dataset, filtered down to
+# Texas's ~2,600 ZIP codes. Loaded once into a dict at import time -- small
+# enough that a plain in-memory lookup is simplest, no need for a DB or
+# per-request file read.
+_TX_ZIP_COUNTY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_zip_county.csv")
+
+def _load_tx_zip_county() -> dict:
+    table: dict[str, str] = {}
+    try:
+        with open(_TX_ZIP_COUNTY_PATH, "r", encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                zip5 = row.get("zip", "").strip().zfill(5)
+                county = row.get("county", "").strip()
+                if zip5 and county:
+                    table[zip5] = county
+    except FileNotFoundError:
+        print(f"[_load_tx_zip_county] {_TX_ZIP_COUNTY_PATH} not found -- TX County lookup will be empty", flush=True)
+    return table
+
+_TX_ZIP_COUNTY = _load_tx_zip_county()
+
+
+def tx_county_from_zip(zip_code: str) -> str:
+    """A ZIP code's TX county, or empty string if not found (a non-TX ZIP, a
+    malformed value, or a ZIP genuinely missing from the reference table).
+    A handful of real ZIP codes straddle two counties; this table (like any
+    standard ZIP/county crosswalk) resolves those to the majority-population
+    county, not a guaranteed match for every address in a split ZIP."""
+    zip5 = re.sub(r"\D", "", str(zip_code or ""))[:5]
+    if len(zip5) != 5:
+        return ""
+    return _TX_ZIP_COUNTY.get(zip5, "")
+
 _PYMT_MAP = {
     "check":"Check","cheque":"Check","p-card":"P-Card","pcard":"P-Card","p card":"P-Card",
     "purchasing card":"P-Card","credit card":"Credit Card","credit":"Credit Card",
@@ -1007,7 +1556,7 @@ _PYMT_MAP = {
 
 _CARD_ABBR = {
     "american express":"AMEX","amex":"AMEX","visa":"VISA",
-    "mastercard":"MC","master card":"MC","mc":"MC","discover":"DISC",
+    "mastercard":"MC","master card":"MC","mc":"MC","discover":"DC",
 }
 
 
@@ -1031,6 +1580,18 @@ def normalize_date(val: str) -> str:
     m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', s)
     if m:
         return f"{m.group(1).zfill(2)}/{m.group(2).zfill(2)}/{m.group(3)}"
+    # Month-name dates (call sheets commonly print these): "September 3,
+    # 2025", "Wednesday, September 3, 2025", "Sep 3 2025". Purely additive --
+    # every format above is tried first, so numeric-format behavior for every
+    # existing caller is unchanged; this only helps input that previously
+    # fell through to being returned as-is.
+    cleaned = re.sub(r'^[A-Za-z]+,\s*', '', s)  # drop a leading weekday name
+    cleaned = re.sub(r'(\d+)(st|nd|rd|th)\b', r'\1', cleaned, flags=re.IGNORECASE)  # "12th" -> "12"
+    for fmt in ("%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y"):
+        try:
+            return _dt.strptime(cleaned, fmt).strftime("%m/%d/%Y")
+        except ValueError:
+            continue
     return s
 
 
@@ -1068,14 +1629,56 @@ def normalize_pymt_number(method, val):
     if method in ("Credit Card", "P-Card"):
         if "*" in s:
             return s.upper()
+        # No card company visible, just a masked last-4 -- "*8008", not bare "8008".
         if s.isdigit() and len(s) == 4:
-            return s
+            return "*" + s
         lower = s.lower()
         for name, abbr in _CARD_ABBR.items():
             if name in lower:
                 digits = re.search(r"\d{4}", s)
-                return f"{abbr}*{digits.group()}" if digits else abbr
+                # Company visible but no digits -- "AMEX*", not just "AMEX".
+                return f"{abbr}*{digits.group()}" if digits else f"{abbr}*"
         return s
+    return s
+
+
+# Network/short-code aliases beyond _CARD_ABBR's full names -- "AX" is what
+# actually prints on an Amex statement line ("Org FOP AX***********8008"),
+# and DC/DISC are accepted as already-normalized or old-convention input so
+# re-running this on an already-formatted value is a no-op either way.
+_CARD_ALIASES = dict(_CARD_ABBR, ax="AMEX", disc="DC", dc="DC")
+
+
+def tx_normalize_pymt_number(method: str, val) -> str:
+    """TX's own Pymt # formatter -- deliberately NOT normalize_pymt_number,
+    whose EFT/WIRE branch prepends "On " (confirmed live on TMS 032: "On
+    ACH00568" instead of "ACH00568"). That prefix serves some GA/IL need
+    this function doesn't share, so TX gets its own copy rather than risk
+    changing shared behavior. Only Credit Card/P-Card values get reshaped;
+    every other method (Check, EFT/WIRE, ...) passes through untouched.
+
+    Unlike normalize_pymt_number, this does NOT bail out early just because
+    a "*" is already present -- "AX*8008" needs to become "AMEX*8008", not
+    stay as "AX*8008" uppercased, so the brand lookup always runs first."""
+    if not val:
+        return ""
+    s = str(val).strip()
+    if method not in ("Credit Card", "P-Card"):
+        return s
+    digits = re.search(r"\d{4}", s)
+    last4 = digits.group() if digits else ""
+    lower = s.lower()
+    brand = ""
+    for name, abbr in sorted(_CARD_ALIASES.items(), key=lambda kv: -len(kv[0])):
+        if re.search(rf"(?<![a-z]){re.escape(name)}(?![a-z])", lower):
+            brand = abbr
+            break
+    if brand and last4:
+        return f"{brand}*{last4}"
+    if brand:
+        return f"{brand}*"
+    if last4:
+        return f"*{last4}"
     return s
 
 
@@ -2280,7 +2883,9 @@ async def extract_payroll(
 # text-only call, then applies that mapping to every row mechanically.
 
 _PRODUCTION_REPORT_TARGET_FIELDS = {
-    "worker":         "employee's full name, in any format (e.g. \"Last, First\" or \"First Last\")",
+    "worker":         "employee's full name, in any format (e.g. \"Last, First\" or \"First Last\"), when it's ONE column. If the report instead has the name split across two separate columns (e.g. \"Payee Last Name\" / \"Payee First Name\", \"Last Name\" / \"First Name\", \"Surname\" / \"Given Name\"), leave THIS field null and map those two columns to \"workerLastName\" and \"workerFirstName\" instead -- they get combined into one name automatically. Never map only one half of a split name pair to \"worker\" itself.",
+    "workerLastName": "the employee's LAST NAME ONLY -- use ONLY when the report has no single combined name column (see \"worker\"). Paired with \"workerFirstName\"; combined automatically into one Last, First name.",
+    "workerFirstName": "the employee's FIRST NAME ONLY -- use ONLY when the report has no single combined name column (see \"worker\"). Paired with \"workerLastName\"; combined automatically into one Last, First name.",
     "ssn":            "Social Security Number, in any masked/partial format",
     "weStart":        "the PAY PERIOD / WEEK-ENDING start date for this row (labeled e.g. First W/E, FirstWE, Week Ending Start) -- NOT the actual day work began",
     "weEnd":          "the PAY PERIOD / WEEK-ENDING end date for this row (labeled e.g. Last W/E, LastWE, Week Ending End) -- NOT the actual day work ended",
@@ -2319,10 +2924,65 @@ _PRODUCTION_REPORT_TARGET_FIELDS = {
     "invoiceDate":    "invoice date",
 }
 
+# Texas' own aggregate report ("Production Tax Incentive Program Report" /
+# "Production Tax Credit Report") comes from whichever payroll company or
+# processor generated it, in at least 3 different real-world column layouts
+# seen so far -- no Georgia-specific fields (no state income tax in TX), but
+# it does itemize non-taxable reimbursements TX's own template tracks
+# separately (mileage / kit rental / other rental) where GA lumps them all
+# into one "reimbRent" column. "reimbRent" is deliberately EXCLUDED below
+# (not just left undescribed) -- TX's tab has no column for it at all, so a
+# header mapped there would silently vanish off the Production Report side.
+# Removing it forces every non-taxable-reimbursement-shaped header to
+# resolve to one of the three real TX fields instead, with "otherRental" as
+# the deliberate catch-all for anything ambiguous -- see its description
+# below.
+_TX_PRODUCTION_REPORT_TARGET_FIELDS = {
+    k: v for k, v in _PRODUCTION_REPORT_TARGET_FIELDS.items()
+    if k not in ("withholdingsGA", "corpTaxGA", "withholdingsIL", "reimbRent")
+}
+_TX_PRODUCTION_REPORT_TARGET_FIELDS.update({
+    "mileage":     "non-taxable mileage reimbursement amount",
+    "kitRental":   "non-taxable kit rental reimbursement amount",
+    "otherRental": "non-taxable equipment/other rental reimbursement amount, not mileage or kit rental -- also the DEFAULT for any non-taxable reimbursement column that is generic or COMBINES multiple categories without saying which. This includes headers that don't literally say \"reimbursement\" or \"rental\" at all but still mean a lump non-taxable payment -- e.g. \"Reimb/Rent\", \"Non Tax\", \"NonTax\", \"Non-Tax\", \"Non Taxable\", \"Non-Taxable Wages\", \"Nontaxable Amount\" all mean the same thing: a non-taxable amount paid to this person that isn't broken out by category. When a report doesn't itemize its non-taxable reimbursements, map that one combined column here rather than leaving it unmapped -- an unmapped reimbursement column silently drops that money from the workbook. Don't confuse this with \"other\" (below), which is for taxes/fringes, not a reimbursement-style payment to the worker.",
+    "workDatesRange": "a SINGLE column that already contains a full work-date range as one string (e.g. \"03/05/2026 - 03/06/2026\") -- use this ONLY when the report has no separate start/end or week-ending pair of columns; if it has weStart/weEnd or startDate/endDate as two separate columns instead, map those and leave this null",
+    # Overrides of the GA-inherited descriptions below -- confirmed by real
+    # examples that some payroll-platform exports (e.g. Wrapbook's raw
+    # per-worker ledger export) carry several REDUNDANT rollup/total columns
+    # alongside the granular component columns that already sum to them.
+    # Mapping both double-counts. GA's own descriptions are untouched.
+    "wages": "taxable wages / gross wage payment for this row -- prefer the most granular ALREADY-COMPUTED wage column (e.g. one literally called something like \"Wage Payments\", \"Base Wages\", or itemized pay-type columns like straight-time/overtime/double-time that get summed together). Do NOT ALSO map a broader rollup/summary column whose value already includes what you're mapping here (e.g. a \"Gross Pay\", \"Total Earnings\", or \"Total Taxable/Non-taxable Payments\" column that equals wages plus fringes/benefits combined) -- that double-counts. If a report has both a granular wage column and a rollup total that includes it, map ONLY the granular one and leave the rollup null.",
+    "corporate": "loan-out corporation wages -- ONLY when the report has a wage column that is GENUINELY SEPARATE from regular wages for loan-out payees (its value would be null/zero for a regular W-2 employee, and a DIFFERENT number than \"wages\" for a loan-out payee on the same row). A column merely LABELED with \"loan-out\" in its name (e.g. \"Total Loan-out / W-2 Earnings\") that actually reports the SAME combined-earnings figure for every payee regardless of employment type is NOT this field -- map it to null, not \"corporate\". When in doubt, only populate \"corporate\" if you can also point to a genuinely different \"wages\" value on that same row.",
+    "phw": "Pension, Health & Welfare fringe -- in entertainment-industry union payroll this is very often labeled as a union contribution paid BY THE EMPLOYER/COMPANY (e.g. \"Company Union Contributions\", \"Union Fringe\", \"Union Fringes\"), not literally \"PH&W\". Map the company/employer-side union contribution column here. Do NOT confuse it with an EMPLOYEE-side union deduction (e.g. \"Worker Union Contributions\", \"EE Union Dues\") -- that's withheld FROM the worker's pay, not paid additionally by the employer, and doesn't belong in any fringe field.",
+})
 
-def _production_report_header_prompt(headers: list[str]) -> str:
-    fields_desc  = "\n".join(f'  "{k}" - {v}' for k, v in _PRODUCTION_REPORT_TARGET_FIELDS.items())
+# Fields whose value is always a dollar amount -- used to generate the
+# prompt's "never map a rate/count column here" guidance for whichever
+# subset of these actually appears in a given call's target_fields.
+_NUMERIC_REPORT_FIELDS = {
+    "wages", "reimbRent", "mileage", "kitRental", "otherRental", "corporate",
+    "socSec", "med", "futa", "sui", "wc", "phw", "vacHol", "adv", "other",
+    "hand", "platFee", "total", "withholdingsIL", "withholdingsGA",
+    "corpTaxGA", "loanOutIndicator",
+}
+# Fields where only one header should ever match (as opposed to wages-style
+# fields where multiple headers legitimately sum together).
+_IDENTITY_REPORT_FIELDS = [
+    "worker", "workerLastName", "workerFirstName", "ssn", "jobTitle", "street",
+    "city", "zip", "invoiceNo", "invoiceDate", "weStart", "weEnd", "startDate",
+    "endDate", "workDatesRange", "workState", "resState", "union", "loanOutCompany",
+]
+
+
+def _production_report_header_prompt(headers: list[str], target_fields: dict = _PRODUCTION_REPORT_TARGET_FIELDS) -> str:
+    fields_desc  = "\n".join(f'  "{k}" - {v}' for k, v in target_fields.items())
     headers_list = "\n".join(f"  {i + 1}. {h!r}" for i, h in enumerate(headers))
+    numeric_fields  = ", ".join(f for f in _NUMERIC_REPORT_FIELDS if f in target_fields)
+    identity_fields = ", ".join(f for f in _IDENTITY_REPORT_FIELDS if f in target_fields)
+    ga_loanout_carveout = (
+        ' (except Georgia\'s, which goes to "corpTaxGA" instead)'
+        if "corpTaxGA" in target_fields else ""
+    )
     return f"""You are mapping column headers from a payroll company's Production Report spreadsheet onto a fixed set of target field names.
 
 Here are the ACTUAL column headers found in this file, in order:
@@ -2333,27 +2993,27 @@ Here are the TARGET field names and what each one means:
 
 For each actual header above, decide which target field name it corresponds to, if any. A header with no reasonable match (e.g. Ethnicity, Gender, a different state's regular EMPLOYEE income tax withholding, an internal ID column) should map to null -- do not force a match. The one exception: a different state's LOAN-OUT income tax column (e.g. "HI Loan-out Income Tax", "NC Loan-out Income Tax") is NOT a no-match -- it maps to "loanOutIndicator" (see below), even though we don't care about that state's regular employee tax column.
 
-A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent". Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: worker, ssn, jobTitle, street, city, zip, invoiceNo, invoiceDate, weStart, weEnd, startDate, endDate, workState, resState, union, loanOutCompany. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
+A single actual header maps to at most one target field. But it is normal and expected for MULTIPLE different actual headers to all map to the SAME target field when they represent different pay types that all feed the same total -- e.g. separate columns for straight-time pay, overtime pay, and double-time pay should ALL map to "wages" (they get summed together), and separate columns for kit rental, mileage, and per diem should ALL map to "reimbRent" (unless "mileage"/"kitRental"/"otherRental" are themselves in the target list above, in which case map each to its own specific field instead of lumping into "reimbRent"). Only avoid mapping two headers to the same field for the identity-style fields where just one value makes sense: {identity_fields}. For those specific fields, if two headers both plausibly match, pick whichever is the better/more specific match and map the other to null.
 
 "weStart"/"weEnd" and "startDate"/"endDate" are two DIFFERENT date pairs that can both appear in the same report -- do not conflate them. A report may have both a pay-period week-ending pair (First W/E / Last W/E) AND an actual-work-date pair (Start Date / End Date) as separate columns; map each to its own correct field rather than picking just one pair to use.
 
-Every numeric target field above (wages, reimbRent, corporate, socSec, med, futa, sui, wc, phw, vacHol, adv, other, hand, platFee, total, withholdingsIL, withholdingsGA, corpTaxGA, loanOutIndicator) means an actual DOLLAR AMOUNT for this row. Never map a column that is a RATE (e.g. "BaseRate", "HourlyRate", "Rate") or a COUNT/QUANTITY (e.g. "TotalHoursWorked", "Hours", "Units", "Days") to any of these dollar fields, even though it was used to calculate the wage -- those columns must map to null. Only an already-computed dollar total (e.g. "10 - STRAIGHT-TIME", "915 - OVERTIME") belongs in "wages".
+Every numeric target field above ({numeric_fields}) means an actual DOLLAR AMOUNT for this row. Never map a column that is a RATE (e.g. "BaseRate", "HourlyRate", "Rate") or a COUNT/QUANTITY (e.g. "TotalHoursWorked", "Hours", "Units", "Days") to any of these dollar fields, even though it was used to calculate the wage -- those columns must map to null. Only an already-computed dollar total (e.g. "10 - STRAIGHT-TIME", "915 - OVERTIME") belongs in "wages".
 
-"loanOutIndicator" is a detection-only field, not a real dollar total anyone will see -- map EVERY state's Loan-out Income Tax column (except Georgia's, which goes to "corpTaxGA" instead) to it, summed together, purely so a nonzero sum can flag the row as a loan-out payment.
+"loanOutIndicator" is a detection-only field, not a real dollar total anyone will see -- map EVERY state's Loan-out Income Tax column{ga_loanout_carveout} to it, summed together, purely so a nonzero sum can flag the row as a loan-out payment.
 
 Return ONLY a JSON object with exactly one entry per ACTUAL header listed above, using the header text itself as the key (verbatim, exactly as printed above) and either one of the target field names or null as the value.
 No explanation. No markdown. No code fences. JSON object only."""
 
 
-def _map_production_report_headers(headers: list[str], client) -> dict:
-    prompt = _production_report_header_prompt(headers)
+def _map_production_report_headers(headers: list[str], client, target_fields: dict = _PRODUCTION_REPORT_TARGET_FIELDS) -> dict:
+    prompt = _production_report_header_prompt(headers, target_fields)
     try:
         mapping = _call_gpt_text_json(prompt, client, max_tokens=2048)
     except Exception:
         return {}
     if not isinstance(mapping, dict):
         return {}
-    return {h: f for h, f in mapping.items() if f in _PRODUCTION_REPORT_TARGET_FIELDS}
+    return {h: f for h, f in mapping.items() if f in target_fields}
 
 
 def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict]]:
@@ -2397,9 +3057,37 @@ def _read_tabular_file(filename: str, data: bytes) -> tuple[list[str], list[dict
     )
 
     headers = [str(h).strip() if h not in (None, "") else "" for h in all_rows[header_row_idx]]
+    header_row_raw = all_rows[header_row_idx]
+
+    # Some paginated exports reprint the ENTIRE title/metadata/header block at
+    # every page break, not just once at the top -- confirmed real on TMS 032's
+    # report: the same "Client:"/"PROJECT TITLE:"/"NUMBER OF EMPLOYEES:" rows
+    # and the column-header row itself reappeared verbatim between two real
+    # employee rows mid-file, producing 4 phantom "employee" rows (plus a
+    # stray row where the report's own title text landed alone in the SSN
+    # column after the name column emptied out). A trailing "Totals:" summary
+    # footer row has the same shape problem. All of these share one trait a
+    # genuine data row never has: either almost every cell is empty (a title
+    # fragment on its own), or the row's very first populated cell is a
+    # "Label:"-style string. A real, if unusually sparse, entry (e.g. a
+    # loan-out with just a name and a tax ID, no wage breakdown) still has
+    # ordinary values in that first cell, never a string ending in ":".
+    def _is_junk_row(r) -> bool:
+        non_empty = [v for v in r if v not in (None, "")]
+        if len(non_empty) <= 1:
+            return True
+        first_str = next((v for v in r if isinstance(v, str) and v.strip()), None)
+        if first_str and first_str.strip().endswith(":"):
+            return True
+        if tuple(r[:len(header_row_raw)]) == tuple(header_row_raw):
+            return True
+        return False
+
     rows = []
     for r in all_rows[header_row_idx + 1:]:
         if all(v in (None, "") for v in r):
+            continue
+        if _is_junk_row(r):
             continue
         row = {headers[i]: r[i] for i in range(min(len(headers), len(r))) if headers[i]}
         rows.append(row)
@@ -2447,10 +3135,18 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
     the single "wages" total, and reimbursements similarly (kit rental,
     mileage, per diem, ... -> "reimbRent")."""
     row = empty_row()
-    row["payrollCompany"] = "production_report"
-    row["sourceFile"]     = filename
+    # Deliberately NOT tagged with a placeholder payrollCompany here (it used
+    # to be hardcoded to the literal "production_report", which isn't a real
+    # payroll company and leaked straight into the Payment Entity / Payroll
+    # Roster columns whenever this row won the merge against a PDF match).
+    # Left blank, a real PDF match's genuine payrollCompany ("wrapbook",
+    # "caps", ...) now fills it in via the reconciler's normal
+    # blank-field-fallback merge; a report-only row with no PDF match simply
+    # has no known payroll company, which is the honest answer.
+    row["sourceFile"] = filename
 
     we_start = we_end = start_date = end_date = ""
+    worker_last_name = worker_first_name = ""
     loan_out_indicator_sum = 0.0
     worker_type_is_loan_out = None  # None = report has no such column; True/False = it said so directly
     for original_header, raw_value in raw_row.items():
@@ -2478,6 +3174,13 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             start_date = value
         elif field == "endDate":
             end_date = value
+        elif field == "workDatesRange":
+            # A single column already formatted as "MM/DD/YYYY - MM/DD/YYYY"
+            # -- some Production Reports give one combined range instead of
+            # separate start/end columns. Use it as-is; still overridable by
+            # weStart/weEnd below if a report somehow has both (weStart/weEnd
+            # is the more precise, pay-period-specific label).
+            row["workDates"] = value
         elif field == "worker":
             raw_name = str(value)
             # Only re-title-case genuinely ALL-CAPS names (e.g. CAPS's own
@@ -2485,6 +3188,10 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             # like "Kevin DeMunn" would corrupt it to "Kevin Demunn".
             name = clean_fringe_name(raw_name, from_caps=raw_name.isupper())
             row["worker"] = re.sub(r",(?!\s)", ", ", name)
+        elif field == "workerLastName":
+            worker_last_name = str(value)
+        elif field == "workerFirstName":
+            worker_first_name = str(value)
         elif field == "street":
             split = _split_combined_address(value)
             if split:
@@ -2498,6 +3205,17 @@ def normalize_production_report_row(raw_row: dict, header_map: dict, filename: s
             row[field] = round((row.get(field) or 0) + value, 2)
         else:
             row[field] = value
+
+    # Some reports split the name across two columns (e.g. "Payee Last Name"
+    # / "Payee First Name") instead of one combined column -- neither half
+    # alone is a usable name, so "worker" stays unset above and the person
+    # would otherwise land in the workbook with a blank name. Synthesize it
+    # here, same all-caps handling as the single-column "worker" case.
+    if not row.get("worker") and (worker_last_name or worker_first_name):
+        combined = f"{worker_last_name}, {worker_first_name}".strip(", ").strip()
+        if combined:
+            name = clean_fringe_name(combined, from_caps=combined.isupper())
+            row["worker"] = re.sub(r",(?!\s)", ", ", name)
 
     # Loan-out determination. Worker Type (or equivalent) is authoritative
     # when the report states it directly -- it's a direct classification,
@@ -2632,6 +3350,55 @@ async def extract_ga_production_report(
     }
 
 
+@app.post("/extract-tx-production-report")
+async def extract_tx_production_report(
+    file: UploadFile = File(...),
+    x_app_secret: str = Header(default=""),
+):
+    """Texas' equivalent of /extract-ga-production-report -- same tabular
+    Production Tax Incentive/Credit Report shape, just mapped against
+    _TX_PRODUCTION_REPORT_TARGET_FIELDS (no GA state-income-tax fields, adds
+    mileage/kitRental/otherRental since TX's own template tracks those
+    non-taxable categories separately rather than lumping them into
+    reimbRent)."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    data = await file.read()
+    try:
+        headers, raw_rows = _read_tabular_file(file.filename, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read {file.filename}: {e}")
+
+    if not headers or not raw_rows:
+        return {
+            "rows": [], "issues": [f"{file.filename}: no data rows found"],
+            "columns": FRINGE_FIELDS, "files": [],
+        }
+
+    client = _client()
+    header_map = _map_production_report_headers(headers, client, target_fields=_TX_PRODUCTION_REPORT_TARGET_FIELDS)
+
+    issues = []
+    unmapped = [h for h in headers if h and h not in header_map]
+    if unmapped:
+        issues.append(f"{file.filename}: no matching field found for columns: {', '.join(unmapped)}")
+
+    rows = [normalize_production_report_row(r, header_map, file.filename) for r in raw_rows]
+    _fill_addresses_via_ai_regex(rows, client)
+
+    return {
+        "rows":    rows,
+        "issues":  issues,
+        "columns": FRINGE_FIELDS,
+        "files":   [{"filename": file.filename, "row_count": len(rows)}],
+        "loan_out_rows": _loan_out_rows_from_fringe(rows),
+        "payroll_roster_rows": _payroll_roster_rows_from_fringe(rows),
+    }
+
+
 @app.post("/extract-ga-timecards")
 async def extract_ga_timecards(
     files: list[UploadFile] = File(...),
@@ -2714,6 +3481,32 @@ async def reconcile_ga_payroll(
     # /extract-payroll's own loan_out_rows only ever sees the pre-merge PDF
     # rows, so this reconciled set is the real, complete source for Crew
     # Payroll loan-outs.
+    result["loan_out_rows"] = _loan_out_rows_from_fringe(result["rows"])
+    result["payroll_roster_rows"] = _payroll_roster_rows_from_fringe(result["rows"])
+    return result
+
+
+@app.post("/reconcile-tx-payroll")
+async def reconcile_tx_payroll(
+    body:         ReconcilePayrollRequest,
+    x_app_secret: str = Header(default=""),
+):
+    """Texas' equivalent of /reconcile-ga-payroll -- same matching/merge
+    logic (reconcile_payroll is state-agnostic), just with classify_aicp
+    disabled: AICP billing-category classification is a Georgia Crew
+    Payroll Report concept with no equivalent column on the TX template."""
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    result = reconcile_payroll(
+        body.pdf_rows,
+        body.production_report_rows,
+        body.sort_option,
+        OPENAI_API_KEY,
+        classify_aicp=False,
+    )
+    if body.timecard_rows:
+        result["rows"] = match_timecards(result["rows"], body.timecard_rows)
     result["loan_out_rows"] = _loan_out_rows_from_fringe(result["rows"])
     result["payroll_roster_rows"] = _payroll_roster_rows_from_fringe(result["rows"])
     return result
@@ -4162,7 +4955,15 @@ async def match_names(
             functools.partial(
                 claude_client.messages.create,
                 model="claude-sonnet-5",
-                max_tokens=4096,
+                # Was 4096 -- confirmed too low against a real ~90-name TX
+                # crew roster (call-sheet matching): every single name came
+                # back unmatched, consistent with the response getting cut
+                # off mid-JSON and silently falling back to {} below, same
+                # failure mode already seen and fixed on crew-roster
+                # extraction's own max_tokens. The mapping's size scales with
+                # BOTH lists' length (every List A name gets a key even when
+                # null), so a large two-list match needs real headroom.
+                max_tokens=16000,
                 messages=[{"role": "user", "content": user_prompt}],
             )
         )
@@ -4185,6 +4986,11 @@ async def match_names(
                 mapping = {}
         else:
             mapping = {}
+        if not mapping:
+            # Surfaced so a caller can tell "nobody matched" apart from
+            # "the response was unparseable" instead of both looking like a
+            # silent empty mapping.
+            return {"mapping": {}, "error": "Claude response was not valid JSON (possible truncation)"}
 
     return {"mapping": mapping}
 
@@ -4381,11 +5187,15 @@ async def extract_call_sheet(
             except Exception as e:
                 return filename, [], [f"{filename}: {e}"]
 
-            # Batch pages to stay under Claude's 40 MB image limit per call
+            # Batch pages to stay under Claude's 40 MB image limit per call.
+            # img is the base64 STRING sent verbatim in the request body, so
+            # its length IS the transmitted size -- do not shrink it toward
+            # the decoded byte count (see _extract_from_file for the real
+            # failure this caused elsewhere).
             MAX_BYTES = 40 * 1024 * 1024
             batches, cur, cur_size = [], [], 0
             for img in images:
-                approx = len(img) * 3 // 4
+                approx = len(img)
                 if cur and cur_size + approx > MAX_BYTES:
                     batches.append(cur)
                     cur, cur_size = [img], approx
@@ -4561,6 +5371,553 @@ async def extract_talent_endpoint(
     return result
 
 
+# ── TX Talent Payroll ────────────────────────────────────────────────────────
+# Same payroll-company-specific parsers as GA/IL's /extract-talent, reused as-
+# is via the same talent_extractor.py functions. TX has no Loan Out/Payroll
+# Roster/GL Billing tabs (unlike GA), so those extra derived row sets are
+# intentionally not attached here. Highland, Extreme Reach, and Teams are
+# built so far; cms will be added as its own branch the same way GA's
+# endpoint dispatches on payroll_company.
+@app.post("/extract-tx-talent-payroll")
+async def extract_tx_talent_payroll(
+    pdf_files:        list[UploadFile] = File(default=[]),
+    ptip_file:         UploadFile       = File(default=None),
+    ptip_files:        list[UploadFile] = File(default=[]),
+    prodco_name:       str              = Form(default=""),
+    work_state:        str              = Form(default="TX"),
+    payroll_company:   str              = Form(default="highland"),
+    x_app_secret:      str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    pdf_bytes_list: list[tuple[str, bytes]] = []
+    for uf in sorted(pdf_files or [], key=lambda f: (f.filename or "").lower()):
+        data = await uf.read()
+        if data:
+            pdf_bytes_list.append((uf.filename, data))
+
+    ptip_bytes_list: list[bytes] = []
+    for uf in (ptip_files or []):
+        data = await uf.read()
+        if data:
+            ptip_bytes_list.append(data)
+    if not ptip_bytes_list and ptip_file:
+        data = await ptip_file.read()
+        if data:
+            ptip_bytes_list.append(data)
+
+    if not pdf_bytes_list and not ptip_bytes_list:
+        raise HTTPException(400, "Provide at least one PDF or a PTIP/Payroll Report file.")
+
+    company = payroll_company.lower()
+    if company == 'highland':
+        result = extract_highland_talent(
+            pdf_files=pdf_bytes_list,
+            report_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    elif company == 'er':
+        result = extract_talent(
+            pdf_files=pdf_bytes_list,
+            ptip_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    elif company == 'teams':
+        result = extract_teams_talent(
+            pdf_files=pdf_bytes_list,
+            ptip_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    elif company == 'cms':
+        result = extract_cms_talent(
+            pdf_files=pdf_bytes_list,
+            report_bytes_list=ptip_bytes_list,
+            project_title=prodco_name,
+            workbook_type="",
+            openai_key=OPENAI_API_KEY,
+            default_work_state=work_state,
+        )
+    else:
+        raise HTTPException(400, f"Unsupported payroll_company for TX Talent Payroll: {payroll_company!r}")
+
+    # TX-only: Title Case the talent name, matching every other TX tab's
+    # convention (clean_name()) -- GA/IL's own /extract-talent endpoint is
+    # untouched and keeps passing each source document's raw name text
+    # through unchanged.
+    for row in result.get("rows", []):
+        row["talent_name"] = clean_name(row.get("talent_name", ""))
+
+    return result
+
+
+# ── TX Petty Cash / ProdCC ───────────────────────────────────────────────────
+# One PDF = one row = one total (not GA/IL's line-item-per-receipt model --
+# see _normalize_tx_petty_prodcc_row above). Petty Cash and ProdCC share the
+# exact same engine and only differ in Pymt Method ("Petty Cash" vs "CC
+# Reimb") and which column their id_number lands in on the frontend (Env# vs
+# PO#) -- both endpoints just call the shared extractor with a different
+# doc_kind/pymt_method label.
+@app.post("/extract-tx-petty-cash")
+async def extract_tx_petty_cash_endpoint(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_petty_cash_prodcc(files, prodco_name, "Petty Cash", "Petty Cash", x_app_secret)
+
+
+@app.post("/extract-tx-prodcc")
+async def extract_tx_prodcc_endpoint(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_petty_cash_prodcc(
+        files, prodco_name, "Production Credit Card (ProdCC) reimbursement", "CC Reimb", x_app_secret,
+    )
+
+
+# ── TX Locations ──────────────────────────────────────────────────────────────
+# One row per shoot location per shoot day, read from call sheets. Day-header
+# and location-box wording vary a lot between productions (confirmed against
+# 8 real TX call sheets: "SHOOT DAY 1 OF 2", "Day 1 of 5", "SHOOT 1", "SHOOT
+# DAY 1", "CALLSHEET DAY 1 OF 2", "Tech Scout D1"), so this needs the same
+# vision-extraction approach as Petty Cash/ProdCC, not fixed text parsing. Day
+# numbering is formatted in Python from bare digits the model reports, not
+# assembled by the model itself -- same reasoning as the envelope-number fix:
+# a mechanical formatting task is more reliable done deterministically here
+# than asked of the model.
+
+_TX_LOCATIONS_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_locations_extraction_prompt.txt")
+
+
+def _load_tx_locations_prompt() -> str:
+    with open(_TX_LOCATIONS_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _extract_tx_locations_from_file(filename, data, system_prompt, client, user_text=""):
+    # Claude, not GPT-4o -- confirmed head-to-head against real TX call sheets
+    # (a standalone test harness comparing both providers on the same
+    # images/prompt): GPT-4o produced at least one real error on every single
+    # document tested (fabricated addresses, a systematically wrong date
+    # offset on a 5-day call sheet, and a complete failure -- 0 results -- on
+    # a separate crew-roster extraction test), while Claude matched the real
+    # call sheet exactly except for the rare single-character misread.
+    # dpi_scale=2.0 (not the usual 1.5) because the same test harness showed
+    # a 1.5-scale render is below Claude's effective resolution ceiling
+    # (~1568px long edge) and caused misreads that 2.0 fixed, including a
+    # wrong "DAY N of M" total on this same document.
+    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_pages=40)
+    if not images:
+        return {}
+    return _call_claude_json_object(images, system_prompt, client, user_text, max_tokens=8000)
+
+
+def _tx_format_shoot_day(day_number: str, day_total: str) -> str:
+    """"DAY {N} of {M}", or "DAY {N}" alone when no total is stated -- matches
+    the template's own prior convention ("DAY 1 of 4"). Defensive against
+    stray non-digit text slipping through, same as the envelope-number
+    formatter: extracts the leading digit sequence rather than trusting the
+    model sent bare digits exactly as asked."""
+    n = _TX_LEADING_NUM_RE.search(day_number or "")
+    if not n:
+        return ""
+    m = _TX_LEADING_NUM_RE.search(day_total or "")
+    return f"DAY {n.group()} of {m.group()}" if m else f"DAY {n.group()}"
+
+
+def _tx_build_location_row(day: dict, loc: dict, filename: str) -> dict:
+    shoot_day = _tx_format_shoot_day(str(day.get("day_number", "")), str(day.get("day_total", "")))
+    is_shoot_day = bool(day.get("is_shoot_day"))
+    date_raw = str(day.get("date", "")).strip()
+    date = normalize_date(date_raw) if date_raw else ""
+
+    location_name = clean_name(str(loc.get("location_name", "")).strip())
+    street_number = str(loc.get("street_number", "")).strip()
+    street_name   = clean_address(str(loc.get("street_name", "")).strip())
+    city          = clean_name(str(loc.get("city", "")).strip())
+    state         = clean_state(str(loc.get("state", "")).strip()) or "TX"
+    zip_code      = clean_zip(str(loc.get("zip", "")).strip())
+    coordinates      = str(loc.get("coordinates", "")).strip()
+    no_location_text = str(loc.get("no_location_text", "")).strip()
+
+    # Address beats coordinates beats plain descriptive text -- confirmed
+    # explicitly: coordinates only stand in for a real address, and only go
+    # in Street Name (there's nowhere else in a postal-address-shaped column
+    # set for them to live).
+    has_address = bool(street_number or street_name or city or zip_code)
+    fallback_note = ""
+    if not has_address:
+        if coordinates:
+            street_name = coordinates
+        elif no_location_text:
+            fallback_note = no_location_text
+        else:
+            fallback_note = "No location information found for this day -- review source call sheet manually"
+
+    # Notes carries two independent things: the non-shoot-day flag (e.g.
+    # "Tech Scout D1") and the address-fallback text -- a prep day whose one
+    # location also has no real address needs both, not just one.
+    notes_parts = []
+    if not is_shoot_day:
+        notes_parts.append(str(day.get("day_label", "")).strip() or "Non-shoot day")
+    if fallback_note:
+        notes_parts.append(fallback_note)
+    notes = "; ".join(notes_parts)
+
+    county = tx_county_from_zip(zip_code) if zip_code else ""
+
+    return {
+        "shoot_day":     shoot_day,
+        "location_name": location_name,
+        "street_number": street_number,
+        "street_name":   street_name,
+        "city":          city,
+        "state":         state,
+        "zip":           zip_code,
+        "date":          date,
+        "notes":         notes,
+        "county":        county,
+        "sourceFile":    filename,
+    }
+
+
+async def _extract_tx_locations(files, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _anthropic_client()
+    system_prompt = _load_tx_locations_prompt()
+    user_text = (
+        "Extract every shoot day and every location for each day from this call sheet. "
+        "Never skip a location for having an incomplete address -- always return every "
+        "location box found, using whichever of address/coordinates/descriptive text applies."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, {}, size_err
+
+        async with sem:
+            try:
+                raw = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_locations_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                if not raw or not raw.get("days"):
+                    # Claude only -- retry Claude itself rather than falling
+                    # back to GPT-4o, since GPT-4o has shown it can return
+                    # confidently wrong data here, not just decline the file.
+                    # A second empty result is treated as a real failure.
+                    print(f"[_extract_tx_locations] {filename}: Claude returned nothing, retrying once", flush=True)
+                    try:
+                        retry_raw = await loop.run_in_executor(
+                            None,
+                            functools.partial(_extract_tx_locations_from_file, filename, data, system_prompt, client, user_text=user_text),
+                        )
+                        if retry_raw and retry_raw.get("days"):
+                            raw = retry_raw
+                    except Exception as e:
+                        print(f"[_extract_tx_locations] {filename}: retry also failed: {e}", flush=True)
+                return filename, raw, None
+            except Exception as e:
+                return filename, {}, str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+    for filename, raw, err in extraction_results:
+        errs = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "company": "unknown", "rows": 0, "issues": errs})
+            continue
+
+        days = (raw or {}).get("days") or []
+        file_rows = []
+        for day in days:
+            if not isinstance(day, dict):
+                continue
+            for loc in (day.get("locations") or []):
+                if not isinstance(loc, dict):
+                    continue
+                try:
+                    file_rows.append(_tx_build_location_row(day, loc, filename))
+                except Exception as e:
+                    errs.append(f"row build error: {e}")
+                    issues.append(f"{filename}: row build error: {e}")
+
+        if not file_rows:
+            errs.append("no location data extracted -- review manually")
+            issues.append(f"{filename}: no location data extracted")
+
+        rows.extend(file_rows)
+        file_summaries.append({
+            "filename": filename,
+            "company":  f"{len(days)} day(s)" if days else "unknown",
+            "rows":     len(file_rows),
+            "issues":   errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+@app.post("/extract-tx-locations")
+async def extract_tx_locations_endpoint(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_locations(files, x_app_secret)
+
+
+# ── TX Crew Roster (call sheet) ──────────────────────────────────────────────
+# Same call sheets as TX Locations, different question: every crew member row
+# on every page, for matching against the Crew Payroll / Crew - Indepen.
+# Contractors rosters ("On Call Sheet" / "Name on Call sheet"). Unlike
+# Locations -- one call for the whole PDF -- this sends ONE PAGE PER CLAUDE
+# CALL. Confirmed in a standalone test harness against a real 5-day, dense
+# crew grid: a whole-PDF call (even at max_tokens=16000) returned 0 rows after
+# 69s, almost certainly a mid-response truncation given ~90 crew rows per
+# page; switching to page-by-page calls fixed it outright (81-96 rows per
+# page, no truncation, faster overall). Dedup happens once, in Python, across
+# every page of every uploaded file -- the model is deliberately told NOT to
+# deduplicate itself (a person on only one day out of five must still be
+# reported from that one page).
+
+_TX_CREW_ROSTER_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_crew_roster_extraction_prompt.txt")
+
+
+def _load_tx_crew_roster_prompt() -> str:
+    with open(_TX_CREW_ROSTER_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def dedupe_crew(rows: list[dict]) -> list[dict]:
+    """Merge repeat sightings of the same person across every page/day into
+    one entry, keeping every distinct title seen for them (a person's title
+    is usually stable, but this surfaces it rather than silently picking one
+    if it ever varies). Someone who only appears on one page out of several
+    still gets exactly one entry here, same as everyone else."""
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for r in rows:
+        name = str(r.get("name", "")).strip()
+        title = str(r.get("title", "")).strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key not in merged:
+            merged[key] = {"name": name, "titles": []}
+            order.append(key)
+        if title and title not in merged[key]["titles"]:
+            merged[key]["titles"].append(title)
+    return [{"name": merged[k]["name"], "title": ", ".join(merged[k]["titles"])} for k in order]
+
+
+def _extract_tx_crew_roster_from_file(filename, data, system_prompt, client, user_text=""):
+    # dpi_scale=2.0, same reasoning as TX Locations (source-comment there):
+    # 1.5-scale render is below Claude's effective resolution ceiling and
+    # caused misreads on this same real call sheet.
+    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_pages=40)
+    raw_crew_rows, raw_talent_rows = [], []
+    for page_img in images:
+        try:
+            raw = _call_claude_json_object([page_img], system_prompt, client, user_text, max_tokens=16000)
+        except Exception:
+            continue
+        crew = (raw or {}).get("crew") or []
+        talent = (raw or {}).get("talent") or []
+        raw_crew_rows.extend(c for c in crew if isinstance(c, dict))
+        raw_talent_rows.extend(t for t in talent if isinstance(t, dict))
+    return raw_crew_rows, raw_talent_rows
+
+
+async def _extract_tx_crew_roster(files, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _anthropic_client()
+    system_prompt = _load_tx_crew_roster_prompt()
+    user_text = (
+        "List every crew member row on every page of this call sheet, exactly as printed. "
+        "Someone working only one day still needs to be reported from that page."
+    )
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, [], [], size_err
+
+        async with sem:
+            try:
+                raw_crew_rows, raw_talent_rows = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_crew_roster_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_crew_rows, raw_talent_rows, None
+            except Exception as e:
+                return filename, [], [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    all_raw_crew_rows, all_raw_talent_rows, issues, file_summaries = [], [], [], []
+    for filename, raw_crew_rows, raw_talent_rows, err in extraction_results:
+        if err:
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "rows": 0, "issues": [err]})
+            continue
+        if not raw_crew_rows and not raw_talent_rows:
+            issues.append(f"{filename}: no crew data extracted")
+            file_summaries.append({"filename": filename, "rows": 0, "issues": ["no crew data extracted"]})
+            continue
+        all_raw_crew_rows.extend(raw_crew_rows)
+        all_raw_talent_rows.extend(raw_talent_rows)
+        file_summaries.append({"filename": filename, "rows": len(raw_crew_rows) + len(raw_talent_rows), "issues": []})
+
+    crew = dedupe_crew(all_raw_crew_rows)
+    talent = dedupe_crew(all_raw_talent_rows)
+    return {"crew": crew, "talent": talent, "issues": issues, "files": file_summaries}
+
+
+@app.post("/extract-tx-crew-roster")
+async def extract_tx_crew_roster_endpoint(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_crew_roster(files, x_app_secret)
+
+
+# ── TX DTR (Declaration of Texas Residency) ──────────────────────────────────
+# One PDF = one person, unlike a call sheet -- so this is one Claude call per
+# FILE, not per page (no truncation risk on a 1-2 page single-person form).
+# Vision only, deliberately not AcroForm field reading: confirmed real DTR
+# submissions are mostly fillable PDFs, but this codebase has already hit a
+# real case (see has_form_fields/flatten_form_fields in pdf_namer.py) where a
+# different form's field NAMES were themselves scrambled by whatever tool
+# produced the file -- a field literally named "Zip" held a city. Reading the
+# rendered page is what actually matches what a human would see.
+
+_TX_DTR_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tx_dtr_extraction_prompt.txt")
+
+
+def _load_tx_dtr_prompt() -> str:
+    with open(_TX_DTR_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _extract_tx_dtr_from_file(filename, data, system_prompt, client, user_text=""):
+    # max_dim=2000, same cap /extract-residency-docs already uses for this
+    # same class of document -- confirmed real (ABBVIE 022): a DTR's second
+    # page is sometimes a phone photo of a driver's license inserted at its
+    # native resolution as the page itself, so dpi_scale alone rendered a
+    # 30 MB PNG on one real submission -- Claude's hard per-image limit is
+    # 10 MB. Uncapped, that's both a 400 (single image too large) and a 413
+    # (whole request too large).
+    images = _file_to_images_b64(filename, data, dpi_scale=2.0, max_dim=2000, max_pages=3)
+    if not images:
+        return ""
+    raw = _call_claude_json_object(images, system_prompt, client, user_text, max_tokens=1024)
+    return str((raw or {}).get("name", "")).strip()
+
+
+async def _extract_tx_dtr(files, x_app_secret):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+    client        = _anthropic_client()
+    system_prompt = _load_tx_dtr_prompt()
+    user_text = "What name is written in Section II's Name field on this Declaration of Texas Residency form?"
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        data, size_err = _check_and_compress_pdf_size(filename, data)
+        if size_err:
+            return filename, "", size_err
+
+        async with sem:
+            try:
+                name = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_tx_dtr_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, name, None
+            except Exception as e:
+                return filename, "", str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    # Dedupe by lowercased name, keeping the first spelling seen -- real
+    # productions submit the same DTR twice (a "with ID" and a "no ID" copy
+    # of the identical form), and there's no title/extra data to merge here
+    # the way dedupe_crew merges titles, just distinct people.
+    seen: set[str] = set()
+    names: list[str] = []
+    issues, file_summaries = [], []
+    for filename, name, err in extraction_results:
+        if err:
+            issues.append(f"{filename}: {err}")
+            file_summaries.append({"filename": filename, "issues": [err]})
+            continue
+        if not name:
+            issues.append(f"{filename}: no name extracted -- not recognized as a DTR form, or the Name field was blank/illegible")
+            file_summaries.append({"filename": filename, "issues": ["no name extracted"]})
+            continue
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            names.append(name)
+        file_summaries.append({"filename": filename, "issues": []})
+
+    return {"names": names, "issues": issues, "files": file_summaries}
+
+
+@app.post("/extract-tx-dtr")
+async def extract_tx_dtr_endpoint(
+    files:        list[UploadFile] = File(...),
+    x_app_secret: str              = Header(default=""),
+):
+    return await _extract_tx_dtr(files, x_app_secret)
+
+
 # ── Consolidated run summary email ───────────────────────────────────────────
 
 class _FileSummaryIn(BaseModel):
@@ -4699,6 +6056,204 @@ def normalize_ga_ap_row(raw: dict) -> dict:
         "website_address":          str(raw.get("website_address", "")).strip(),
         # Not written to AP tab — used downstream for tab routing (Payroll Roster, GL, etc.)
         "labor":                    bool(raw.get("labor", False)),
+    }
+
+
+def _backfill_po_number(file_rows: list[dict]) -> None:
+    """One uploaded PDF is one vendor's whole packet (PO + invoice + backup
+    receipts) -- when the PO document itself only appears once but the LLM
+    split the packet into several rows (e.g. a formal invoice plus its own
+    backup receipts, itemized per the "treat each bundled receipt as its own
+    item" rule), the backup rows can come back with po_number blank even
+    though every row in this file is clearly the same PO. Backfill blanks
+    from whichever single PO number the file's OTHER rows already agree on --
+    never guess when a file's rows disagree on the PO (multiple real POs in
+    one packet), and never invent a PO from the filename.
+    Confirmed real via MCD 062: PO 26003-03 - Hello Artists.pdf split into
+    2 invoice rows (both correctly showing "26003-03") plus 27 backup-receipt
+    rows that came back with po_number blank."""
+    pos = {r.get("po_number") for r in file_rows if r.get("po_number")}
+    if len(pos) == 1:
+        po = next(iter(pos))
+        for r in file_rows:
+            if not r.get("po_number"):
+                r["po_number"] = po
+
+
+def _check_packet_total(filename: str, raw_list: list[dict], file_rows: list[dict],
+                          row_total, errs: list[str], issues: list[str]) -> None:
+    """Catches a dropped row on a long, repetitive multi-item packet (e.g. one
+    PO covering 7 nearly-identical hotel folios) -- a raw model recall miss,
+    not a prompt-wording problem, so it can't be prevented by rewording a
+    rule. Instead of trying to stop the miss, surface it: the prompt asks the
+    LLM to repeat the shared cover total (packet_total) on every row of a
+    bundled packet, and if every row agrees on one such total, we sum what
+    we actually extracted and flag a mismatch for manual review rather than
+    letting a missing row pass silently. Confirmed real via TMS 033: K2615-037
+    Origin Hotel bundled 7 traveler folios (summing to the PO's $4,336.62)
+    under one PO, and the last folio (Feiner, $709.24) was dropped.
+    Only fires when every row agrees on a single non-empty packet_total --
+    disagreement (multiple real POs/totals in one packet) or an all-blank
+    packet_total (a normal, non-bundled single-invoice packet) both skip the
+    check rather than risk a false positive."""
+    totals = set()
+    for raw in raw_list:
+        pt = raw.get("packet_total")
+        if pt in (None, ""):
+            continue
+        try:
+            totals.add(round(float(str(pt).replace(",", "").replace("$", "").strip()), 2))
+        except (TypeError, ValueError):
+            continue
+
+    if len(totals) != 1:
+        return
+
+    expected = next(iter(totals))
+    actual = round(sum(row_total(r) for r in file_rows), 2)
+    if abs(actual - expected) > 0.01:
+        msg = (f"extracted rows total ${actual:,.2f} but the packet's own cover "
+               f"total is ${expected:,.2f} -- possible missing or misread item, "
+               f"please verify against the source PDF")
+        errs.append(msg)
+        issues.append(f"{filename}: {msg}")
+
+
+def normalize_tx_ap_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    method = str(raw.get("payment_method", "")).strip()
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "vendor_name":    clean_name(raw.get("vendor_name", "")),
+        "amount":         normalize_amount(raw.get("amount", 0)),
+        "payment_method": method,
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
+    }
+
+
+def normalize_tx_agency_vendor_exps_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    method = str(raw.get("payment_method", "")).strip()
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "vendor_name":    clean_name(raw.get("vendor_name", "")),
+        "amount":         normalize_amount(raw.get("amount", 0)),
+        "payment_method": method,
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "job_number":     str(raw.get("job_number", "")).strip(),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
+    }
+
+
+def normalize_tx_post_production_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    method = str(raw.get("payment_method", "")).strip()
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "vendor_name":    clean_name(raw.get("vendor_name", "")),
+        "amount":         normalize_amount(raw.get("amount", 0)),
+        "payment_method": method,
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "job_number":     str(raw.get("job_number", "")).strip(),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
+    }
+
+
+def normalize_tx_crew_ic_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    method = str(raw.get("payment_method", "")).strip()
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "worker_name":    clean_name(raw.get("worker_name", "")),
+        "worker_position": str(raw.get("worker_position", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "pay_period":     str(raw.get("pay_period", "")).strip(),
+        "gross_wages":    normalize_amount(raw.get("gross_wages", 0)),
+        "mileage":        normalize_amount(raw.get("mileage", 0)),
+        "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
+        "other":          normalize_amount(raw.get("other", 0)),
+        "check_number":   str(raw.get("check_number", "")).strip(),
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_method": method,
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
+    }
+
+
+def normalize_tx_talent_ic_row(raw: dict) -> dict:
+    def yn(val):
+        return "YES" if str(val or "").strip().lower() in ("yes", "true", "1") else "NO"
+
+    method = str(raw.get("payment_method", "")).strip()
+    return {
+        "po_number":      str(raw.get("po_number", "")).strip(),
+        "invoice_number": str(raw.get("invoice_number", "")).strip(),
+        "worker_name":    clean_name(raw.get("worker_name", "")),
+        "worker_position": str(raw.get("worker_position", "")).strip(),
+        "invoice_date":   normalize_date_iso(str(raw.get("invoice_date", ""))),
+        "pay_period":     str(raw.get("pay_period", "")).strip(),
+        "gross_wages":    normalize_amount(raw.get("gross_wages", 0)),
+        "mileage":        normalize_amount(raw.get("mileage", 0)),
+        "kit_rental":     normalize_amount(raw.get("kit_rental", 0)),
+        "other":          normalize_amount(raw.get("other", 0)),
+        "payment_number": tx_normalize_pymt_number(method, raw.get("payment_number", "")),
+        "payment_method": method,
+        "pay_date":       normalize_date_iso(str(raw.get("pay_date", ""))),
+        "proof_of_payment": yn(raw.get("proof_of_payment")),
+        "address":        clean_address(raw.get("address", "")),
+        "city":           clean_name(raw.get("city", "")),
+        "state":          clean_state(raw.get("state", "")),
+        "zip":            clean_zip(raw.get("zip", "")),
+        "contact_number": str(raw.get("contact_number", "")).strip(),
+        "description":    str(raw.get("description", "")).strip(),
+        "notes":          str(raw.get("notes", "")).strip(),
     }
 
 
@@ -5129,6 +6684,384 @@ async def extract_ga_ap(
         "payroll_roster_rows": _payroll_roster_rows_from_ap(rows, work_state),
         "gl_prodco_rows": _gl_prodco_rows_from_ap(rows),
     }
+
+
+# ── TX AP (POs + Reimbursement) ────────────────────────────────────────────
+# Straight PDF-to-rows dump for TX's "AP (POs + Reimbursement)" tab -- no
+# Production Report reconciliation (that's Crew Payroll's job), no FF1/FF2/
+# AICP classification (GA-only concepts with no TX equivalent), no payer-
+# entity matching (TX has no entity-list wiring yet -- Payment Entity and
+# Type stay blank for manual entry, same as Ineligible/Qualify).
+@app.post("/extract-tx-ap")
+async def extract_tx_ap(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_ap_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no AP data extracted — review manually")
+            issues.append(f"{filename}: no AP data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_ap_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        _backfill_po_number(file_rows)
+        _check_packet_total(filename, raw_list, file_rows, lambda r: r["amount"], errs, issues)
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── TX Agency Vendor Exps ──────────────────────────────────────────────────
+# Same shape as TX AP (straight PDF-to-rows dump, invoice-first-then-PO-
+# fallback, no reconciliation), plus one extra field: job_number, an internal
+# production job/project code sometimes printed on the invoice or PO.
+@app.post("/extract-tx-agency-vendor-exps")
+async def extract_tx_agency_vendor_exps(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_agency_vendor_exps_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no vendor expense data extracted — review manually")
+            issues.append(f"{filename}: no vendor expense data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_agency_vendor_exps_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        _backfill_po_number(file_rows)
+        _check_packet_total(filename, raw_list, file_rows, lambda r: r["amount"], errs, issues)
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── TX Post Production ─────────────────────────────────────────────────────
+# Identical shape to /extract-tx-agency-vendor-exps (same fields, same
+# invoice-first/PO-fallback rules, same job_number field) -- a separate
+# endpoint/prompt file per the established one-file-per-tab convention, even
+# though the two prompts are near-duplicates today.
+@app.post("/extract-tx-post-production")
+async def extract_tx_post_production(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_post_production_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no post production expense data extracted — review manually")
+            issues.append(f"{filename}: no post production expense data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_post_production_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        _backfill_po_number(file_rows)
+        _check_packet_total(filename, raw_list, file_rows, lambda r: r["amount"], errs, issues)
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── TX Crew - Independent Contractors ──────────────────────────────────────
+# 1099 crew invoices -- the "labor" prompt family, as distinct from AP/Agency
+# Vendor Exps/Post Production's vendor-invoice ("non-labor") family. Splits
+# wages into gross_wages/mileage/kit_rental/other only when the invoice
+# itself itemizes them; check_number is extracted here (unlike the Talent
+# tab, which has no such column) since the user confirmed it should be, same
+# treatment as payment_number.
+@app.post("/extract-tx-crew-ic")
+async def extract_tx_crew_ic(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_crew_ic_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no crew invoice data extracted — review manually")
+            issues.append(f"{filename}: no crew invoice data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_crew_ic_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        _backfill_po_number(file_rows)
+        _check_packet_total(
+            filename, raw_list, file_rows,
+            lambda r: r["gross_wages"] + r["mileage"] + r["kit_rental"] + r["other"],
+            errs, issues,
+        )
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
+
+
+# ── TX Talent - Independent Contract ───────────────────────────────────────
+# Same "labor" prompt family as Crew - Independent Contractors, minus
+# check_number (the Talent tab has no such column, only Pymt #).
+@app.post("/extract-tx-talent-ic")
+async def extract_tx_talent_ic(
+    files:        list[UploadFile] = File(...),
+    prodco_name:  str              = Form(""),
+    work_state:   str              = Form("TX"),
+    x_app_secret: str              = Header(default=""),
+):
+    if APP_SHARED_SECRET and x_app_secret != APP_SHARED_SECRET:
+        raise HTTPException(401, "Bad or missing X-App-Secret header.")
+
+    files = sorted(files, key=lambda f: (f.filename or "").lower())
+
+    client        = _client()
+    system_prompt = _load_tx_talent_ic_prompt(prodco_name, work_state)
+    user_text     = "Extract invoice data from these document pages."
+
+    loaded = []
+    for uf in files:
+        data = await uf.read()
+        loaded.append((uf.filename, data))
+
+    loop = asyncio.get_running_loop()
+    sem  = asyncio.Semaphore(5)
+
+    async def _extract_one(filename, data):
+        async with sem:
+            try:
+                raw_list = await loop.run_in_executor(
+                    None,
+                    functools.partial(_extract_from_file, filename, data, system_prompt, client, user_text=user_text),
+                )
+                return filename, raw_list, None
+            except Exception as e:
+                return filename, [], str(e)
+
+    extraction_results = await asyncio.gather(*[_extract_one(fn, d) for fn, d in loaded])
+
+    rows, issues, file_summaries = [], [], []
+
+    for filename, raw_list, err in extraction_results:
+        errs: list[str] = []
+        if err:
+            errs.append(err)
+            issues.append(f"{filename}: {err}")
+
+        file_rows: list[dict] = []
+        if not raw_list:
+            errs.append("no talent invoice data extracted — review manually")
+            issues.append(f"{filename}: no talent invoice data extracted")
+        else:
+            for raw in raw_list:
+                try:
+                    file_rows.append(normalize_tx_talent_ic_row(raw))
+                except Exception as e:
+                    errs.append(f"row normalization error: {e}")
+                    issues.append(f"{filename}: row normalization error: {e}")
+
+        _backfill_po_number(file_rows)
+        _check_packet_total(
+            filename, raw_list, file_rows,
+            lambda r: r["gross_wages"] + r["mileage"] + r["kit_rental"] + r["other"],
+            errs, issues,
+        )
+        rows.extend(file_rows)
+        file_summaries.append({
+            "file":   filename,
+            "rows":   len(file_rows),
+            "issues": errs,
+        })
+
+    return {"rows": rows, "issues": issues, "files": file_summaries}
 
 
 # ── GA AP call sheet position matching ───────────────────────────────────────

@@ -448,6 +448,54 @@
   in one request and a Cloudflare **524** proxy timeout (~100s) on a real 13-file
   ADQ 005 run. Do not raise it without moving the call off the Cloudflare proxy.
 
+## Locations tab (TX)
+- Zone **"Call Sheets"** (`txCallSheet`, txOnly, **Crew** section) → `POST /extract-tx-locations` with just `files`, one POST per PDF.
+- **One PDF → 0..N rows** (one per location per shoot day). No placeholder row
+  on failure — a file that errors or yields nothing raises an issue instead.
+- Header row 4 (A Shoot Day … J TX County), checked soft-then-hard like the
+  other TX tabs. Rows written from **5**, all ten fields plain text.
+- **Written by direct cell patch, never row insertion**: column L rows 4–21 is
+  the Rural Uplift county list and shares those rows — inserting would shift it.
+  Rows past the sheet's last existing row are created by the engine's
+  `ensureRow: true` patch flag (`ensureRowInSheet`, also strips stale `spans`).
+- Only rows 5–8 carry styled cells. Rows past `TX_LOC_LEGACY_LAST` (8) pass
+  `styleFrom: col + 8` on every patch, cleared ones included (engine `"blank"`
+  cell type + `ensureRow` on clear), so rows 9+ keep borders/format.
+- The bundled `assets/workbooks/texas.xlsx` still has the old DAY 1–4 rows 5–8;
+  A–J on any of those not overwritten are cleared (no-op on the blank-slate
+  template).
+
+## Cast & Crew List tab (TX)
+- **No upload of its own.** Aggregates the 4 TX rosters (Crew Payroll, Crew IC,
+  Talent Payroll, Talent IC) via `castCrewEntries` in `buildTexasBlob`, reusing
+  their `hasDtr`/`onCallSheet` flags. Orphan rows (call-sheet/DTR only) carry
+  `_orphan: true` so "From Documents" omits the payroll/invoice label.
+- Header row 4 (C Crew/Talent, D Name, E Role, F DTR, G Parent, H Notes,
+  I From Documents), B pre-numbered, 85 rows 5–89. Crew block first, then
+  Talent, each alphabetized.
+- **One row per person**: `txCastCrewDedupe()` collapses Crew and Talent
+  (separately) by case/whitespace-insensitive name before the sort — unions
+  "From Documents" tags (fixed order), ORs `hasDtr`, keeps first non-empty role.
+  Safe because `_properLastFirst()` now forces "Last, First" on every name on
+  all 4 source tabs (`r.worker`, `r.talent_name`, `r.worker_name`), mutated in
+  place. `callSheetName` stays verbatim. Personal suffixes (Jr/Sr/II/III/IV)
+  stay with the surname ("Burns Jr, Robert D"); entity words
+  (`TX_ENTITY_SUFFIX_RE`: Inc/LLC/Corp/Co/Ltd/LP/LLP/PLLC/PC) are never
+  reordered, only title-cased ("Afed Films Inc").
+- **DTR orphans are global, not per-tab.** `matchDtrToRoster()` records every
+  hit into a shared `dtrMatchedElsewhere` Set. Crew Payroll — the only tab that
+  turns unmatched DTR names into new rows — runs **LAST** of the 4 TX roster
+  tabs so the Set is complete; a DTR name becomes a Crew row only if it matched
+  nobody on any tab. (Run log therefore shows Crew Payroll extraction after the
+  Talent/IC steps — cosmetic.)
+- **Direct cell patches with `ensureRow`, never insertion**: the K/L summary
+  (K4:L9) shares rows with the data. Rows past 89 borrow row 89's style.
+- **F is `Y`/`N`, not YES/NO** like the other TX tabs — L7 is
+  `COUNTIF(F5:F89,"Y")`. L7/L8 are rewritten to the real last row only when a
+  run passes row 89.
+- Checked soft (`inspectStructure`) then hard, like Locations.
+- Bundled `assets/workbooks/texas.xlsx` = MAY 2026 2.1 (has "From Documents").
+
 ## Engine notes
 - **Row insertion now shifts `<mergeCells>`** (`shiftMergeCells`, called from
   `insertRowsIntoSheet` and `cloneRowBlock`). merge refs are absolute strings, so
