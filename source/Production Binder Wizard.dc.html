@@ -7168,7 +7168,16 @@ class Component extends DCLogic {
     try {
       const fd = new FormData();
       sorted.forEach((f) => fd.append("files", f));
-      const j = await this.postExtract(this.BACKEND_URL + "/extract-tx-crew-roster", fd);
+      // Confirmed via a real production failure (SONI 005, live site): the
+      // backend processes each call-sheet PAGE sequentially, one Claude call
+      // at a time (see _extract_tx_crew_roster_from_file) -- a multi-day
+      // call sheet with several pages routinely runs past 100s, and this
+      // call was still going through the Cloudflare-proxied host, which hit
+      // a 524 gateway timeout at 125s. Same fix as extractFringe/ProdCo
+      // Sub-Vendors/Crew Freelance: UPLOAD_BACKEND_URL bypasses Cloudflare's
+      // proxy entirely (client-side REQ_TIMEOUT_MS is 360s, plenty of
+      // headroom once that's the only timeout in play).
+      const j = await this.postExtract(this.UPLOAD_BACKEND_URL + "/extract-tx-crew-roster", fd);
       return { crew: j.crew || [], talent: j.talent || [], issues: j.issues || [], files: j.files || [] };
     } catch (e) {
       const why = "TX Crew Roster extraction failed — " + (e.message || e);
